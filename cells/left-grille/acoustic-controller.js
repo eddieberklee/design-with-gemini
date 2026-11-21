@@ -33,8 +33,47 @@
     return `lg-${ts}-${rand}`;
   }
 
+  const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+  function clampNum(v, lo, hi) {
+    if (!Number.isFinite(v)) return lo;
+    return v < lo ? lo : v > hi ? hi : v;
+  }
+
+  function allFiniteNumbers(arr, expectedLen, positiveOnly) {
+    if (!Array.isArray(arr) || arr.length !== expectedLen) return false;
+    for (let i = 0; i < expectedLen; i++) {
+      if (!(i in arr)) return false;
+      const v = arr[i];
+      if (typeof v !== 'number' || !Number.isFinite(v)) return false;
+      if (positiveOnly && v <= 0) return false;
+    }
+    return true;
+  }
+
+  function sanitizePlainStats(obj) {
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+    const out = {};
+    let count = 0;
+    const keys = Object.keys(obj);
+    for (let i = 0; i < keys.length; i++) {
+      const k = keys[i];
+      if (FORBIDDEN_KEYS.has(k)) continue;
+      const v = obj[k];
+      if (typeof v === 'number') {
+        if (!Number.isFinite(v)) continue;
+        out[k] = v;
+        count++;
+      } else if (typeof v === 'boolean' || typeof v === 'string') {
+        out[k] = v;
+        count++;
+      }
+    }
+    return count > 0 ? out : null;
+  }
+
   function sanitizeCalibrationObj(cal) {
-    if (!cal || typeof cal !== 'object') return null;
+    if (!cal || typeof cal !== 'object' || Array.isArray(cal)) return null;
     const out = {};
     let count = 0;
     for (const k of ['specBottomDb', 'specTopDb', 'snrBottomDb', 'snrTopDb']) {
@@ -47,29 +86,35 @@
   }
 
   function sanitizeEmpiricalModel(model) {
-    if (!model || typeof model !== 'object') return null;
+    if (!model || typeof model !== 'object' || Array.isArray(model)) return null;
     let rbf = null;
     if (
       model.rbf &&
+      typeof model.rbf === 'object' &&
+      !Array.isArray(model.rbf) &&
       Array.isArray(model.rbf.prototypes) &&
       model.rbf.prototypes.length >= 2 &&
-      Array.isArray(model.rbf.scale) &&
-      model.rbf.scale.length === 11 &&
-      model.rbf.scale.every((s) => Number.isFinite(s) && s > 0)
+      allFiniteNumbers(model.rbf.scale, 11, true)
     ) {
-      const protos = model.rbf.prototypes.filter(
-        (p) =>
+      const protos = [];
+      for (let i = 0; i < model.rbf.prototypes.length; i++) {
+        const p = model.rbf.prototypes[i];
+        if (
           p &&
+          typeof p === 'object' &&
+          !Array.isArray(p) &&
+          typeof p.anchorY === 'number' &&
           Number.isFinite(p.anchorY) &&
-          Array.isArray(p.vector) &&
-          p.vector.length === 11 &&
-          p.vector.every((v) => Number.isFinite(v))
-      );
+          allFiniteNumbers(p.vector, 11, false)
+        ) {
+          protos.push({ anchorY: clampNum(p.anchorY, 0, 1), vector: p.vector.slice() });
+        }
+      }
       if (protos.length >= 2) {
         rbf = {
-          prototypes: protos.map((p) => ({ anchorY: p.anchorY, vector: p.vector.slice() })),
+          prototypes: protos,
           scale: model.rbf.scale.slice(),
-          temp: Number.isFinite(model.rbf.temp) ? model.rbf.temp : 0.45
+          temp: Number.isFinite(model.rbf.temp) ? clampNum(model.rbf.temp, 0.08, 4.0) : 0.45
         };
       }
     }
@@ -77,16 +122,13 @@
     let lda = null;
     if (
       model.lda &&
-      Array.isArray(model.lda.weights) &&
-      model.lda.weights.length === 8 &&
-      Array.isArray(model.lda.featMean) &&
-      model.lda.featMean.length === 8 &&
-      Array.isArray(model.lda.featStd) &&
-      model.lda.featStd.length === 8 &&
-      Number.isFinite(model.lda.bias) &&
-      model.lda.weights.every((v) => Number.isFinite(v)) &&
-      model.lda.featMean.every((v) => Number.isFinite(v)) &&
-      model.lda.featStd.every((v) => Number.isFinite(v) && v > 0)
+      typeof model.lda === 'object' &&
+      !Array.isArray(model.lda) &&
+      allFiniteNumbers(model.lda.weights, 8, false) &&
+      allFiniteNumbers(model.lda.featMean, 8, false) &&
+      allFiniteNumbers(model.lda.featStd, 8, true) &&
+      typeof model.lda.bias === 'number' &&
+      Number.isFinite(model.lda.bias)
     ) {
       lda = {
         weights: model.lda.weights.slice(),
@@ -99,17 +141,17 @@
 
     if (!rbf && !lda) return null;
     return {
-      version: model.version || 2,
+      version: Number.isFinite(model.version) && model.version > 0 ? Math.floor(model.version) : 2,
       fittedAt: Number.isFinite(model.fittedAt) ? model.fittedAt : 0,
       polarity: model.polarity === -1 ? -1 : 1,
       rbf,
       lda,
-      speedScale: Number.isFinite(model.speedScale) ? model.speedScale : 1.0,
+      speedScale: Number.isFinite(model.speedScale) ? clampNum(model.speedScale, 0.55, 1.85) : 1.0,
       minStrokeDurationSec: Number.isFinite(model.minStrokeDurationSec)
-        ? model.minStrokeDurationSec
+        ? clampNum(model.minStrokeDurationSec, 0.055, 0.16)
         : 0.068,
       legacyCalibration: sanitizeCalibrationObj(model.legacyCalibration),
-      stats: model.stats && typeof model.stats === 'object' ? Object.assign({}, model.stats) : null
+      stats: sanitizePlainStats(model.stats)
     };
   }
 
@@ -120,7 +162,7 @@
       const raw = rawV2 || localStorage.getItem(STORAGE_KEY_V1);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') return null;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
       const polarity =
         typeof parsed.polarity === 'number' && Number.isFinite(parsed.polarity)
           ? parsed.polarity < 0
@@ -129,10 +171,7 @@
           : 1;
       const calibration = sanitizeCalibrationObj(parsed.calibration);
       const empiricalModel = sanitizeEmpiricalModel(parsed.empiricalModel);
-      const calSummary =
-        parsed.calSummary && typeof parsed.calSummary === 'object'
-          ? Object.assign({}, parsed.calSummary)
-          : null;
+      const calSummary = sanitizePlainStats(parsed.calSummary);
       return { polarity, calibration, empiricalModel, calSummary };
     } catch (_) {
       return null;
@@ -825,6 +864,9 @@
           swipeCount: (fitResult && fitResult.swipeCount) || 0,
           zoneCount: (fitResult && fitResult.zoneCount) || 0,
           looAccuracyPct: 0,
+          inSampleAccuracyPct: 0,
+          looFolds: 0,
+          inSampleOnly: true,
           dPrime: 0,
           model: null,
           collectorSaved: false
@@ -843,17 +885,21 @@
         swipeCount: fitResult.swipeCount,
         zoneCount: fitResult.zoneCount,
         looAccuracyPct: fitResult.looAccuracyPct,
+        inSampleAccuracyPct: fitResult.inSampleAccuracyPct,
+        looFolds: fitResult.looFolds,
+        inSampleOnly: Boolean(fitResult.inSampleOnly),
         dPrime: fitResult.dPrime
       };
 
       if (this.workletNode) {
         this.workletNode.port.postMessage({
           type: 'setEmpiricalModel',
-          model: this.empiricalModel
+          model: this.empiricalModel,
+          syncPolarity: true
         });
       }
       if (this.fallbackCore) {
-        this.fallbackCore.setEmpiricalModel(this.empiricalModel);
+        this.fallbackCore.setEmpiricalModel(this.empiricalModel, { syncPolarity: true });
       }
 
       this._persistCalibration();
@@ -874,6 +920,9 @@
         swipeCount: fitResult.swipeCount,
         zoneCount: fitResult.zoneCount,
         looAccuracyPct: fitResult.looAccuracyPct,
+        inSampleAccuracyPct: fitResult.inSampleAccuracyPct,
+        looFolds: fitResult.looFolds,
+        inSampleOnly: Boolean(fitResult.inSampleOnly),
         dPrime: fitResult.dPrime,
         model: fitResult.model,
         collectorSaved

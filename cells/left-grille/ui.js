@@ -41,7 +41,7 @@
     { id: 'top-up', kind: 'swipe', direction: 'up', startY: 0.50, endY: 0.04, label: '11/14 · Top-Half Swipe UP (Caps → Esc)', short: 'Top ↑' },
     { id: 'btm-down', kind: 'swipe', direction: 'down', startY: 0.50, endY: 0.96, label: '12/14 · Bottom-Half Swipe DOWN (Caps → Fn)', short: 'Btm ↓' },
     { id: 'btm-up', kind: 'swipe', direction: 'up', startY: 0.96, endY: 0.50, label: '13/14 · Bottom-Half Swipe UP (Fn → Caps)', short: 'Btm ↑' },
-    { id: 'veto-keys', kind: 'negative', label: '14/14 · Tap Esc, Tab & Shift keys once (Veto check)', short: 'Keys Veto' }
+    { id: 'veto-keys', kind: 'negative', label: '14/14 · Tap ~, Caps & Shift once, then press Fit & Lock', prompt: 'Tap ~, Caps & Shift once, then press Fit & Lock', short: 'Keys Veto' }
   ];
 
   function h(tag, attrs, children) {
@@ -59,6 +59,7 @@
         } else if (k.startsWith('on') && typeof v === 'function') {
           el.addEventListener(k.slice(2).toLowerCase(), v);
         } else if (v === true) {
+          if (k === 'disabled' || k === 'hidden') el[k] = true;
           el.setAttribute(k, '');
         } else {
           el.setAttribute(k, String(v));
@@ -209,6 +210,10 @@
     lab.isSecondaryOpen = () => isSecondaryOpen;
 
     let calWizardActive = false;
+    let calAutoArmedMic = false;
+    let calOpening = false;
+    let calSummaryActive = false;
+    let calSessionSeq = 0;
     let overlayReturnFocusEl = null;
     let wasStrokeActive = false;
     let lastCommittedSwipe = null;
@@ -524,6 +529,35 @@
       [calHeadRow, overlayMsg, calSubHint, overlayActions]
     );
 
+    const simActionsWrap = h('div', { className: 'lg-sim-actions' }, [
+      simUpBtn,
+      simDownBtn,
+      flipBtn
+    ]);
+
+    function syncBackgroundControlsInert() {
+      const overlayShown = !inlineOverlay.hidden;
+      simActionsWrap.inert = overlayShown;
+      if (overlayShown) {
+        simActionsWrap.setAttribute('inert', '');
+      } else if (typeof simActionsWrap.removeAttribute === 'function') {
+        simActionsWrap.removeAttribute('inert');
+      }
+      const bgBtns = [simUpBtn, simDownBtn, flipBtn];
+      for (let i = 0; i < bgBtns.length; i++) {
+        const btn = bgBtns[i];
+        btn.tabIndex = overlayShown ? -1 : 0;
+        btn.inert = overlayShown;
+        if (overlayShown) {
+          btn.setAttribute('tabindex', '-1');
+        } else if (typeof btn.removeAttribute === 'function') {
+          btn.removeAttribute('tabindex');
+        } else {
+          btn.setAttribute('tabindex', '0');
+        }
+      }
+    }
+
     const telemetryCol = h('div', { className: 'lg-telemetry' }, [
       h('div', { className: 'lg-tier-hero' }, [
         h('div', { className: 'lg-card' }, [
@@ -552,7 +586,7 @@
           ]),
           cmSpanText
         ]),
-        h('div', { className: 'lg-sim-actions' }, [simUpBtn, simDownBtn, flipBtn])
+        simActionsWrap
       ]),
       scopeBox,
       inlineOverlay
@@ -763,14 +797,18 @@
         statusPill.textContent = 'SIM MODE';
         showErrorOverlay(st.error, armBtn);
       } else if (st.state === 'listening') {
-        if (!calWizardActive) inlineOverlay.hidden = true;
+        if (!calWizardActive && !calOpening && !calSummaryActive) {
+          inlineOverlay.hidden = true;
+          syncBackgroundControlsInert();
+        }
         statusPill.dataset.veto = 'false';
         statusPill.textContent = formatListeningStatus();
       } else if (st.state === 'idle') {
-        if (calWizardActive) {
-          closeCalibrationWizard({ restoreFocus: false });
+        if (calWizardActive || calOpening || calSummaryActive) {
+          closeCalibrationWizard({ restoreFocus: false, keepMicArmed: true });
         } else {
           inlineOverlay.hidden = true;
+          syncBackgroundControlsInert();
         }
         wasStrokeActive = false;
         restoreIdleDirDisplay();
@@ -925,10 +963,10 @@
         const bandTop = clamp(targetY * 100 - 6, 0, 88);
         spanRibbon.style.top = `${bandTop}%`;
         spanRibbon.style.height = '12%';
-        spanRibbon.dataset.dir = 'up';
+        spanRibbon.dataset.dir = 'idle';
         spanRibbon.dataset.visible = 'true';
         needle.style.top = `${targetY * 100}%`;
-        needle.dataset.dir = 'up';
+        needle.dataset.dir = 'idle';
         sigmaBand.style.top = `${targetY * 100}%`;
         sigmaBand.style.height = '14%';
       } else if (step.kind === 'swipe') {
@@ -947,6 +985,7 @@
         sigmaBand.style.height = '12%';
       } else {
         spanRibbon.dataset.visible = 'false';
+        spanRibbon.dataset.dir = 'idle';
         needle.style.top = '50%';
         needle.dataset.dir = 'idle';
         sigmaBand.style.top = '50%';
@@ -965,9 +1004,51 @@
         spanRibbon.style.height = `${heightPct}%`;
         spanRibbon.dataset.dir = lastCommittedSwipe.direction;
         spanRibbon.dataset.visible = 'true';
+        updateRailAndReadout(
+          lastCommittedSwipe.endFromTopPct / 100,
+          5.5,
+          0,
+          lastCommittedSwipe.direction
+        );
+        if (
+          Number.isFinite(lastCommittedSwipe.distanceFromTopCm) &&
+          Number.isFinite(lastCommittedSwipe.distanceFromBottomCm)
+        ) {
+          cmSpanText.textContent = `${lastCommittedSwipe.distanceFromTopCm.toFixed(1)}cm T · ${lastCommittedSwipe.distanceFromBottomCm.toFixed(1)}cm B`;
+        }
       } else {
         spanRibbon.dataset.visible = 'false';
+        spanRibbon.dataset.dir = 'idle';
+        updateRailAndReadout(0.5, 5.5, 0, 'idle');
       }
+    }
+
+    function hasEnoughSwipesForEarlyFit() {
+      let upCount = 0;
+      let downCount = 0;
+      const seenIds = new Set();
+      for (let i = 0; i < calProtocol.length; i++) {
+        const st = calProtocol[i];
+        if (!st || st.kind !== 'swipe') continue;
+        const key = st.id || String(i);
+        if (calCapturedSteps.has(key)) {
+          seenIds.add(key);
+          if (st.direction === 'up') upCount++;
+          else if (st.direction === 'down') downCount++;
+        }
+      }
+      if (Array.isArray(controller.recordedEvents)) {
+        for (let i = 0; i < controller.recordedEvents.length; i++) {
+          const ev = controller.recordedEvents[i];
+          if (!ev || ev.kind !== 'swipe') continue;
+          const key = ev.stepId || ev.id;
+          if (key && seenIds.has(key)) continue;
+          if (key) seenIds.add(key);
+          if (ev.direction === 'up') upCount++;
+          else if (ev.direction === 'down') downCount++;
+        }
+      }
+      return upCount >= 2 && downCount >= 2;
     }
 
     function beginStepCapture(step) {
@@ -985,6 +1066,7 @@
       calHeadRow.hidden = true;
       calSubHint.hidden = true;
       calBtn.setAttribute('aria-expanded', 'false');
+      syncBackgroundControlsInert();
       restoreRailAfterCalibration();
       const target = overlayReturnFocusEl;
       overlayReturnFocusEl = null;
@@ -994,12 +1076,19 @@
     }
 
     function showErrorOverlay(msg, triggerEl) {
+      calSessionSeq++;
+      calOpening = false;
+      calSummaryActive = false;
+      calBusy = false;
+      calAutoArmedMic = false;
+      dragState = null;
       if (calWizardActive) {
         if (typeof controller.cancelCalibrationStep === 'function') {
           controller.cancelCalibrationStep();
         }
         calWizardActive = false;
       }
+      restoreRailAfterCalibration();
       overlayReturnFocusEl = triggerEl || document.activeElement || armBtn;
       calBtn.setAttribute('aria-expanded', 'false');
       calHeadRow.hidden = true;
@@ -1017,6 +1106,8 @@
       );
       overlayActions.appendChild(dismissBtn);
       inlineOverlay.hidden = false;
+      syncBackgroundControlsInert();
+      announce(msg);
       dismissBtn.focus({ preventScroll: true });
     }
 
@@ -1084,6 +1175,7 @@
 
     async function handleSaveAndNextStep() {
       if (!calWizardActive || calBusy) return;
+      const mySeq = calSessionSeq;
       const step = calProtocol[calStepIndex] || calProtocol[0];
       if (typeof controller.completeCalibrationRecord === 'function') {
         calBusy = true;
@@ -1093,9 +1185,11 @@
         } catch (_) {
           res = { ok: false };
         } finally {
-          calBusy = false;
+          if (mySeq === calSessionSeq) {
+            calBusy = false;
+          }
         }
-        if (!calWizardActive) return;
+        if (mySeq !== calSessionSeq || !calWizardActive) return;
         if (res && typeof res.collectorSaved === 'boolean' && res.collectorSaved) {
           calCollectorOnline = true;
           updateCollectorBadge();
@@ -1103,10 +1197,14 @@
         const activeCount = Number.isFinite(res && res.activeFrameCount) ? res.activeFrameCount : 0;
         const tooQuiet = !res || !res.ok || (activeCount < 4 && step.kind !== 'negative');
         if (tooQuiet) {
+          const isFinal = calStepIndex === calProtocol.length - 1;
+          const ctaText = isFinal ? 'Fit & Lock' : 'Save & Next';
           calSubHint.hidden = false;
           calSubHint.dataset.warn = 'true';
-          calSubHint.textContent = 'Too quiet — rub/swipe firmly, then press Save & Next';
-          announce('Too quiet. Rub or swipe firmly, then press Save and Next.');
+          calSubHint.textContent = `Too quiet — rub/swipe firmly, then press ${ctaText}`;
+          announce(
+            `Too quiet. Rub or swipe firmly, then press ${isFinal ? 'Fit and Lock' : 'Save and Next'}.`
+          );
           beginStepCapture(step);
           return;
         }
@@ -1131,6 +1229,7 @@
 
     async function handleFitCalibration() {
       if (!calWizardActive || calBusy) return;
+      const mySeq = calSessionSeq;
       if (typeof controller.fitRecordedCalibration !== 'function') {
         if (typeof controller.finishCalibrationStep === 'function') {
           controller.finishCalibrationStep();
@@ -1144,27 +1243,35 @@
       } catch (_) {
         res = { ok: false };
       } finally {
-        calBusy = false;
+        if (mySeq === calSessionSeq) {
+          calBusy = false;
+        }
       }
-      if (!calWizardActive) return;
+      if (mySeq !== calSessionSeq || !calWizardActive) return;
 
       if (res && res.ok) {
+        calWizardActive = false;
+        calSummaryActive = true;
+        calAutoArmedMic = false;
         if (typeof res.collectorSaved === 'boolean') {
           calCollectorOnline = res.collectorSaved;
           updateCollectorBadge();
         }
         const evCount = res.eventCount ?? calCapturedSteps.size;
         const looPct = res.looAccuracyPct ?? 100;
+        const metricLabel = res.looFolds === 0 ? `Fit ${looPct}%` : `LOO ${looPct}%`;
         const savedLabel = res.collectorSaved ? 'Saved to disk' : 'Saved locally';
-        const summary = `Calibrated (${evCount} events · LOO ${looPct}%) · ${savedLabel}`;
+        const summary = `Calibrated (${evCount} events · ${metricLabel}) · ${savedLabel}`;
         calStepPill.textContent = `FIT · ${evCount} EV`;
         overlayMsg.textContent = summary;
         calSubHint.hidden = false;
         calSubHint.dataset.warn = 'false';
+        const hasRbf = Boolean(res.model && res.model.rbf);
+        const modelDesc = hasRbf ? '5-zone RBF active' : 'Shrinkage LDA active';
         calSubHint.textContent = Number.isFinite(res.dPrime)
-          ? `Fisher LDA d' = ${Number(res.dPrime).toFixed(2)} · 5-zone RBF active`
-          : 'Empirical 5-zone RBF + LDA model active';
-        modeMeta.textContent = `Calibrated · LOO ${looPct}% (${evCount} ev)`;
+          ? `Fisher LDA d' = ${Number(res.dPrime).toFixed(2)} · ${modelDesc}`
+          : `Empirical ${modelDesc}`;
+        modeMeta.textContent = `Calibrated · ${metricLabel} (${evCount} ev)`;
         announce(summary);
 
         clearChildren(overlayActions);
@@ -1200,11 +1307,15 @@
         overlayActions.appendChild(resetBtn);
         doneBtn.focus({ preventScroll: true });
       } else {
+        const rawReason = (res && typeof res.reason === 'string' && res.reason) || '';
+        const friendlyReason =
+          rawReason && !/^[a-z0-9_]+$/i.test(rawReason)
+            ? rawReason
+            : 'Record at least 2 UP and 2 DOWN swipes before fitting calibration';
         calSubHint.hidden = false;
         calSubHint.dataset.warn = 'true';
-        calSubHint.textContent =
-          (res && res.reason) || 'Record at least 4 steps (including UP & DOWN swipes) before fitting';
-        beginStepCapture(calProtocol[calStepIndex] || calProtocol[0]);
+        calSubHint.textContent = friendlyReason;
+        announce(friendlyReason);
       }
     }
 
@@ -1212,6 +1323,8 @@
       calStepIndex = clamp(index, 0, Math.max(0, calProtocol.length - 1));
       const step = calProtocol[calStepIndex] || DEFAULT_CALIBRATION_PROTOCOL[0];
       const total = calProtocol.length || 14;
+      const isFinalStep = calStepIndex === total - 1;
+      const primaryCtaLabel = isFinalStep ? 'Fit & Lock' : 'Save & Next';
 
       calHeadRow.hidden = false;
       calStepPill.textContent = `${calStepIndex + 1} / ${total}`;
@@ -1220,18 +1333,23 @@
       calMeterFill.dataset.hot = 'false';
       calMeterText.textContent = '+0dB';
 
-      overlayMsg.textContent = step.label || `${calStepIndex + 1}/${total} · Calibrate step`;
+      const stepPrompt =
+        step.kind === 'negative' && /Esc|Tab/i.test(step.label || '')
+          ? `${calStepIndex + 1}/${total} · Tap ~, Caps & Shift once, then press Fit & Lock`
+          : step.label || step.prompt || `${calStepIndex + 1}/${total} · Calibrate step`;
+      overlayMsg.textContent = stepPrompt;
       calSubHint.hidden = false;
       calSubHint.dataset.warn = 'false';
       calSubHint.textContent =
         step.kind === 'negative'
-          ? 'Tap Esc, Tab & Shift once, then press Save & Next'
+          ? 'Tap ~, Caps & Shift once, then press Fit & Lock'
           : step.kind === 'zone'
-            ? `Rub ${step.short || 'target zone'} steadily (~1s), then press Save & Next`
-            : `Perform ${step.short || 'swipe'} along highlighted rail, then press Save & Next`;
+            ? `Rub ${step.short || 'target zone'} steadily (~1s), then press ${primaryCtaLabel}`
+            : `Perform ${step.short || 'swipe'} along highlighted rail, then press ${primaryCtaLabel}`;
 
       highlightCalibrationStepOnRail(step);
       beginStepCapture(step);
+      announce(step.prompt || stepPrompt);
 
       clearChildren(overlayActions);
       const saveNextBtn = h(
@@ -1241,7 +1359,7 @@
           className: 'lg-mini-btn lg-mini-btn--primary',
           onClick: () => handleSaveAndNextStep()
         },
-        ['Save & Next']
+        [primaryCtaLabel]
       );
       const backStepBtn = h(
         'button',
@@ -1253,13 +1371,14 @@
         },
         ['Back']
       );
+      const canFitEarly = hasEnoughSwipesForEarlyFit();
       const fitEarlyBtn = h(
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
-          disabled: calCapturedSteps.size < 4,
-          title: 'Fit empirical calibration model early (enabled once >= 4 steps are captured)',
+          className: 'lg-mini-btn lg-cal-secondary-btn',
+          disabled: !canFitEarly,
+          title: 'Fit empirical calibration model early (enabled once >= 2 UP and >= 2 DOWN swipes are captured)',
           onClick: () => handleFitCalibration()
         },
         ['Fit Early']
@@ -1268,7 +1387,7 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
+          className: 'lg-mini-btn lg-cal-secondary-btn',
           title: 'Download recorded left-grille-calibration.json bundle',
           onClick: () => handleDownloadCalibrationJson()
         },
@@ -1278,7 +1397,7 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
+          className: 'lg-mini-btn lg-cal-secondary-btn',
           onClick: () => handleResetCalibration()
         },
         ['Reset']
@@ -1295,27 +1414,63 @@
 
       overlayActions.appendChild(saveNextBtn);
       overlayActions.appendChild(backStepBtn);
-      overlayActions.appendChild(fitEarlyBtn);
+      if (!isFinalStep) {
+        overlayActions.appendChild(fitEarlyBtn);
+      }
       overlayActions.appendChild(jsonBtn);
       overlayActions.appendChild(resetBtn);
       overlayActions.appendChild(cancelBtn);
 
       inlineOverlay.hidden = false;
+      syncBackgroundControlsInert();
       if (opts.focusPrimary !== false) {
         saveNextBtn.focus({ preventScroll: true });
       }
     }
 
     async function openCalibrationWizard(triggerEl) {
-      if (calWizardActive) {
+      if (calWizardActive || calOpening || calSummaryActive) {
         closeCalibrationWizard({ restoreFocus: true });
         return;
       }
       overlayReturnFocusEl = triggerEl || calBtn;
-      if (controller.state !== 'listening') {
+      dragState = null;
+      calOpening = true;
+      const mySeq = ++calSessionSeq;
+      const autoArmed = controller.state !== 'listening';
+      calAutoArmedMic = autoArmed;
+      calBtn.setAttribute('aria-expanded', 'true');
+
+      let ok = true;
+      if (autoArmed) {
         await disarmSharedBusForCell1();
-        const ok = await controller.start();
-        if (!ok || controller.state !== 'listening') return;
+        if (mySeq !== calSessionSeq || !isSecondaryOpen) {
+          calOpening = false;
+          calBtn.setAttribute('aria-expanded', 'false');
+          if (calAutoArmedMic) {
+            calAutoArmedMic = false;
+            if (controller.state === 'listening' || controller.state === 'requesting') {
+              controller.stop();
+            }
+          }
+          return;
+        }
+        ok = await controller.start();
+      }
+      if (mySeq !== calSessionSeq || !isSecondaryOpen || !ok || controller.state !== 'listening') {
+        calOpening = false;
+        calBtn.setAttribute('aria-expanded', 'false');
+        if (autoArmed) {
+          calAutoArmedMic = false;
+          if (controller.state === 'listening' || controller.state === 'requesting') {
+            controller.stop();
+          }
+        }
+        return;
+      }
+
+      if (typeof controller.clearRecordedCalibration === 'function') {
+        controller.clearRecordedCalibration();
       }
       const proto =
         typeof controller.getCalibrationProtocol === 'function'
@@ -1325,6 +1480,8 @@
         Array.isArray(proto) && proto.length > 0 ? proto : DEFAULT_CALIBRATION_PROTOCOL;
       calCapturedSteps = new Set();
       calBusy = false;
+      calOpening = false;
+      calSummaryActive = false;
       calWizardActive = true;
       calBtn.setAttribute('aria-expanded', 'true');
 
@@ -1333,12 +1490,14 @@
       if (typeof controller.probeCollector === 'function') {
         Promise.resolve(controller.probeCollector())
           .then((online) => {
+            if (mySeq !== calSessionSeq) return;
             calCollectorOnline = Boolean(online);
-            if (calWizardActive) updateCollectorBadge();
+            if (calWizardActive || calSummaryActive) updateCollectorBadge();
           })
           .catch(() => {
+            if (mySeq !== calSessionSeq) return;
             calCollectorOnline = false;
-            if (calWizardActive) updateCollectorBadge();
+            if (calWizardActive || calSummaryActive) updateCollectorBadge();
           });
       } else {
         calCollectorOnline = false;
@@ -1347,29 +1506,46 @@
     }
 
     function closeCalibrationWizard(opts = {}) {
+      calSessionSeq++;
+      calOpening = false;
+      calSummaryActive = false;
+      calBusy = false;
       if (calWizardActive) {
         if (typeof controller.cancelCalibrationStep === 'function') {
           controller.cancelCalibrationStep();
         }
         calWizardActive = false;
       }
+      const shouldStopAutoMic = calAutoArmedMic && opts.keepMicArmed !== true;
+      calAutoArmedMic = false;
       dismissOverlay(opts);
+      if (shouldStopAutoMic && (controller.state === 'listening' || controller.state === 'requesting')) {
+        controller.stop();
+      }
     }
 
     function handleCalibrationResult(res) {
       if (res && res.ok) {
         calWizardActive = false;
+        calOpening = false;
+        calSummaryActive = false;
+        calAutoArmedMic = false;
         dismissOverlay({ restoreFocus: true });
         if (res.looAccuracyPct !== undefined) {
-          modeMeta.textContent = `Calibrated · LOO ${res.looAccuracyPct}%`;
+          const metricLabel = res.looFolds === 0 ? `Fit ${res.looAccuracyPct}%` : `LOO ${res.looAccuracyPct}%`;
+          modeMeta.textContent = `Calibrated · ${metricLabel}`;
         } else {
           modeMeta.textContent = `Calibrated (${res.polarity === 1 ? 'Top-Mic' : 'Inverted'})`;
         }
         announce('Left grille calibration locked.');
       } else if (calWizardActive) {
+        const isFinal = calStepIndex === calProtocol.length - 1;
         calSubHint.hidden = false;
         calSubHint.dataset.warn = 'true';
-        calSubHint.textContent = 'Too quiet — rub/swipe firmly, then press Save & Next';
+        calSubHint.textContent = `Too quiet — rub/swipe firmly, then press ${isFinal ? 'Fit & Lock' : 'Save & Next'}`;
+        announce(
+          `Too quiet. Rub or swipe firmly, then press ${isFinal ? 'Fit and Lock' : 'Save and Next'}.`
+        );
         beginStepCapture(calProtocol[calStepIndex] || calProtocol[0]);
       } else {
         showErrorOverlay(
@@ -1400,6 +1576,7 @@
     }
 
     railWrap.addEventListener('pointerdown', (e) => {
+      if (calWizardActive || calOpening || !inlineOverlay.hidden) return;
       e.preventDefault();
       railWrap.focus({ preventScroll: true });
       if (railWrap.setPointerCapture) {
@@ -1421,6 +1598,7 @@
     });
 
     railWrap.addEventListener('pointermove', (e) => {
+      if (calWizardActive || calOpening || !inlineOverlay.hidden) return;
       if (!dragState || e.pointerId !== dragState.pointerId) return;
       const now = performance.now();
       const yNow = clientYToFrac(e.clientY);
@@ -1481,6 +1659,7 @@
     });
 
     railWrap.addEventListener('keydown', (e) => {
+      if (calWizardActive || calOpening || !inlineOverlay.hidden) return;
       if (e.key === 'ArrowUp') {
         e.preventDefault();
         controller.runSimulatedSwipe('up');
@@ -1675,12 +1854,7 @@
         secondaryPage.hidden = true;
         if (!otherSecondaryPageVisible()) mainGrid.hidden = false;
         isSecondaryOpen = false;
-        if (calWizardActive) {
-          controller.cancelCalibrationStep();
-          calWizardActive = false;
-        }
-        inlineOverlay.hidden = true;
-        calBtn.setAttribute('aria-expanded', 'false');
+        closeCalibrationWizard({ restoreFocus: false, keepMicArmed: true });
         overlayReturnFocusEl = null;
         if (restorePortalFocus && wasOpen && !mainGrid.hidden) {
           if (savedMainScrollY === null) {
@@ -1836,8 +2010,8 @@
     }
 
     inlineOverlay.addEventListener('keydown', (e) => {
-      if (!e || !calWizardActive) return;
-      if (e.key === 'ArrowLeft') {
+      if (!e || (!calWizardActive && !calSummaryActive)) return;
+      if (e.key === 'ArrowLeft' && calWizardActive) {
         e.preventDefault();
         handlePrevStep();
       } else if (
@@ -1850,7 +2024,7 @@
           primaryBtn.dispatch('click');
         } else if (primaryBtn && typeof primaryBtn.click === 'function') {
           primaryBtn.click();
-        } else {
+        } else if (calWizardActive) {
           handleSaveAndNextStep();
         }
       }
@@ -1860,7 +2034,11 @@
       if (!e || e.defaultPrevented) return;
       if (e.key === 'Escape' && targetOpen) {
         e.preventDefault();
-        if (calWizardActive || !inlineOverlay.hidden) {
+        const activeStep = calWizardActive ? calProtocol[calStepIndex] : null;
+        if (calWizardActive && activeStep && activeStep.kind === 'negative') {
+          return;
+        }
+        if (calWizardActive || calOpening || calSummaryActive || !inlineOverlay.hidden) {
           closeCalibrationWizard({ restoreFocus: true });
         } else {
           requestCloseSecondaryView();
@@ -1895,7 +2073,7 @@
       txEnabled: controller.txEnabled,
       canUseSonar: true,
       polarity: controller.polarity,
-      calibrated: Boolean(controller.calibration),
+      calibrated: Boolean(controller.calibration || controller.empiricalModel),
       sampleRate: 48000
     });
 

@@ -9,6 +9,9 @@ const {
   CALIBRATION_PROTOCOL,
   buildCarrierMultiples,
   createWorkletSource,
+  extractStrokeFeatures,
+  fitShrinkageLda,
+  scoreShrinkageLda,
   fitEmpiricalCalibration,
   predictRbfY
 } = require('./acoustic-engine.js');
@@ -1425,6 +1428,546 @@ test('Controller calibration recording, fitRecordedCalibration, localStorage v2/
     Object.defineProperty(globalThis, 'navigator', { configurable: true, value: origNav });
     globalThis.AudioContext = origAudioCtx;
     globalThis.fetch = origFetch;
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: origLS });
+  }
+});
+
+test('P0-3: frequency-anchored flatStartBin excludes 375/750 Hz finger thud while rejecting 44.1 kHz vocal comb and 16 kHz 1500 Hz tone', () => {
+  for (const sr of [8000, 16000, 22050, 44100, 48000, 96000, 192000]) {
+    const core = new AcousticDspCore({ sampleRate: sr });
+    assert.ok(core.flatStartBin >= core.midStartBin, `flatStartBin >= midStartBin at ${sr}`);
+    assert.ok(core.flatStartBin < core.hf2EndBin, `flatStartBin < hf2EndBin at ${sr}`);
+    assert.ok(
+      core.flatStartBin * core.binHz >= 1150,
+      `Expected flatStartBin >= 1150 Hz at ${sr}, got ${core.flatStartBin * core.binHz} Hz`
+    );
+  }
+
+  // (a) 44.1 kHz 300..1800 Hz 6-harmonic vocal comb + 0.005 breathy noise must commit 0 false swipes
+  const core441 = new AcousticDspCore({ sampleRate: 44100 });
+  const rng441 = createRng(44101);
+  const buf441 = new Float32Array(Math.floor(1.5 * 44100));
+  const tx441 = new Float32Array(QUANTUM);
+  for (let n = 0; n < buf441.length; n++) {
+    if ((n & 127) === 0) core441.fillTxBlock(tx441, null);
+    let x = randNormal(rng441) * 0.0005 + tx441[n & 127] * 0.35;
+    const t = n / 44100;
+    if (t >= 0.35 && t < 0.85) {
+      const ramp = 0.5 + 1.4 * ((t - 0.35) / 0.5);
+      for (let h = 1; h <= 6; h++) {
+        x += ramp * 0.025 * Math.sin(2 * Math.PI * 300 * h * t);
+      }
+      x += ramp * randNormal(rng441) * 0.005;
+    }
+    buf441[n] = x;
+  }
+  const evs441 = core441.processSamples(buf441);
+  assert.equal(evs441.filter((e) => e.type === 'swipe').length, 0, '44.1 kHz vocal comb must commit 0 swipes');
+  assert.ok(evs441.some((e) => e.vetoReason === 'voice'), '44.1 kHz vocal comb should emit voice veto');
+
+  // (b) 16 kHz 1500 Hz tone + 0.004 HF noise must commit 0 false swipes
+  const core16 = new AcousticDspCore({ sampleRate: 16000 });
+  const rng16 = createRng(16001);
+  const buf16 = new Float32Array(Math.floor(1.5 * 16000));
+  let prev16 = 0;
+  for (let n = 0; n < buf16.length; n++) {
+    let x = randNormal(rng16) * 0.0005;
+    const t = n / 16000;
+    if (t >= 0.35 && t < 0.85) {
+      const ramp = 0.5 + 1.4 * ((t - 0.35) / 0.5);
+      const w = randNormal(rng16);
+      const hf = w - prev16;
+      prev16 = w;
+      x += ramp * (0.03 * Math.sin(2 * Math.PI * 1500 * t) + 0.004 * hf);
+    }
+    buf16[n] = x;
+  }
+  const evs16 = core16.processSamples(buf16);
+  assert.equal(evs16.filter((e) => e.type === 'swipe').length, 0, '16 kHz 1500 Hz tone must commit 0 swipes');
+  assert.ok(evs16.some((e) => e.vetoReason === 'voice'), '16 kHz 1500 Hz tone should emit voice veto');
+});
+
+test('P0-1: setTxEnabled(false) clears sonar history, gates demod/Doppler, and masks RBF/LDA sonar features without collapsing y', () => {
+  // 1. Calibrate 14-step Mac16,5 model with txEnabled: true
+  const calCore = new AcousticDspCore({ sampleRate: 48000, txEnabled: true });
+  const warmRng = createRng(9011);
+  const warmBuf = new Float32Array(Math.floor(0.25 * 48000));
+  const txBuf = new Float32Array(QUANTUM);
+  for (let n = 0; n < warmBuf.length; n++) {
+    if ((n & 127) === 0) calCore.fillTxBlock(txBuf, null);
+    warmBuf[n] = randNormal(warmRng) * 0.0005 + txBuf[n & 127] * 0.35;
+  }
+  calCore.processSamples(warmBuf);
+
+  const recorded = [];
+  for (let i = 0; i < CALIBRATION_PROTOCOL.length; i++) {
+    const step = CALIBRATION_PROTOCOL[i];
+    calCore.beginRecordEvent(step);
+    if (step.kind === 'zone') {
+      simulateMac165FoldAudio({
+        core: calCore,
+        preIdleSec: 0.08,
+        activeSec: 0.35,
+        postIdleSec: 0.08,
+        yStart: step.targetY,
+        yEnd: step.targetY,
+        seed: 7400 + i
+      });
+    } else if (step.kind === 'swipe') {
+      simulateMac165FoldAudio({
+        core: calCore,
+        preIdleSec: 0.08,
+        activeSec: step.id.includes('fast') ? 0.2 : 0.44,
+        postIdleSec: 0.08,
+        yStart: step.startY,
+        yEnd: step.endY,
+        seed: 7500 + i
+      });
+    } else {
+      simulateMac165FoldAudio({
+        core: calCore,
+        preIdleSec: 0.08,
+        activeSec: 0.45,
+        postIdleSec: 0.08,
+        isNegativeClicks: true,
+        seed: 7600 + i
+      });
+    }
+    const r = calCore.endRecordEvent();
+    assert.equal(r.ok, true);
+    recorded.push(r.eventRecord);
+  }
+
+  const fit = fitEmpiricalCalibration(recorded);
+  assert.equal(fit.ok, true);
+  assert.equal(fit.looAccuracyPct, 100);
+
+  // 2. Direct unit checks on predictRbfY and scoreShrinkageLda passive masking ({ txActive: false })
+  const baseVec = fit.model.rbf.prototypes[4].vector.slice(); // bottom y = 0.96 prototype
+  const corruptedOccVec = baseVec.slice();
+  corruptedOccVec[10] = -80; // extreme bogus occDb that would pin to y=0.18 if unmasked
+  const rbfPassiveA = predictRbfY(baseVec, fit.model.rbf, { txActive: false });
+  const rbfPassiveB = predictRbfY(corruptedOccVec, fit.model.rbf, { txActive: false });
+  assert.equal(rbfPassiveA.y, rbfPassiveB.y, 'txActive:false must ignore occDb (index 10)');
+  assert.ok(rbfPassiveB.y > 0.85, `Bottom prototype must stay near 0.96 in passive mode, got ${rbfPassiveB.y}`);
+
+  const testLda = {
+    weights: [1, 1, 2.5, 0.5, 4.0, 5.0, 0.5, 0.5],
+    bias: 0,
+    featMean: [0, 0, 0, 0, 0, 0, 0, 0],
+    featStd: [1, 1, 1, 1, 1, 1, 1, 1],
+    lambda: 0.35
+  };
+  const s1 = scoreShrinkageLda([0, 0, 1.0, 0, -10.0, -10.0, 0, 0], testLda, { txActive: false });
+  const s2 = scoreShrinkageLda([0, 0, 1.0, 0, 10.0, 10.0, 0, 0], testLda, { txActive: false });
+  assert.equal(s1, s2, 'txActive:false must zero sonar terms occTimingSkew (4) & meanRawDopplerAsym (5)');
+  assert.equal(s1, 2.5, 'txActive:false must keep passive thirdDiffSnr (index 2)');
+
+  // 3. Mid-session setTxEnabled(false, 0) clears IQ history & tracks passive position + swipes cleanly
+  const zoneMedians = [];
+  for (const targetY of [0.02, 0.18, 0.5, 0.75, 0.96]) {
+    const c = new AcousticDspCore({ sampleRate: 48000, txEnabled: true, empiricalModel: fit.model });
+    c.processSamples(warmBuf);
+    assert.ok(c.iqCount > 0, 'TX-active warmup should populate iqCount');
+    c.setTxEnabled(false, 0);
+    assert.equal(c.iqWriteIdx, 0);
+    assert.equal(c.iqCount, 0);
+    assert.ok(c.iqHistI.every((arr) => arr.every((v) => v === 0)));
+    assert.ok(c.iqHistQ.every((arr) => arr.every((v) => v === 0)));
+
+    const evs = simulateMac165FoldAudio({
+      core: c,
+      preIdleSec: 0.15,
+      activeSec: 0.35,
+      postIdleSec: 0.1,
+      yStart: targetY,
+      yEnd: targetY,
+      seed: 3100 + Math.round(targetY * 100)
+    });
+    assert.ok(
+      evs.every(
+        (e) =>
+          e.pinholeOcclusion === 0 &&
+          e.dopplerSnrDb === 0 &&
+          e.carrierActive === false &&
+          e.dopplerSpectrum.every((v) => v === 0)
+      ),
+      'Passive mode must never emit nonzero sonar/Doppler telemetry'
+    );
+    const activeYs = evs
+      .filter((e) => e.active)
+      .map((e) => e.y)
+      .sort((a, b) => a - b);
+    assert.ok(activeYs.length > 0);
+    zoneMedians.push(activeYs[activeYs.length >> 1]);
+  }
+  assert.ok(zoneMedians[4] > 0.75, `Bottom rub must not collapse to 0.18 in passive mode, got ${zoneMedians[4]}`);
+  for (let i = 1; i < zoneMedians.length; i++) {
+    assert.ok(
+      zoneMedians[i - 1] < zoneMedians[i],
+      `Passive RBF medians must remain strictly ordered: ${zoneMedians.map((v) => v.toFixed(3)).join(' < ')}`
+    );
+  }
+
+  for (const tc of [
+    { label: 'passive top-down', yStart: 0.04, yEnd: 0.5, dir: 'down', seed: 9201 },
+    { label: 'passive top-up', yStart: 0.5, yEnd: 0.04, dir: 'up', seed: 9202 },
+    { label: 'passive full-down', yStart: 0.04, yEnd: 0.96, dir: 'down', seed: 9203 },
+    { label: 'passive full-up', yStart: 0.96, yEnd: 0.04, dir: 'up', seed: 9204 }
+  ]) {
+    const c = new AcousticDspCore({ sampleRate: 48000, txEnabled: true, empiricalModel: fit.model });
+    c.processSamples(warmBuf);
+    c.setTxEnabled(false, 0);
+    const swipes = simulateMac165FoldAudio({
+      core: c,
+      preIdleSec: 0.15,
+      activeSec: 0.42,
+      postIdleSec: 0.15,
+      yStart: tc.yStart,
+      yEnd: tc.yEnd,
+      seed: tc.seed
+    })
+      .filter((e) => e.type === 'swipe')
+      .map((e) => e.swipe);
+    assert.equal(swipes.length, 1, `Expected 1 swipe for ${tc.label}`);
+    assert.equal(swipes[0].direction, tc.dir, `Wrong direction for ${tc.label}`);
+    assert.equal(swipes[0].sensingMode, 'calibrated');
+  }
+});
+
+test('P1/P2-12/Design: stationary room noise rejected during recCapture (warmed & cold), >3.5s rub keeps ambient frozen, and Step 14 avoids Esc/Tab', () => {
+  // Design P0-1: Step 14 prompt must not instruct user to hit Esc or Tab
+  assert.equal(
+    CALIBRATION_PROTOCOL[13].label,
+    '14/14 · Tap ~, Caps & Shift keys once (Veto check)'
+  );
+  assert.ok(!/\b(Esc|Tab)\b/.test(CALIBRATION_PROTOCOL[13].label));
+
+  // P1 Live: 0.55 s untouched stationary room noise (sigma=0.0005 + 0.35*tx), both warmed and cold-started
+  for (const mode of ['warmed', 'cold']) {
+    for (let s = 0; s < 5; s++) {
+      const core = new AcousticDspCore({ sampleRate: 48000 });
+      const rng = createRng(6200 + s * 41);
+      const tx = new Float32Array(QUANTUM);
+      if (mode === 'warmed') {
+        const warm = new Float32Array(Math.floor(0.55 * 48000));
+        for (let n = 0; n < warm.length; n++) {
+          if ((n & 127) === 0) core.fillTxBlock(tx, null);
+          warm[n] = randNormal(rng) * 0.0005 + tx[n & 127] * 0.35;
+        }
+        core.processSamples(warm);
+      }
+      core.beginRecordEvent(CALIBRATION_PROTOCOL[0]);
+      const quiet = new Float32Array(Math.floor(0.55 * 48000));
+      for (let n = 0; n < quiet.length; n++) {
+        if ((n & 127) === 0) core.fillTxBlock(tx, null);
+        quiet[n] = randNormal(rng) * 0.0005 + tx[n & 127] * 0.35;
+      }
+      core.processSamples(quiet);
+      const res = core.endRecordEvent();
+      assert.equal(
+        res.ok,
+        false,
+        `${mode} stationary noise (seed ${s}) must fail quiet gate (active=${res.activeFrameCount}, peak=${res.peakSnrDb})`
+      );
+    }
+  }
+
+  // Negative step (veto-keys) still accepts quiet or tapped capture cleanly
+  const negCore = new AcousticDspCore({ sampleRate: 48000 });
+  const negRng = createRng(6300);
+  const negTx = new Float32Array(QUANTUM);
+  negCore.beginRecordEvent(CALIBRATION_PROTOCOL[13]);
+  const quietNeg = new Float32Array(Math.floor(0.4 * 48000));
+  for (let n = 0; n < quietNeg.length; n++) {
+    if ((n & 127) === 0) negCore.fillTxBlock(negTx, null);
+    quietNeg[n] = randNormal(negRng) * 0.0005 + negTx[n & 127] * 0.35;
+  }
+  negCore.processSamples(quietNeg);
+  assert.equal(negCore.endRecordEvent().ok, true, 'Negative veto-keys step must accept quiet capture');
+
+  // P2-12: Holding a long zone rub > 3.5 s during recCapture never snaps ambient floors
+  const holdCore = new AcousticDspCore({ sampleRate: 48000 });
+  const holdRng = createRng(6400);
+  const holdTx = new Float32Array(QUANTUM);
+  const warmHold = new Float32Array(Math.floor(0.3 * 48000));
+  for (let n = 0; n < warmHold.length; n++) {
+    if ((n & 127) === 0) holdCore.fillTxBlock(holdTx, null);
+    warmHold[n] = randNormal(holdRng) * 0.0005 + holdTx[n & 127] * 0.35;
+  }
+  holdCore.processSamples(warmHold);
+  const ambFricBefore = holdCore.ambientFricDb;
+  const ambHfBefore = holdCore.ambientHfDb;
+  const ambBandsBefore = Array.from(holdCore.ambientBandsDb);
+
+  holdCore.beginRecordEvent(CALIBRATION_PROTOCOL[2]);
+  const longRub = new Float32Array(Math.floor(4.1 * 48000));
+  for (let n = 0; n < longRub.length; n++) {
+    if ((n & 127) === 0) holdCore.fillTxBlock(holdTx, null);
+    longRub[n] = randNormal(holdRng) * 0.015 + holdTx[n & 127] * 0.35;
+  }
+  holdCore.processSamples(longRub);
+  assert.equal(holdCore.ambientFricDb, ambFricBefore);
+  assert.equal(holdCore.ambientHfDb, ambHfBefore);
+  assert.deepEqual(Array.from(holdCore.ambientBandsDb), ambBandsBefore);
+  assert.equal(holdCore.endRecordEvent().ok, true);
+});
+
+test('P0-4/P1-7/P1-8/P1-9/P2: NaN & TypedArray guards, low-sep LDA regularization, balanced LOO, rbf=null guard, Flip polarity, and safe deserialization', async () => {
+  // 1. P0-4: NaN in bandsDb & Float32Array bandsDb in extractStrokeFeatures never poison LDA
+  const makeSwipeEv = (id, direction, deltaHf, poisonNaN = false) => {
+    const frames = [];
+    for (let i = 0; i < 12; i++) {
+      const prog = i / 11;
+      const b = new Float32Array([
+        poisonNaN && i === 9 ? Number.NaN : 2 + prog * (direction === 'up' ? 4 : -4),
+        3,
+        4,
+        5,
+        6,
+        poisonNaN && i === 10 ? Number.NaN : 4 + prog * deltaHf,
+        5 + prog * deltaHf,
+        6 + prog * deltaHf
+      ]);
+      frames.push({
+        t: i * 0.02,
+        bandsDb: b,
+        fricSnrDb: 12 + prog * (direction === 'up' ? 8 : -8),
+        hfSnrDb: 10 + prog * deltaHf,
+        specRatioDb: -2 + prog * (direction === 'up' ? 5 : -5),
+        occDb: 0,
+        pinholeOcclusion: 0,
+        rawDopplerAsym: direction === 'up' ? 0.35 : -0.35,
+        dopplerSnrDb: 10,
+        active: true
+      });
+    }
+    return {
+      stepId: id,
+      kind: 'swipe',
+      direction,
+      startY: direction === 'up' ? 0.9 : 0.1,
+      endY: direction === 'up' ? 0.1 : 0.9,
+      frames
+    };
+  };
+
+  const featTyped = extractStrokeFeatures(makeSwipeEv('u1', 'up', 6, true).frames, null);
+  assert.equal(featTyped.length, 8);
+  assert.ok(featTyped.every((v) => Number.isFinite(v)), 'extractStrokeFeatures must return all finite numbers');
+  assert.ok(featTyped[6] > 2, `TypedArray bandsDb[5..7] must be read cleanly, got ${featTyped[6]}`);
+
+  const fitNaN = fitEmpiricalCalibration([
+    makeSwipeEv('u1', 'up', 6, true),
+    makeSwipeEv('u2', 'up', 5.5, false),
+    makeSwipeEv('d1', 'down', -6, true),
+    makeSwipeEv('d2', 'down', -5.5, false)
+  ]);
+  assert.equal(fitNaN.ok, true);
+  assert.equal(fitNaN.looFolds, 4);
+  assert.equal(fitNaN.inSampleOnly, false);
+  const coreNaN = new AcousticDspCore({ sampleRate: 48000, empiricalModel: fitNaN.model });
+  assert.ok(coreNaN.empiricalModel && coreNaN.empiricalModel.lda !== null, 'NaN-tainted bandsDb must not disable LDA');
+
+  // 2. P1-9: Low-sep (0.005 dB) LDA regularization & honest balanced LOO gate
+  const lowSepLda = fitShrinkageLda(
+    [
+      [0, 0.005, 0, 0, 0, 0, 0, 0],
+      [0, 0.006, 0, 0, 0, 0, 0, 0]
+    ],
+    [
+      [0, 0.0, 0, 0, 0, 0, 0, 0],
+      [0, 0.001, 0, 0, 0, 0, 0, 0]
+    ],
+    0.35
+  );
+  assert.ok(
+    Math.max(...lowSepLda.weights.map(Math.abs)) < 1.0,
+    `0.005 dB separation must not blow up LDA weights: ${JSON.stringify(lowSepLda.weights)}`
+  );
+  assert.ok(Math.abs(scoreShrinkageLda([0, 0.05, 0, 0, 0, 0, 0, 0], lowSepLda)) < 0.14);
+
+  const fitUnbalanced = fitEmpiricalCalibration([
+    makeSwipeEv('u1', 'up', 6),
+    makeSwipeEv('d1', 'down', -6),
+    makeSwipeEv('d2', 'down', -5.5),
+    makeSwipeEv('d3', 'down', -5.8)
+  ]);
+  assert.equal(fitUnbalanced.ok, true);
+  assert.equal(fitUnbalanced.looFolds, 0, '1 UP + 3 DOWN must not run lopsided LOO');
+  assert.equal(fitUnbalanced.inSampleOnly, true);
+  assert.equal(fitUnbalanced.model.stats.looFolds, 0);
+  assert.equal(fitUnbalanced.model.stats.inSampleOnly, true);
+
+  const fitMinimal = fitEmpiricalCalibration([
+    makeSwipeEv('u1', 'up', 6),
+    makeSwipeEv('d1', 'down', -6)
+  ]);
+  assert.equal(fitMinimal.ok, true);
+  assert.equal(fitMinimal.looFolds, 0);
+  assert.equal(fitMinimal.inSampleOnly, true);
+
+  // 3. P1-7: When empiricalModel.rbf === null, _finalizeStroke uses rbfWeight = 0 (uncalibrated rawY cannot override LDA)
+  const ldaOnlyCore = new AcousticDspCore({
+    sampleRate: 48000,
+    empiricalModel: {
+      version: 2,
+      polarity: 1,
+      rbf: null,
+      lda: {
+        weights: [0, 0, 0, 0, 0, 0, 0, 0],
+        bias: 0.32, // always votes UP (+0.32)
+        featMean: [0, 0, 0, 0, 0, 0, 0, 0],
+        featStd: [1, 1, 1, 1, 1, 1, 1, 1],
+        lambda: 0.35
+      },
+      speedScale: 1.0,
+      minStrokeDurationSec: 0.068
+    }
+  });
+  // Synthetic stroke whose uncalibrated rawY moves strongly DOWN (0.05 -> 0.95) while LDA votes +0.32 (UP)
+  const pts = [];
+  const fFrames = [];
+  for (let i = 0; i < 40; i++) {
+    const t = i * (128 / 48000);
+    const y = 0.05 + 0.9 * (i / 39);
+    pts.push({ t, y, rawY: y, speedCms: 18, w: 1 });
+    if ((i & 1) === 0) {
+      fFrames.push({
+        t,
+        bandsDb: [0, 0, 0, 0, 0, 0, 0, 0],
+        fricSnrDb: 15,
+        hfSnrDb: 12,
+        specRatioDb: 0,
+        occDb: 0,
+        pinholeOcclusion: 0,
+        rawDopplerAsym: 0,
+        dopplerSnrDb: 0
+      });
+    }
+  }
+  const finalized = ldaOnlyCore._finalizeStroke({
+    startTime: 0,
+    lastActiveTime: pts[pts.length - 1].t,
+    points: pts,
+    featureFrames: fFrames,
+    dopplerImpulse: 0,
+    dopplerWeightSum: 0,
+    flatnessSum: 40 * 0.45,
+    tonalCrestSum: 40 * 5.0,
+    hfSnrSum: 40 * 12.0,
+    maxPinholeOcclusion: 0,
+    maxFricSnrDb: 18,
+    maxDopplerSnrDb: 0,
+    peakSpeedCms: 20,
+    activeFrames: 40,
+    contactFrames: 40,
+    sonarFrames: 0
+  });
+  assert.ok(finalized, 'Expected stroke to finalize when rbf is null');
+  assert.equal(finalized.sensingMode, 'calibrated');
+  assert.equal(finalized.direction, 'up', 'Uncalibrated rawY must have rbfWeight=0 and not override LDA');
+
+  // 4. P1-8: Flip polarity inverts calibrated y & swipe direction and persists across reload without clobbering
+  const flippedCore = new AcousticDspCore({
+    sampleRate: 48000,
+    polarity: -1,
+    empiricalModel: fitNaN.model // model.polarity === 1
+  });
+  assert.equal(flippedCore.polarity, -1, 'Explicit polarity must not be clobbered by setEmpiricalModel');
+  flippedCore.setEmpiricalModel(fitNaN.model);
+  assert.equal(flippedCore.polarity, -1, 'setEmpiricalModel without syncPolarity must preserve polarity');
+  flippedCore.setEmpiricalModel(fitNaN.model, { syncPolarity: true });
+  assert.equal(flippedCore.polarity, fitNaN.model.polarity, 'syncPolarity:true must sync polarity');
+
+  // Verify live Flip inversion on calibrated Mac16,5 swipe
+  const calFlipCore = new AcousticDspCore({
+    sampleRate: 48000,
+    polarity: -1,
+    empiricalModel: fitNaN.model
+  });
+  const warmFlipRng = createRng(8801);
+  const warmFlip = new Float32Array(Math.floor(0.25 * 48000));
+  const flipTx = new Float32Array(QUANTUM);
+  for (let n = 0; n < warmFlip.length; n++) {
+    if ((n & 127) === 0) calFlipCore.fillTxBlock(flipTx, null);
+    warmFlip[n] = randNormal(warmFlipRng) * 0.0005 + flipTx[n & 127] * 0.35;
+  }
+  calFlipCore.processSamples(warmFlip);
+  const flippedSwipes = simulateMac165FoldAudio({
+    core: calFlipCore,
+    preIdleSec: 0.12,
+    activeSec: 0.42,
+    postIdleSec: 0.14,
+    yStart: 0.96,
+    yEnd: 0.04,
+    seed: 8802
+  })
+    .filter((e) => e.type === 'swipe')
+    .map((e) => e.swipe);
+  assert.equal(flippedSwipes.length, 1);
+  assert.equal(flippedSwipes[0].direction, 'down', 'Flipped physical UP must emit down');
+
+  // 5. P2 (Arch): sanitizePlainStats ignores __proto__/constructor/prototype, rejects arrays & sparse arrays, preserves Flip
+  const origLS = globalThis.localStorage;
+  const store = new Map();
+  const mockLS = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k)
+  };
+  try {
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: mockLS });
+    const poisonedJson =
+      '{"version":2,"polarity":-1,"calSummary":{"__proto__":{"polluted":true},"constructor":"bad","prototype":"bad","looAccuracyPct":95,"looFolds":4,"inSampleOnly":false,"nested":{"x":1}},"empiricalModel":{"version":2,"polarity":1,"rbf":{"prototypes":[{"anchorY":0.02,"vector":[0,0,0,0,0,0,0,0,0,0,0]},{"anchorY":0.96,"vector":[1,1,1,1,1,1,1,1,1,1,1]}],"scale":[1,1,1,1,1,1,1,1,1,1,1],"temp":0.5},"lda":null,"stats":{"__proto__":{"p2":1},"swipeCount":4,"badObj":{}}}}';
+    mockLS.setItem('dwg.leftGrilleCalibration.v2', poisonedJson);
+    const ctrl = new LeftGrilleSensorController();
+    assert.equal(({}).polluted, undefined, 'Object.prototype must not be polluted');
+    assert.equal(ctrl.polarity, -1, 'Reload must preserve user Flip polarity (-1) over model.polarity (+1)');
+    assert.equal(ctrl.calSummary.looAccuracyPct, 95);
+    assert.equal(ctrl.calSummary.looFolds, 4);
+    assert.equal(ctrl.calSummary.inSampleOnly, false);
+    assert.equal(Object.prototype.hasOwnProperty.call(ctrl.calSummary, 'constructor'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(ctrl.calSummary, 'prototype'), false);
+    assert.equal(Object.getPrototypeOf(ctrl.calSummary), Object.prototype);
+    assert.equal(ctrl.calSummary.nested, undefined);
+    assert.equal(ctrl.empiricalModel.stats.swipeCount, 4);
+    assert.equal(ctrl.empiricalModel.stats.badObj, undefined);
+    assert.equal(Object.getPrototypeOf(ctrl.empiricalModel.stats), Object.prototype);
+
+    // Array calSummary & stats must be rejected to null
+    mockLS.setItem(
+      'dwg.leftGrilleCalibration.v2',
+      JSON.stringify({
+        version: 2,
+        polarity: 1,
+        calSummary: [1, 2, 3],
+        empiricalModel: Object.assign({}, fitNaN.model, { stats: [9, 8] })
+      })
+    );
+    const arrCtrl = new LeftGrilleSensorController();
+    assert.equal(arrCtrl.calSummary, null, 'Array calSummary must be rejected');
+    assert.equal(arrCtrl.empiricalModel.stats, null, 'Array model.stats must be rejected');
+
+    // Sparse arrays must be rejected by setEmpiricalModel
+    const sparseScale = new Array(11);
+    sparseScale[0] = 1;
+    const sparseCore = new AcousticDspCore({ sampleRate: 48000 });
+    sparseCore.setEmpiricalModel({
+      version: 2,
+      polarity: 1,
+      rbf: {
+        prototypes: [
+          { anchorY: 0.02, vector: new Array(11).fill(0) },
+          { anchorY: 0.96, vector: new Array(11).fill(1) }
+        ],
+        scale: sparseScale,
+        temp: 0.45
+      },
+      lda: null
+    });
+    assert.equal(sparseCore.empiricalModel, null, 'Sparse scale array must be rejected');
+  } finally {
     Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: origLS });
   }
 });

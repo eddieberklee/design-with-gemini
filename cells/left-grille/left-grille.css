@@ -649,6 +649,11 @@ body:has(main.grid[hidden]) .mg-hud {
   border-block-color: rgba(201, 55, 0, 0.35);
 }
 
+.lg-span-ribbon[data-dir="idle"] {
+  background: rgba(20, 20, 19, 0.08);
+  border-block-color: rgba(20, 20, 19, 0.32);
+}
+
 .lg-span-ribbon[data-visible="true"] {
   opacity: 1;
 }
@@ -852,7 +857,7 @@ body:has(main.grid[hidden]) .mg-hud {
   white-space: nowrap;
 }
 
-.lg-mini-btn:hover {
+.lg-mini-btn:hover:not(:disabled) {
   background: #f0f0ec;
   color: var(--lg-ink);
 }
@@ -863,7 +868,10 @@ body:has(main.grid[hidden]) .mg-hud {
 }
 
 .lg-mini-btn:disabled {
-  opacity: 0.45;
+  opacity: 1;
+  color: var(--lg-ink-muted);
+  background: var(--lg-well);
+  border-color: var(--lg-hairline);
   cursor: not-allowed;
 }
 
@@ -1082,6 +1090,44 @@ body:has(main.grid[hidden]) .mg-hud {
   }
   .lg-sim-actions .lg-mini-btn--flip {
     display: none;
+  }
+}
+
+@container (max-width: 260px) {
+  .lg-inline-overlay {
+    padding: 4px 5px;
+    gap: 2px;
+  }
+  .lg-cal-disk-badge,
+  .lg-cal-secondary-btn {
+    display: none;
+  }
+  .lg-cal-meter {
+    min-width: 22px;
+  }
+  .lg-overlay-text {
+    font-size: 9.5px;
+    line-height: 1.2;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .lg-cal-subhint[data-warn="true"] {
+    font-size: 7.5px;
+    line-height: 1.15;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+  }
+  .lg-overlay-row {
+    gap: 2px;
+  }
+  .lg-inline-overlay .lg-mini-btn {
+    height: 17px;
+    padding: 0 4px;
+    font-size: 8px;
   }
 }
 

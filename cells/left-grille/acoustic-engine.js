@@ -161,7 +161,7 @@
     Object.freeze({
       id: 'veto-keys',
       kind: 'negative',
-      label: '14/14 · Tap Esc, Tab & Shift keys once (Veto check)',
+      label: '14/14 · Tap ~, Caps & Shift keys once (Veto check)',
       short: 'Keys Veto'
     })
   ]);
@@ -206,6 +206,17 @@
     const copy = arr.slice().sort((a, b) => a - b);
     const mid = copy.length >> 1;
     return copy.length % 2 ? copy[mid] : 0.5 * (copy[mid - 1] + copy[mid]);
+  }
+
+  function allFiniteNumbers(arr, expectedLen, positiveOnly) {
+    if (!Array.isArray(arr) || arr.length !== expectedLen) return false;
+    for (let i = 0; i < expectedLen; i++) {
+      if (!(i in arr)) return false;
+      const v = arr[i];
+      if (typeof v !== 'number' || !Number.isFinite(v)) return false;
+      if (positiveOnly && v <= 0) return false;
+    }
+    return true;
   }
 
   /**
@@ -312,7 +323,10 @@
   function extractPosFeature(frame) {
     const out = new Array(11);
     const bands =
-      frame && (Array.isArray(frame.bandsDb) || ArrayBuffer.isView(frame.bandsDb))
+      frame &&
+      frame.bandsDb &&
+      typeof frame.bandsDb === 'object' &&
+      typeof frame.bandsDb.length === 'number'
         ? frame.bandsDb
         : null;
     let bandMean = 0;
@@ -335,11 +349,12 @@
 
   function isFrameRecActive(f) {
     if (!f) return false;
-    if (f.active === true) return true;
+    if (typeof f.active === 'boolean') return f.active;
     const snr = Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0;
+    const hf = Number.isFinite(f.hfSnrDb) ? f.hfSnrDb : 0;
     const occ = Number.isFinite(f.pinholeOcclusion) ? f.pinholeOcclusion : 0;
     const dop = Number.isFinite(f.dopplerSnrDb) ? f.dopplerSnrDb : 0;
-    return snr > 2.5 || occ > 0.12 || dop > 6.5;
+    return snr > 4.5 || hf > 5.0 || occ > 0.22 || dop > 8.5;
   }
 
   function getDominantActiveFrames(frames) {
@@ -582,10 +597,11 @@
     };
   }
 
-  function predictRbfY(frameOrVec, rbfModel) {
+  function predictRbfY(frameOrVec, rbfModel, opts) {
     if (!rbfModel || !Array.isArray(rbfModel.prototypes) || rbfModel.prototypes.length < 2) {
       return { y: 0.5, maxWeight: 0, weights: [] };
     }
+    const txActive = !opts || opts.txActive !== false;
     const x = Array.isArray(frameOrVec) ? frameOrVec : extractPosFeature(frameOrVec);
     const protos = rbfModel.prototypes;
     const scale = rbfModel.scale;
@@ -597,12 +613,18 @@
     for (let i = 0; i < protos.length; i++) {
       const pv = protos[i].vector;
       let d2 = 0;
+      let usedDims = 0;
       for (let d = 0; d < D; d++) {
-        const s = scale[d] > 1e-4 ? scale[d] : 1;
-        const z = ((Number.isFinite(x[d]) ? x[d] : 0) - pv[d]) / s;
+        // Mask sonar-only occDb (index 10) when operating in passive (txEnabled === false) mode
+        if (!txActive && d === 10) continue;
+        const s = Number.isFinite(scale[d]) && scale[d] > 1e-4 ? scale[d] : 1;
+        const xv = Number.isFinite(x[d]) ? x[d] : 0;
+        const pvd = pv && Number.isFinite(pv[d]) ? pv[d] : 0;
+        const z = (xv - pvd) / s;
         d2 += z * z;
+        usedDims++;
       }
-      const l = -(d2 / D) / denom;
+      const l = -(d2 / Math.max(1, usedDims)) / denom;
       logits[i] = l;
       if (l > maxLogit) maxLogit = l;
     }
@@ -626,7 +648,7 @@
     return { y: clamp(yHat, 0, 1), maxWeight, weights };
   }
 
-  function extractStrokeFeatures(frames, rbfModel) {
+  function extractStrokeFeatures(frames, rbfModel, opts) {
     const M = Array.isArray(frames) ? frames.length : 0;
     if (M < 2) return [0, 0, 0, 0, 0, 0, 0, 0];
 
@@ -638,20 +660,20 @@
     // 1. deltaY_rbf (late - early; positive = DOWN, negative = UP)
     let deltaYRbf = 0;
     if (rbfModel && Array.isArray(rbfModel.prototypes) && rbfModel.prototypes.length >= 2) {
-      const earlyY = median(early.map((f) => predictRbfY(f, rbfModel).y));
-      const lateY = median(late.map((f) => predictRbfY(f, rbfModel).y));
+      const earlyY = median(early.map((f) => predictRbfY(f, rbfModel, opts).y));
+      const lateY = median(late.map((f) => predictRbfY(f, rbfModel, opts).y));
       deltaYRbf = lateY - earlyY;
     }
 
     // 2. thirdDiffSpec
     const thirdDiffSpec =
-      median(late.map((f) => (Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0))) -
-      median(early.map((f) => (Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0)));
+      median(late.map((f) => (f && Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0))) -
+      median(early.map((f) => (f && Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0)));
 
     // 3. thirdDiffSnr
     const thirdDiffSnr =
-      median(late.map((f) => (Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0))) -
-      median(early.map((f) => (Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0)));
+      median(late.map((f) => (f && Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0))) -
+      median(early.map((f) => (f && Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0)));
 
     // 4. peakPosNorm - 0.5 (smoothed 3-frame peak timing of fricSnrDb)
     let peakIdx = 0;
@@ -661,7 +683,7 @@
       let c = 0;
       for (let o = -1; o <= 1; o++) {
         const idx = i + o;
-        if (idx >= 0 && idx < M && Number.isFinite(frames[idx].fricSnrDb)) {
+        if (idx >= 0 && idx < M && frames[idx] && Number.isFinite(frames[idx].fricSnrDb)) {
           s += frames[idx].fricSnrDb;
           c++;
         }
@@ -679,6 +701,7 @@
     let occWeightSum = 0;
     for (let i = 0; i < M; i++) {
       const f = frames[i];
+      if (!f) continue;
       const po = Number.isFinite(f.pinholeOcclusion) ? Math.max(0, f.pinholeOcclusion) : 0;
       const od = Number.isFinite(f.occDb) ? Math.max(0, -f.occDb - 0.5) * 0.12 : 0;
       const w = po + od;
@@ -694,6 +717,7 @@
     let dopW = 0;
     for (let i = 0; i < M; i++) {
       const f = frames[i];
+      if (!f) continue;
       const asym = Number.isFinite(f.rawDopplerAsym) ? f.rawDopplerAsym : 0;
       const dSnr = Number.isFinite(f.dopplerSnrDb) ? f.dopplerSnrDb : 0;
       const w = 0.25 + clamp((dSnr - 3.0) / 10.0, 0, 1.5);
@@ -704,21 +728,44 @@
 
     // 7. earlyVsLateHf (bands 5..7: 5.6 - 15.2 kHz, late minus early)
     const hfMean = (f) => {
-      const b = f && Array.isArray(f.bandsDb) ? f.bandsDb : null;
-      if (!b || b.length < 8) return Number.isFinite(f.hfSnrDb) ? f.hfSnrDb : 0;
-      return (b[5] + b[6] + b[7]) / 3;
+      if (!f) return 0;
+      const b =
+        f.bandsDb && typeof f.bandsDb === 'object' && typeof f.bandsDb.length === 'number'
+          ? f.bandsDb
+          : null;
+      if (b && b.length >= 8) {
+        let sum = 0;
+        let cnt = 0;
+        for (let k = 5; k <= 7; k++) {
+          if (Number.isFinite(b[k])) {
+            sum += b[k];
+            cnt++;
+          }
+        }
+        if (cnt > 0) return sum / cnt;
+      }
+      return Number.isFinite(f.hfSnrDb) ? f.hfSnrDb : 0;
     };
     const earlyVsLateHf = median(late.map(hfMean)) - median(early.map(hfMean));
 
     // 8. earlyVsLateSub (bands 0..1: <180 Hz & 375-750 Hz, late minus early)
     const subMean = (f) => {
-      const b = f && Array.isArray(f.bandsDb) ? f.bandsDb : null;
+      if (!f) return 0;
+      const b =
+        f.bandsDb && typeof f.bandsDb === 'object' && typeof f.bandsDb.length === 'number'
+          ? f.bandsDb
+          : null;
       if (!b || b.length < 2) return 0;
-      return 0.65 * b[0] + 0.35 * b[1];
+      const b0 = Number.isFinite(b[0]) ? b[0] : null;
+      const b1 = Number.isFinite(b[1]) ? b[1] : null;
+      if (b0 !== null && b1 !== null) return 0.65 * b0 + 0.35 * b1;
+      if (b0 !== null) return b0;
+      if (b1 !== null) return b1;
+      return 0;
     };
     const earlyVsLateSub = median(late.map(subMean)) - median(early.map(subMean));
 
-    return [
+    const out = [
       deltaYRbf,
       thirdDiffSpec,
       thirdDiffSnr,
@@ -728,6 +775,10 @@
       earlyVsLateHf,
       earlyVsLateSub
     ];
+    for (let i = 0; i < out.length; i++) {
+      if (!Number.isFinite(out[i])) out[i] = 0;
+    }
+    return out;
   }
 
   function solveLinearSystem(A, b) {
@@ -787,15 +838,19 @@
     const featStd = new Array(D).fill(1);
 
     for (let d = 0; d < D; d++) {
-      const col = all.map((v) => v[d]);
+      const col = all.map((v) => (v && Number.isFinite(v[d]) ? v[d] : 0));
       const mu = meanOf(col);
-      featMean[d] = mu;
-      const sd = Math.sqrt(varianceOf(col, mu));
-      featStd[d] = Math.max(LDA_MIN_STDS[d], sd);
+      featMean[d] = Number.isFinite(mu) ? mu : 0;
+      const sd = Math.sqrt(varianceOf(col, featMean[d]));
+      featStd[d] = Math.max(LDA_MIN_STDS[d], Number.isFinite(sd) ? sd : 0);
     }
 
-    const stdUp = upVecs.map((v) => v.map((val, d) => (val - featMean[d]) / featStd[d]));
-    const stdDown = downVecs.map((v) => v.map((val, d) => (val - featMean[d]) / featStd[d]));
+    const stdUp = upVecs.map((v) =>
+      Array.from({ length: D }, (_, d) => ((v && Number.isFinite(v[d]) ? v[d] : 0) - featMean[d]) / featStd[d])
+    );
+    const stdDown = downVecs.map((v) =>
+      Array.from({ length: D }, (_, d) => ((v && Number.isFinite(v[d]) ? v[d] : 0) - featMean[d]) / featStd[d])
+    );
 
     const muUp = new Array(D).fill(0);
     const muDown = new Array(D).fill(0);
@@ -846,7 +901,7 @@
     const rawW = solveLinearSystem(Sreg, diff);
     let sep = 0;
     for (let d = 0; d < D; d++) sep += rawW[d] * diff[d];
-    const halfSep = Math.max(1e-5, 0.5 * Math.abs(sep));
+    const halfSep = Math.max(0.35, 0.5 * Math.abs(sep));
     const sign = sep >= 0 ? 1 : -1;
     const weights = new Array(D);
     let bias = 0;
@@ -864,13 +919,22 @@
     };
   }
 
-  function scoreShrinkageLda(vec8, ldaModel) {
+  function scoreShrinkageLda(vec8, ldaModel, opts) {
     if (!ldaModel || !Array.isArray(ldaModel.weights) || ldaModel.weights.length !== 8) return 0;
+    const txActive = !opts || opts.txActive !== false;
     let score = Number.isFinite(ldaModel.bias) ? ldaModel.bias : 0;
     for (let d = 0; d < 8; d++) {
-      const s = ldaModel.featStd[d] > 1e-4 ? ldaModel.featStd[d] : 1;
-      const z = ((Number.isFinite(vec8[d]) ? vec8[d] : 0) - ldaModel.featMean[d]) / s;
-      score += ldaModel.weights[d] * z;
+      // Mask sonar-only standardized terms (index 4: occTimingSkew, index 5: meanRawDopplerAsym) in passive mode
+      if (!txActive && (d === 4 || d === 5)) continue;
+      const w = Number.isFinite(ldaModel.weights[d]) ? ldaModel.weights[d] : 0;
+      const s =
+        ldaModel.featStd && Number.isFinite(ldaModel.featStd[d]) && ldaModel.featStd[d] > 1e-4
+          ? ldaModel.featStd[d]
+          : 1;
+      const m = ldaModel.featMean && Number.isFinite(ldaModel.featMean[d]) ? ldaModel.featMean[d] : 0;
+      const v = vec8 && Number.isFinite(vec8[d]) ? vec8[d] : 0;
+      const z = (v - m) / s;
+      score += w * z;
     }
     return Number.isFinite(score) ? score : 0;
   }
@@ -909,6 +973,9 @@
         zoneCount: zoneEvents.length,
         negativeCount: negativeEvents.length,
         looAccuracyPct: 0,
+        inSampleAccuracyPct: 0,
+        looFolds: 0,
+        inSampleOnly: true,
         dPrime: 0,
         model: null
       };
@@ -922,52 +989,58 @@
     const downVecs = downSwipes.map((ev) => extractStrokeFeatures(ev._activeFrames, rbf));
     const lda = fitShrinkageLda(upVecs, downVecs, 0.35);
 
-    // 3. Honest Leave-One-Out Cross-Validation (leakage-free fold RBF + fold LDA)
+    // 3. Honest Balanced Leave-One-Out Cross-Validation (only when >= 2 UP and >= 2 DOWN swipes)
+    const canRunBalancedLoo = upSwipes.length >= 2 && downSwipes.length >= 2;
     let looCorrect = 0;
     let looTotal = 0;
     const looUpScores = [];
     const looDownScores = [];
 
-    for (let i = 0; i < swipeEvents.length; i++) {
-      const held = swipeEvents[i];
-      const trainSwipes = swipeEvents.filter((_, idx) => idx !== i);
-      const trainUp = trainSwipes.filter((e) => e.direction === 'up');
-      const trainDown = trainSwipes.filter((e) => e.direction === 'down');
-      if (trainUp.length < 1 || trainDown.length < 1) continue;
+    if (canRunBalancedLoo) {
+      for (let i = 0; i < swipeEvents.length; i++) {
+        const held = swipeEvents[i];
+        const trainSwipes = swipeEvents.filter((_, idx) => idx !== i);
+        const trainUp = trainSwipes.filter((e) => e.direction === 'up');
+        const trainDown = trainSwipes.filter((e) => e.direction === 'down');
+        if (trainUp.length < 1 || trainDown.length < 1) continue;
 
-      const foldRbf = fitRbfPositionModel(zoneEvents, trainSwipes);
-      const foldUpVecs = trainUp.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
-      const foldDownVecs = trainDown.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
-      const foldLda = fitShrinkageLda(foldUpVecs, foldDownVecs, 0.35);
-      if (!foldLda) continue;
+        const foldRbf = fitRbfPositionModel(zoneEvents, trainSwipes);
+        const foldUpVecs = trainUp.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
+        const foldDownVecs = trainDown.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
+        const foldLda = fitShrinkageLda(foldUpVecs, foldDownVecs, 0.35);
+        if (!foldLda) continue;
 
-      const testVec = extractStrokeFeatures(held._activeFrames, foldRbf);
-      const sc = scoreShrinkageLda(testVec, foldLda);
-      const predDir = sc >= 0 ? 'up' : 'down';
-      looTotal++;
-      if (predDir === held.direction) looCorrect++;
-      if (held.direction === 'up') looUpScores.push(sc);
-      else looDownScores.push(sc);
+        const testVec = extractStrokeFeatures(held._activeFrames, foldRbf);
+        const sc = scoreShrinkageLda(testVec, foldLda);
+        const predDir = sc >= 0 ? 'up' : 'down';
+        looTotal++;
+        if (predDir === held.direction) looCorrect++;
+        if (held.direction === 'up') looUpScores.push(sc);
+        else looDownScores.push(sc);
+      }
     }
 
-    // Fallback in-sample scores if 1 UP + 1 DOWN edge case yielded 0 LOO folds
+    const inSampleUpScores = upVecs.map((v) => scoreShrinkageLda(v, lda));
+    const inSampleDownScores = downVecs.map((v) => scoreShrinkageLda(v, lda));
+    const inSampleCorrect =
+      inSampleUpScores.filter((s) => s >= 0).length +
+      inSampleDownScores.filter((s) => s < 0).length;
+    const inSampleAccuracyPct =
+      Math.round((inSampleCorrect / Math.max(1, swipeEvents.length)) * 1000) / 10;
+
+    const inSampleOnly = looTotal === 0;
     const evalUpScores =
-      looUpScores.length >= 2 && looDownScores.length >= 2
+      !inSampleOnly && looUpScores.length >= 2 && looDownScores.length >= 2
         ? looUpScores
-        : upVecs.map((v) => scoreShrinkageLda(v, lda));
+        : inSampleUpScores;
     const evalDownScores =
-      looUpScores.length >= 2 && looDownScores.length >= 2
+      !inSampleOnly && looUpScores.length >= 2 && looDownScores.length >= 2
         ? looDownScores
-        : downVecs.map((v) => scoreShrinkageLda(v, lda));
+        : inSampleDownScores;
 
-    let looAccuracyPct = 0;
-    if (looTotal > 0) {
-      looAccuracyPct = Math.round((looCorrect / looTotal) * 1000) / 10;
-    } else {
-      const inSampleCorrect =
-        evalUpScores.filter((s) => s >= 0).length + evalDownScores.filter((s) => s < 0).length;
-      looAccuracyPct = Math.round((inSampleCorrect / Math.max(1, swipeEvents.length)) * 1000) / 10;
-    }
+    const looAccuracyPct = !inSampleOnly
+      ? Math.round((looCorrect / looTotal) * 1000) / 10
+      : inSampleAccuracyPct;
 
     const muUpSc = meanOf(evalUpScores);
     const muDownSc = meanOf(evalDownScores);
@@ -1059,8 +1132,10 @@
         zoneCount: zoneEvents.length,
         negativeCount: negativeEvents.length,
         looAccuracyPct,
+        inSampleAccuracyPct,
         dPrime,
-        looFolds: looTotal
+        looFolds: looTotal,
+        inSampleOnly
       }
     };
 
@@ -1071,8 +1146,10 @@
       zoneCount: zoneEvents.length,
       negativeCount: negativeEvents.length,
       looAccuracyPct,
+      inSampleAccuracyPct,
       dPrime,
       looFolds: looTotal,
+      inSampleOnly,
       model
     };
   }
@@ -1110,7 +1187,9 @@
         this.setCalibration(options.calibration);
       }
       if (options.empiricalModel) {
-        this.setEmpiricalModel(options.empiricalModel);
+        const hasExplicitPolarity =
+          typeof options.polarity === 'number' && Number.isFinite(options.polarity);
+        this.setEmpiricalModel(options.empiricalModel, { syncPolarity: !hasExplicitPolarity });
       }
 
       // Periodic Hann window (exact analytical spectral zeros at |Δbin| >= 2)
@@ -1139,6 +1218,7 @@
       // Scale passive band bin bounds safely below Nyquist for all rates (8k, 16k, 44.1k, 48k, 96k, 192k)
       const nyquistBin = (QUANTUM >> 1) - 2; // 62
       const binHz = this.frameRate;
+      this.binHz = binHz;
       const maxPassiveBin =
         this.numCarriers > 0
           ? Math.min(nyquistBin, this.carrierMultiples[0] - 4, Math.round(15200 / binHz))
@@ -1154,9 +1234,13 @@
       );
       this.hf2EndBin = Math.max(this.hf1EndBin + 1, maxPassiveBin);
 
-      // Compute spectralFlatness & tonalCrest strictly across upper bins (~1.5 kHz .. 15.2 kHz)
-      // so < 1.1 kHz finger-pad pneumatic thud never self-vetoes as tonal voice!
-      this.flatStartBin = Math.min(this.hf2EndBin - 1, Math.max(3, this.midEndBin - 2));
+      // Anchor spectralFlatness & tonalCrest at ~1150 Hz across all sample rates:
+      // clears the Hann mainlobe of <= 750 Hz finger-pad pneumatic thud (exact zero at bin 4 / 1500 Hz
+      // for 48 kHz) while catching 1250..2000 Hz vocal F2 harmonics across 8k..192k!
+      this.flatStartBin = Math.min(
+        this.hf2EndBin - 1,
+        Math.max(this.midStartBin, Math.ceil(1150 / this.binHz))
+      );
 
       // Partition passive bins 1..hf2EndBin into 7 log-spaced upper bands (Band 0 is <180 Hz pneuEnergy)
       const maxBandHz = this.hf2EndBin * binHz;
@@ -1259,6 +1343,8 @@
         this.iqHistQ.push(new Float64Array(DOPPLER_HISTORY));
       }
       this.iqWriteIdx = 0;
+      this.iqCount = 0;
+      this.txActiveFrames = 0;
       this.framesProcessed = 0;
 
       this.lpAlpha = 1 - Math.exp((-2 * Math.PI * 165) / this.effectiveRate);
@@ -1293,10 +1379,32 @@
       this.recCapture = null;
     }
 
+    _resetSonarState() {
+      this.iqWriteIdx = 0;
+      this.iqCount = 0;
+      this.txActiveFrames = 0;
+      this.carrierBaseline.fill(0);
+      this.prevDynI.fill(0);
+      this.prevDynQ.fill(0);
+      this.bgI.fill(0);
+      this.bgQ.fill(0);
+      for (let k = 0; k < this.numCarriers; k++) {
+        this.iqHistI[k].fill(0);
+        this.iqHistQ[k].fill(0);
+      }
+      this.dopplerPower.fill(0);
+      this.ambientDopplerPower = 1e-10;
+      this._lastDoppler = null;
+    }
+
     setTxEnabled(enabled, gain) {
+      const wasTx = this.txEnabled;
       this.txEnabled = Boolean(enabled) && this.canUseSonar;
       if (Number.isFinite(gain) && gain >= 0) {
         this.txGain = clamp(gain, 0, 0.25);
+      }
+      if (wasTx !== this.txEnabled) {
+        this._resetSonarState();
       }
     }
 
@@ -1311,8 +1419,8 @@
       if (Number.isFinite(partial.snrTopDb)) this.calibration.snrTopDb = partial.snrTopDb;
     }
 
-    setEmpiricalModel(model) {
-      if (!model || typeof model !== 'object') {
+    setEmpiricalModel(model, opts) {
+      if (!model || typeof model !== 'object' || Array.isArray(model)) {
         this.empiricalModel = null;
         return;
       }
@@ -1321,23 +1429,23 @@
         model.rbf &&
         Array.isArray(model.rbf.prototypes) &&
         model.rbf.prototypes.length >= 2 &&
-        Array.isArray(model.rbf.scale) &&
-        model.rbf.scale.length === 11
+        allFiniteNumbers(model.rbf.scale, 11, true)
       ) {
         const protos = [];
         for (let i = 0; i < model.rbf.prototypes.length; i++) {
           const p = model.rbf.prototypes[i];
           if (
             p &&
+            typeof p === 'object' &&
+            !Array.isArray(p) &&
+            typeof p.anchorY === 'number' &&
             Number.isFinite(p.anchorY) &&
-            Array.isArray(p.vector) &&
-            p.vector.length === 11 &&
-            p.vector.every((v) => Number.isFinite(v))
+            allFiniteNumbers(p.vector, 11, false)
           ) {
             protos.push({ anchorY: clamp(p.anchorY, 0, 1), vector: p.vector.slice() });
           }
         }
-        if (protos.length >= 2 && model.rbf.scale.every((s) => Number.isFinite(s) && s > 0)) {
+        if (protos.length >= 2) {
           cleanRbf = {
             prototypes: protos,
             scale: model.rbf.scale.slice(),
@@ -1349,16 +1457,11 @@
       let cleanLda = null;
       if (
         model.lda &&
-        Array.isArray(model.lda.weights) &&
-        model.lda.weights.length === 8 &&
-        Array.isArray(model.lda.featMean) &&
-        model.lda.featMean.length === 8 &&
-        Array.isArray(model.lda.featStd) &&
-        model.lda.featStd.length === 8 &&
-        Number.isFinite(model.lda.bias) &&
-        model.lda.weights.every((v) => Number.isFinite(v)) &&
-        model.lda.featMean.every((v) => Number.isFinite(v)) &&
-        model.lda.featStd.every((v) => Number.isFinite(v) && v > 0)
+        allFiniteNumbers(model.lda.weights, 8, false) &&
+        allFiniteNumbers(model.lda.featMean, 8, false) &&
+        allFiniteNumbers(model.lda.featStd, 8, true) &&
+        typeof model.lda.bias === 'number' &&
+        Number.isFinite(model.lda.bias)
       ) {
         cleanLda = {
           weights: model.lda.weights.slice(),
@@ -1375,13 +1478,19 @@
       }
 
       const pol = model.polarity === -1 ? -1 : 1;
-      this.polarity = pol;
-      if (model.legacyCalibration && typeof model.legacyCalibration === 'object') {
-        this.setCalibration(model.legacyCalibration);
+      if (opts && opts.syncPolarity === true) {
+        this.polarity = pol;
+      }
+      if (model.legacyCalibration && typeof model.legacyCalibration === 'object' && !Array.isArray(model.legacyCalibration)) {
+        const leg = {};
+        for (const k of ['specBottomDb', 'specTopDb', 'snrBottomDb', 'snrTopDb']) {
+          if (Number.isFinite(model.legacyCalibration[k])) leg[k] = model.legacyCalibration[k];
+        }
+        this.setCalibration(leg);
       }
 
       this.empiricalModel = {
-        version: model.version || 2,
+        version: Number.isFinite(model.version) && model.version > 0 ? Math.floor(model.version) : 2,
         polarity: pol,
         rbf: cleanRbf,
         lda: cleanLda,
@@ -1446,7 +1555,9 @@
       const meta = rec.stepMeta || {};
       const stepId = meta.id || meta.stepId || 'custom';
       const kind = meta.kind || 'swipe';
-      const ok = frameCount > 0 && (kind === 'negative' || activeFrameCount >= 4);
+      const ok =
+        frameCount > 0 &&
+        (kind === 'negative' || (activeFrameCount >= 4 && safePeakSnrDb >= 5.0));
 
       const eventRecord = {
         stepId,
@@ -1620,69 +1731,72 @@
       this.lpState = lp;
       pneuEnergy /= QUANTUM;
 
-      // 2. Coherent Quadrature Demodulation across non-uniform ultrasonic pilot comb
+      // 2. Coherent Quadrature Demodulation across non-uniform ultrasonic pilot comb (gated strictly on txEnabled)
+      const sonarActive = this.txEnabled && this.numCarriers > 0;
       let phaseVelAccum = 0;
       let phaseWeightAccum = 0;
       const occRatiosDb = [];
       let carrierMagMean = 0;
 
-      for (let k = 0; k < this.numCarriers; k++) {
-        const cTab = this.cosTable[k];
-        const sTab = this.sinTable[k];
-        let sumI = 0;
-        let sumQ = 0;
-        for (let n = 0; n < QUANTUM; n++) {
-          const wx = this.fftRe[n];
-          sumI += wx * cTab[n];
-          sumQ -= wx * sTab[n];
-        }
-        const I = (2 * sumI) / QUANTUM;
-        const Q = (2 * sumQ) / QUANTUM;
-        this.iqHistI[k][idx] = I;
-        this.iqHistQ[k][idx] = Q;
-
-        const mag = Math.hypot(I, Q);
-        carrierMagMean += mag / this.numCarriers;
-
-        if (this.framesProcessed <= 10) {
-          this.carrierBaseline[k] = mag;
-          this.bgI[k] = I;
-          this.bgQ[k] = Q;
-        } else {
-          const bgAlpha = this.activeStroke || this.recCapture ? 0.002 : 0.04;
-          this.bgI[k] += bgAlpha * (I - this.bgI[k]);
-          this.bgQ[k] += bgAlpha * (Q - this.bgQ[k]);
-          if (!this.activeStroke && !this.recCapture && mag > 1e-7) {
-            this.carrierBaseline[k] += 0.015 * (mag - this.carrierBaseline[k]);
+      if (sonarActive) {
+        this.txActiveFrames++;
+        for (let k = 0; k < this.numCarriers; k++) {
+          const cTab = this.cosTable[k];
+          const sTab = this.sinTable[k];
+          let sumI = 0;
+          let sumQ = 0;
+          for (let n = 0; n < QUANTUM; n++) {
+            const wx = this.fftRe[n];
+            sumI += wx * cTab[n];
+            sumQ -= wx * sTab[n];
           }
+          const I = (2 * sumI) / QUANTUM;
+          const Q = (2 * sumQ) / QUANTUM;
+          this.iqHistI[k][idx] = I;
+          this.iqHistQ[k][idx] = Q;
+
+          const mag = Math.hypot(I, Q);
+          carrierMagMean += mag / this.numCarriers;
+
+          if (this.txActiveFrames <= 10) {
+            this.carrierBaseline[k] = mag;
+            this.bgI[k] = I;
+            this.bgQ[k] = Q;
+          } else {
+            const bgAlpha = this.activeStroke || this.recCapture ? 0.002 : 0.04;
+            this.bgI[k] += bgAlpha * (I - this.bgI[k]);
+            this.bgQ[k] += bgAlpha * (Q - this.bgQ[k]);
+            if (!this.activeStroke && !this.recCapture && mag > 1e-7) {
+              this.carrierBaseline[k] += 0.015 * (mag - this.carrierBaseline[k]);
+            }
+          }
+
+          if (this.carrierBaseline[k] > 1e-5) {
+            occRatiosDb.push(20 * Math.log10((mag + 1e-8) / (this.carrierBaseline[k] + 1e-8)));
+          }
+
+          const dynI = I - this.bgI[k];
+          const dynQ = Q - this.bgQ[k];
+          const dynPow = dynI * dynI + dynQ * dynQ;
+          const prevI = this.prevDynI[k];
+          const prevQ = this.prevDynQ[k];
+          const cross = dynQ * prevI - dynI * prevQ;
+          const dot = dynI * prevI + dynQ * prevQ;
+          if (dynPow > 1e-11 && prevI * prevI + prevQ * prevQ > 1e-11) {
+            const dPhi = Math.atan2(cross, dot);
+            // Match oblique 1.65x geometry factor with zoomed Doppler FFT
+            const vRadCms =
+              ((dPhi * this.frameRate) * SPEED_OF_SOUND_CMS) /
+              (OBLIQUE_GEOMETRY_FACTOR * 2 * Math.PI * this.carrierFreqs[k]);
+            phaseVelAccum += vRadCms * dynPow;
+            phaseWeightAccum += dynPow;
+          }
+          this.prevDynI[k] = dynI;
+          this.prevDynQ[k] = dynQ;
         }
 
-        if (this.carrierBaseline[k] > 1e-5) {
-          occRatiosDb.push(20 * Math.log10((mag + 1e-8) / (this.carrierBaseline[k] + 1e-8)));
-        }
-
-        const dynI = I - this.bgI[k];
-        const dynQ = Q - this.bgQ[k];
-        const dynPow = dynI * dynI + dynQ * dynQ;
-        const prevI = this.prevDynI[k];
-        const prevQ = this.prevDynQ[k];
-        const cross = dynQ * prevI - dynI * prevQ;
-        const dot = dynI * prevI + dynQ * prevQ;
-        if (dynPow > 1e-11 && prevI * prevI + prevQ * prevQ > 1e-11) {
-          const dPhi = Math.atan2(cross, dot);
-          // Match oblique 1.65x geometry factor with zoomed Doppler FFT
-          const vRadCms =
-            ((dPhi * this.frameRate) * SPEED_OF_SOUND_CMS) /
-            (OBLIQUE_GEOMETRY_FACTOR * 2 * Math.PI * this.carrierFreqs[k]);
-          phaseVelAccum += vRadCms * dynPow;
-          phaseWeightAccum += dynPow;
-        }
-        this.prevDynI[k] = dynI;
-        this.prevDynQ[k] = dynQ;
-      }
-
-      if (this.numCarriers > 0) {
         this.iqWriteIdx = (idx + 1) & (DOPPLER_HISTORY - 1);
+        if (this.iqCount < DOPPLER_HISTORY) this.iqCount++;
       }
 
       // 3. 128-pt Passive Tribological FFT (IMD-notched mid band + open-pinhole HF band)
@@ -1752,7 +1866,7 @@
       }
 
       // Ultrasonic quiet guard-bin click detector (all bins >= 2 away from every carrier)
-      if (this.guardBins.length > 0) {
+      if (sonarActive && this.guardBins.length > 0) {
         let guardPow = 0;
         for (let g = 0; g < this.guardBins.length; g++) {
           const gb = this.guardBins[g];
@@ -1765,7 +1879,7 @@
             this.nonSilentWarmupFrames === 0
               ? Math.max(1e-15, guardPow)
               : 0.7 * this.ambientGuardPow + 0.3 * Math.max(1e-15, guardPow);
-        } else if (this.floorsInitialized && !this.activeStroke) {
+        } else if (this.floorsInitialized && !this.activeStroke && !this.recCapture) {
           const gAlpha = guardPow < this.ambientGuardPow ? 0.15 : 0.008;
           this.ambientGuardPow += gAlpha * (guardPow - this.ambientGuardPow);
         }
@@ -1809,14 +1923,23 @@
           this.floorsInitialized = true;
         }
       } else if (this.floorsInitialized && !isDigitalSilence && !this.activeStroke) {
-        const upAlpha = this.recCapture ? 0 : 0.006;
-        const alphaFloor = fricDb < this.ambientFricDb ? 0.12 : upAlpha;
-        this.ambientFricDb += alphaFloor * (fricDb - this.ambientFricDb);
-        const alphaHf = hfDb < this.ambientHfDb ? 0.12 : upAlpha;
-        this.ambientHfDb += alphaHf * (hfDb - this.ambientHfDb);
-        for (let j = 0; j < NUM_BANDS; j++) {
-          const bAlpha = this.currBandsDb[j] < this.ambientBandsDb[j] ? 0.12 : upAlpha;
-          this.ambientBandsDb[j] += bAlpha * (this.currBandsDb[j] - this.ambientBandsDb[j]);
+        if (!this.recCapture) {
+          const alphaFloor = fricDb < this.ambientFricDb ? 0.12 : 0.006;
+          this.ambientFricDb += alphaFloor * (fricDb - this.ambientFricDb);
+          const alphaHf = hfDb < this.ambientHfDb ? 0.12 : 0.006;
+          this.ambientHfDb += alphaHf * (hfDb - this.ambientHfDb);
+          for (let j = 0; j < NUM_BANDS; j++) {
+            const bAlpha = this.currBandsDb[j] < this.ambientBandsDb[j] ? 0.12 : 0.006;
+            this.ambientBandsDb[j] += bAlpha * (this.currBandsDb[j] - this.ambientBandsDb[j]);
+          }
+        } else if (this.framesProcessed < 24) {
+          // Cold-start symmetric settle during first ~64 ms; never ratchet floors downward during recCapture
+          const sAlpha = 0.08;
+          this.ambientFricDb += sAlpha * (fricDb - this.ambientFricDb);
+          this.ambientHfDb += sAlpha * (hfDb - this.ambientHfDb);
+          for (let j = 0; j < NUM_BANDS; j++) {
+            this.ambientBandsDb[j] += sAlpha * (this.currBandsDb[j] - this.ambientBandsDb[j]);
+          }
         }
       }
 
@@ -1836,8 +1959,9 @@
       );
       const specRatioDb = rawSpecRatioDb - velTiltCompDb;
 
-      const occDb = occRatiosDb.length ? median(occRatiosDb) : 0;
-      const pinholeOcclusion = carrierMagMean > 8e-5 ? clamp((-occDb - 1.2) / 9.5, 0, 1) : 0;
+      const occDb = sonarActive && occRatiosDb.length ? median(occRatiosDb) : 0;
+      const pinholeOcclusion =
+        sonarActive && carrierMagMean > 8e-5 ? clamp((-occDb - 1.2) / 9.5, 0, 1) : 0;
 
       // 4. Multi-Carrier Zoomed Complex Baseband Doppler Spectrum (2.93 Hz/bin at 48 kHz)
       let rawDopplerAsym = 0;
@@ -1845,11 +1969,11 @@
       let dopplerVelCms = 0;
       let dopplerSnrDb = 0;
       const shouldRunDoppler =
-        this.numCarriers > 0 && (this.framesProcessed & 1) === 0 && this.framesProcessed >= 16;
+        sonarActive && (this.framesProcessed & 1) === 0 && this.framesProcessed >= 16 && this.iqCount >= 16;
 
       if (shouldRunDoppler) {
         this.dopplerPower.fill(0);
-        const histAvail = Math.min(DOPPLER_HISTORY, this.framesProcessed);
+        const histAvail = Math.min(DOPPLER_HISTORY, this.iqCount);
 
         for (let k = 0; k < this.numCarriers; k++) {
           const hI = this.iqHistI[k];
@@ -1911,33 +2035,47 @@
         const dopplerPeakRatio = maxSidebandBin / medBinPow;
 
         const totalDopplerPow = posPow + negPow;
-        if (!this.activeStroke && totalDopplerPow > 0) {
-          const dAlpha = totalDopplerPow < this.ambientDopplerPower ? 0.15 : 0.01;
-          this.ambientDopplerPower += dAlpha * (totalDopplerPow - this.ambientDopplerPower);
+        const dopplerReady = this.framesProcessed >= 64 && this.iqCount >= DOPPLER_HISTORY;
+        if ((!this.activeStroke && !this.recCapture && totalDopplerPow > 0) || !dopplerReady) {
+          if (totalDopplerPow > 0) {
+            const dAlpha = !dopplerReady
+              ? 0.25
+              : totalDopplerPow < this.ambientDopplerPower
+              ? 0.15
+              : 0.01;
+            this.ambientDopplerPower += dAlpha * (totalDopplerPow - this.ambientDopplerPower);
+          }
         }
 
-        dopplerSnrDb = 10 * Math.log10((totalDopplerPow + 1e-16) / (this.ambientDopplerPower + 1e-16));
-        rawDopplerAsym =
-          (posPow - negPow) / (totalDopplerPow + 2.5 * this.ambientDopplerPower + 1e-15);
-        dopplerAsym = rawDopplerAsym * this.polarity;
+        if (dopplerReady) {
+          dopplerSnrDb = 10 * Math.log10((totalDopplerPow + 1e-16) / (this.ambientDopplerPower + 1e-16));
+          rawDopplerAsym =
+            (posPow - negPow) / (totalDopplerPow + 2.5 * this.ambientDopplerPower + 1e-15);
+          dopplerAsym = rawDopplerAsym * this.polarity;
 
-        if (weightSum > 1e-15) {
-          const signedDopplerHz = (weightedHz / weightSum) * this.polarity;
-          dopplerVelCms =
-            (signedDopplerHz * SPEED_OF_SOUND_CMS) / (OBLIQUE_GEOMETRY_FACTOR * this.centerCarrierHz);
+          if (weightSum > 1e-15) {
+            const signedDopplerHz = (weightedHz / weightSum) * this.polarity;
+            dopplerVelCms =
+              (signedDopplerHz * SPEED_OF_SOUND_CMS) / (OBLIQUE_GEOMETRY_FACTOR * this.centerCarrierHz);
+          }
+
+          this._lastDoppler = { rawDopplerAsym, dopplerAsym, dopplerVelCms, dopplerSnrDb, dopplerPeakRatio };
         }
-
-        this._lastDoppler = { rawDopplerAsym, dopplerAsym, dopplerVelCms, dopplerSnrDb, dopplerPeakRatio };
-      } else if (this._lastDoppler && this.numCarriers > 0) {
+      } else if (this._lastDoppler && sonarActive && this.framesProcessed >= 64) {
         rawDopplerAsym = this._lastDoppler.rawDopplerAsym;
         dopplerAsym = rawDopplerAsym * this.polarity;
         dopplerVelCms = this._lastDoppler.dopplerVelCms;
         dopplerSnrDb = this._lastDoppler.dopplerSnrDb;
       }
-      const dopplerPeakRatio = this._lastDoppler ? this._lastDoppler.dopplerPeakRatio : 1;
+      const dopplerPeakRatio =
+        sonarActive && this._lastDoppler && this.framesProcessed >= 64
+          ? this._lastDoppler.dopplerPeakRatio
+          : 1;
 
       const llapVelCms =
-        phaseWeightAccum > 1e-10 ? (phaseVelAccum / phaseWeightAccum) * this.polarity : 0;
+        sonarActive && phaseWeightAccum > 1e-10
+          ? (phaseVelAccum / phaseWeightAccum) * this.polarity
+          : 0;
 
       // 5. Contact & Ultrasonic Gesture Gate + Veto Diagnostics
       const isNarrowbandHarmonicSpeech =
@@ -1966,6 +2104,7 @@
         !isNarrowbandHarmonicSpeech &&
         (pinholeOcclusion > 0.25 || (spectralFlatness > 0.12 && tonalCrest < 16.0));
       const isPureSonarWave =
+        sonarActive &&
         carrierMagMean > 8e-5 &&
         dopplerSnrDb > 9.0 &&
         Math.abs(dopplerAsym) > 0.38 &&
@@ -1982,7 +2121,11 @@
           for (let j = 0; j < NUM_BANDS; j++) {
             bandsArr[j] = round2(this.relBandsDb[j]);
           }
-          const recActive = fricSnrDb > 2.5 || pinholeOcclusion > 0.12 || dopplerSnrDb > 6.5;
+          const recActive =
+            fricSnrDb > 4.5 ||
+            hfSnrDb > 5.0 ||
+            pinholeOcclusion > 0.22 ||
+            (sonarActive && this.framesProcessed >= 64 && dopplerSnrDb > 8.5);
           this.recCapture.frames.push({
             t: round3(timeSec - this.recCapture.startTimeSec),
             bandsDb: bandsArr,
@@ -2015,8 +2158,10 @@
           fricSnrDb,
           occDb
         });
-        const rbfRes = predictRbfY(posVec, empRbf);
-        rawYObs = rbfRes.y;
+        const rbfRes = predictRbfY(posVec, empRbf, { txActive: sonarActive });
+        const calFlip =
+          (this.polarity === -1 ? -1 : 1) * (this.empiricalModel.polarity === -1 ? -1 : 1);
+        rawYObs = calFlip === -1 ? 1 - rbfRes.y : rbfRes.y;
         targetUncPct = isActiveSignal ? lerp(10.5, 4.2, rbfRes.maxWeight) : 12.0;
       } else {
         const cal = this.calibration;
@@ -2089,8 +2234,9 @@
 
       let committedSwipe = null;
 
-      // Guard against sustained ambient noise floor step-up (e.g. fan/HVAC spin-up > 3.5 s)
-      if (this.activeStroke && timeSec - this.activeStroke.startTime > 3.5) {
+      // Guard against sustained ambient noise floor step-up (e.g. fan/HVAC spin-up > 3.5 s),
+      // suppressed during recCapture so holding a long zone rub > 3.5 s never snaps ambient floors.
+      if (this.activeStroke && !this.recCapture && timeSec - this.activeStroke.startTime > 3.5) {
         this.activeStroke = null;
         this.ambientFricDb = fricDb;
         this.ambientHfDb = hfDb;
@@ -2186,13 +2332,15 @@
         }
 
         const ptWeight = clamp(fricSnrDb / 18, 0.2, 1.5) + sonarWeight;
-        st.points.push({
-          t: timeSec,
-          y: this.y,
-          rawY: rawYObs,
-          speedCms: this.speedCmPerSec,
-          w: ptWeight
-        });
+        if (st.points.length < MAX_REC_FRAMES * 2) {
+          st.points.push({
+            t: timeSec,
+            y: this.y,
+            rawY: rawYObs,
+            speedCms: this.speedCmPerSec,
+            w: ptWeight
+          });
+        }
 
         if (sonarWeight > 0.08) {
           st.dopplerImpulse += dopplerAsym * sonarWeight;
@@ -2236,20 +2384,22 @@
 
       // Polarity-aware 32-bin Doppler display (skipping DC skirt bin 1, spanning bins 2..33 ≈ +-82 cm/s)
       const dopplerDisplay = new Float32Array(32);
-      for (let i = 0; i < 16; i++) {
-        const binOffset = 2 + i * 2;
-        const rawPos = Math.max(
-          this.dopplerPower[binOffset] || 0,
-          this.dopplerPower[binOffset + 1] || 0
-        );
-        const rawNeg = Math.max(
-          this.dopplerPower[DOPPLER_FFT_SIZE - binOffset] || 0,
-          this.dopplerPower[DOPPLER_FFT_SIZE - binOffset - 1] || 0
-        );
-        const downPow = this.polarity === 1 ? rawNeg : rawPos;
-        const upPow = this.polarity === 1 ? rawPos : rawNeg;
-        dopplerDisplay[15 - i] = Math.log10(1 + downPow * 1e9);
-        dopplerDisplay[16 + i] = Math.log10(1 + upPow * 1e9);
+      if (sonarActive && this.framesProcessed >= 64) {
+        for (let i = 0; i < 16; i++) {
+          const binOffset = 2 + i * 2;
+          const rawPos = Math.max(
+            this.dopplerPower[binOffset] || 0,
+            this.dopplerPower[binOffset + 1] || 0
+          );
+          const rawNeg = Math.max(
+            this.dopplerPower[DOPPLER_FFT_SIZE - binOffset] || 0,
+            this.dopplerPower[DOPPLER_FFT_SIZE - binOffset - 1] || 0
+          );
+          const downPow = this.polarity === 1 ? rawNeg : rawPos;
+          const upPow = this.polarity === 1 ? rawPos : rawNeg;
+          dopplerDisplay[15 - i] = Math.log10(1 + downPow * 1e9);
+          dopplerDisplay[16 + i] = Math.log10(1 + upPow * 1e9);
+        }
       }
 
       return {
@@ -2269,7 +2419,7 @@
         dopplerAsym: Math.round(dopplerAsym * 100) / 100,
         pinholeOcclusion: Math.round(pinholeOcclusion * 100) / 100,
         spectralFlatness: Math.round(spectralFlatness * 100) / 100,
-        carrierActive: carrierMagMean > 8e-5,
+        carrierActive: sonarActive && carrierMagMean > 8e-5,
         vetoReason: activeVeto,
         dopplerSpectrum: Array.from(dopplerDisplay),
         swipe: committedSwipe
@@ -2336,10 +2486,24 @@
         st.featureFrames.length >= 4;
 
       if (hasEmpLda) {
-        const strokeVec = extractStrokeFeatures(st.featureFrames, this.empiricalModel.rbf);
-        const ldaScore = clamp(scoreShrinkageLda(strokeVec, this.empiricalModel.lda), -2.0, 2.0);
-        const rbfVote = clamp(-(endY - startY) * 2.2 - halfDiffY * 2.2, -1.5, 1.5);
-        upScore = 0.72 * ldaScore + 0.28 * rbfVote;
+        const txActive = this.txEnabled && this.numCarriers > 0;
+        const empRbf =
+          this.empiricalModel.rbf &&
+          Array.isArray(this.empiricalModel.rbf.prototypes) &&
+          this.empiricalModel.rbf.prototypes.length >= 2
+            ? this.empiricalModel.rbf
+            : null;
+        const strokeVec = extractStrokeFeatures(st.featureFrames, empRbf, { txActive });
+        const calFlip =
+          (this.polarity === -1 ? -1 : 1) * (this.empiricalModel.polarity === -1 ? -1 : 1);
+        const ldaScore = clamp(
+          scoreShrinkageLda(strokeVec, this.empiricalModel.lda, { txActive }) * calFlip,
+          -2.0,
+          2.0
+        );
+        const rbfVote = empRbf ? clamp(-(endY - startY) * 2.2 - halfDiffY * 2.2, -1.5, 1.5) : 0;
+        const rbfWeight = empRbf ? 0.28 : 0;
+        upScore = (1 - rbfWeight) * ldaScore + rbfWeight * rbfVote;
         sensingMode = 'calibrated';
       } else if (st.contactFrames >= minModeFrames && st.dopplerWeightSum > 1.2) {
         upScore = 0.62 * tribVote + 0.38 * sonarVote;
@@ -2443,7 +2607,7 @@
             sampleRate: sampleRate,
             txEnabled: opts.txEnabled !== false,
             txGain: opts.txGain !== undefined ? opts.txGain : 0.036,
-            polarity: opts.polarity || 1,
+            polarity: opts.polarity,
             calibration: opts.calibration || undefined,
             empiricalModel: opts.empiricalModel || undefined
           });
@@ -2454,7 +2618,7 @@
             } else if (msg.type === 'setCalibration') {
               this.core.setCalibration(msg.calibration);
             } else if (msg.type === 'setEmpiricalModel') {
-              this.core.setEmpiricalModel(msg.model);
+              this.core.setEmpiricalModel(msg.model, { syncPolarity: Boolean(msg.syncPolarity) });
             } else if (msg.type === 'resetCalibration') {
               this.core.resetCalibration();
             } else if (msg.type === 'beginRec') {
@@ -2505,6 +2669,7 @@
     theilSenSlope,
     predictRbfY,
     extractStrokeFeatures,
+    fitShrinkageLda,
     scoreShrinkageLda,
     fitEmpiricalCalibration,
     AcousticDspCore,
