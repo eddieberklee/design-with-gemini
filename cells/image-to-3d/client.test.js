@@ -5,23 +5,23 @@ const assert = require('node:assert/strict');
 const Client = require('./client.js');
 const Renderer = require('./renderer.js');
 
-test('pickFourModels selects 4 distinct Gemini multimodal models', () => {
+test('pickFourModels selects Gemini 4 Hydrogen, Argon, Carbon, Neon first', () => {
   const picked = Client.pickFourModels([
-    { name: 'models/gemini-2.5-pro', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-2.5-flash-lite', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-2.0-flash', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-2.5-flash-image', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/imagen-3.0-generate-002', supportedGenerationMethods: ['predict'] }
+    { name: 'models/gemini-4-neon', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-4-carbon', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-4-argon', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.5-flash-image', supportedGenerationMethods: ['generateContent'] }
   ]);
 
   assert.equal(picked.length, 4);
   assert.equal(new Set(picked).size, 4);
   assert.deepEqual(picked, [
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.0-flash'
+    'gemini-4-hydrogen',
+    'gemini-4-argon',
+    'gemini-4-carbon',
+    'gemini-4-neon'
   ]);
 });
 

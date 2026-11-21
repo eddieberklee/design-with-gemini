@@ -4,6 +4,8 @@
    ========================================================================== */
 
 .cell--image-to-3d {
+  grid-column: span 2;
+  aspect-ratio: 8 / 3;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -139,13 +141,29 @@
   min-width: 0;
 }
 
-.i3d-model-name {
+.i3d-model-select {
+  appearance: none;
+  flex: 1 1 auto;
   min-width: 0;
-  font: 600 9.5px / 1.1 var(--ui-mono);
+  border: 0;
+  border-radius: 3px;
+  padding: 2px 14px 2px 3px;
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%239c9ca3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 3px center;
+  font: 600 10px / 1.1 var(--ui-mono);
   color: #f3f3f0;
-  white-space: nowrap;
-  overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.i3d-model-select:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.i3d-model-select option {
+  background: #16171a;
+  color: #f3f3f0;
 }
 
 .i3d-slot-meta {
@@ -182,9 +200,17 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 6px;
+  padding: 8px;
   text-align: center;
+  overflow-y: auto;
   pointer-events: none;
+}
+
+.i3d-slot-overlay--err {
+  justify-content: flex-start;
+  text-align: left;
+  background: rgba(22, 23, 26, 0.9);
+  pointer-events: auto;
 }
 
 .i3d-slot-overlay[hidden] {

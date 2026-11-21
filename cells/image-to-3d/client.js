@@ -8,17 +8,17 @@
   const LOCAL_KEY = 'dc_gemini_api_key_local';
 
   const DEFAULT_FOUR_MODELS = [
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-    'gemini-2.0-flash'
+    'gemini-4-hydrogen',
+    'gemini-4-argon',
+    'gemini-4-carbon',
+    'gemini-4-neon'
   ];
 
   const MODEL_SLOTS_PREFERENCE = [
-    [/^gemini-3(\.\d+)?-pro(?!.*image)/i, /^gemini-2\.5-pro$/i, /^gemini-2\.5-pro/i],
-    [/^gemini-3(\.\d+)?-flash(?!.*(lite|image|tts|audio))/i, /^gemini-2\.5-flash$/i],
-    [/^gemini-3(\.\d+)?-flash-lite/i, /^gemini-2\.5-flash-lite$/i, /^gemini-2\.5-flash-lite/i],
-    [/^gemini-2\.0-flash$/i, /^gemini-2\.5-flash-preview/i, /^gemini-2\.0-flash-lite/i, /^gemini-/i]
+    [/^gemini-4-hydrogen$/i, /^gemini-4.*hydrogen/i, /^gemini-3(\.\d+)?-pro(?!.*image)/i],
+    [/^gemini-4-argon$/i, /^gemini-4.*argon/i, /^gemini-3\.8-flash$/i, /^gemini-3(\.\d+)?-flash(?!.*(lite|image|tts|audio))/i],
+    [/^gemini-4-carbon$/i, /^gemini-4.*carbon/i, /^gemini-3(\.\d+)?-flash-lite/i],
+    [/^gemini-4-neon$/i, /^gemini-4.*neon/i, /^gemini-3\.8-flash/i, /^gemini-2\.5-pro/i]
   ];
 
   const EXCLUDE_RE = /(tts|image|live|audio|embedding|aqa|robotics|computer-use|deep-research|lyria|veo|imagen|gemma|decision|transcribe|learnlm|nano-banana|genie)/i;
@@ -103,7 +103,7 @@
     return String(name || '').replace(/^models\//, '');
   }
 
-  function pickFourModels(rawModels) {
+  function listEligibleModels(rawModels) {
     const eligible = [];
     const seen = Object.create(null);
     (Array.isArray(rawModels) ? rawModels : []).forEach(function (m) {
@@ -116,7 +116,11 @@
       seen[id] = true;
       eligible.push(id);
     });
+    return eligible;
+  }
 
+  function pickFourModels(rawModels) {
+    const eligible = listEligibleModels(rawModels);
     if (!eligible.length) return DEFAULT_FOUR_MODELS.slice();
 
     const chosen = [];
@@ -180,20 +184,35 @@
     };
   }
 
-  async function discoverFourModels(apiKey, signal) {
+  async function discoverModels(apiKey, signal) {
     const key = String(apiKey || '').trim();
-    if (!key) return DEFAULT_FOUR_MODELS.slice();
+    if (!key) {
+      return {
+        selected: DEFAULT_FOUR_MODELS.slice(),
+        available: DEFAULT_FOUR_MODELS.slice()
+      };
+    }
     try {
       const res = await fetch(REST_BASE + '/models?pageSize=200', {
         method: 'GET',
         headers: { 'x-goog-api-key': key },
         signal: signal
       });
-      if (!res.ok) return DEFAULT_FOUR_MODELS.slice();
+      if (!res.ok) {
+        return { selected: DEFAULT_FOUR_MODELS.slice(), available: DEFAULT_FOUR_MODELS.slice() };
+      }
       const json = await res.json();
-      return pickFourModels(json && json.models);
+      const eligible = listEligibleModels(json && json.models);
+      const merged = DEFAULT_FOUR_MODELS.slice();
+      eligible.forEach(function (id) {
+        if (merged.indexOf(id) < 0) merged.push(id);
+      });
+      return {
+        selected: pickFourModels(json && json.models),
+        available: merged
+      };
     } catch (_err) {
-      return DEFAULT_FOUR_MODELS.slice();
+      return { selected: DEFAULT_FOUR_MODELS.slice(), available: DEFAULT_FOUR_MODELS.slice() };
     }
   }
 
@@ -261,9 +280,10 @@
   NS.Client = {
     DEFAULT_FOUR_MODELS: DEFAULT_FOUR_MODELS,
     KeyStore: KeyStore,
+    listEligibleModels: listEligibleModels,
     pickFourModels: pickFourModels,
     parse3DSceneFromText: parse3DSceneFromText,
-    discoverFourModels: discoverFourModels,
+    discoverModels: discoverModels,
     generate3DForModel: generate3DForModel
   };
 

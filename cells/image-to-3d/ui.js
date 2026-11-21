@@ -100,6 +100,7 @@
     const dialogClose = root.querySelector('.i3d-dialog-close');
 
     let models = Client.DEFAULT_FOUR_MODELS.slice();
+    let availableModels = Client.DEFAULT_FOUR_MODELS.slice();
     let currentImage = null;
     let syncOrbit = true;
     let activeController = null;
@@ -113,7 +114,7 @@
         slot.className = 'i3d-slot';
         slot.innerHTML = [
           '<div class="i3d-slot-head">',
-          '  <span class="i3d-model-name"></span>',
+          '  <select class="i3d-model-select" aria-label="Model for slot ' + (idx + 1) + '"></select>',
           '  <span class="i3d-slot-meta">idle</span>',
           '</div>',
           '<div class="i3d-canvas-wrap">',
@@ -130,7 +131,7 @@
         ].join('\n');
         container.appendChild(slot);
 
-        const nameEl = slot.querySelector('.i3d-model-name');
+        const selectEl = slot.querySelector('.i3d-model-select');
         const metaEl = slot.querySelector('.i3d-slot-meta');
         const canvas = slot.querySelector('.i3d-canvas');
         const overlay = slot.querySelector('.i3d-slot-overlay');
@@ -139,8 +140,13 @@
         const titleEl = slot.querySelector('.i3d-slot-title');
         const objBtn = slot.querySelector('.i3d-obj-btn');
 
-        nameEl.textContent = modelId;
-        nameEl.title = modelId;
+        selectEl.addEventListener('change', function () {
+          models[idx] = selectEl.value;
+          updateSlotPair(idx, function (s) {
+            s.selectEl.value = models[idx];
+            s.selectEl.title = models[idx];
+          });
+        });
 
         const viewer = Renderer.createViewer(canvas, {
           onOrbit: function (cam) {
@@ -157,14 +163,14 @@
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url;
-          a.download = modelId.replace(/[^a-z0-9.-]/gi, '_') + '.obj';
+          a.download = models[idx].replace(/[^a-z0-9.-]/gi, '_') + '.obj';
           a.click();
           setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
         });
 
         return {
           idx: idx,
-          nameEl: nameEl,
+          selectEl: selectEl,
           metaEl: metaEl,
           overlay: overlay,
           spinner: spinner,
@@ -190,11 +196,18 @@
       if (dialogSlots[idx]) fn(dialogSlots[idx]);
     }
 
-    function applyModelNames() {
+    function applyModelOptions() {
       models.forEach(function (m, idx) {
         updateSlotPair(idx, function (s) {
-          s.nameEl.textContent = m;
-          s.nameEl.title = m;
+          s.selectEl.innerHTML = '';
+          availableModels.forEach(function (optId) {
+            const opt = document.createElement('option');
+            opt.value = optId;
+            opt.textContent = optId;
+            s.selectEl.appendChild(opt);
+          });
+          s.selectEl.value = m;
+          s.selectEl.title = m;
         });
       });
     }
@@ -204,13 +217,17 @@
       const hasKey = Boolean(key);
       keyBtn.setAttribute('data-tone', hasKey ? 'ok' : 'attention');
       keyBtn.querySelector('.ui-pill-label').textContent = hasKey ? 'Key ✓' : 'Key';
+      applyModelOptions();
       if (hasKey && key !== discoveredKey) {
         discoveredKey = key;
-        Client.discoverFourModels(key).then(function (found) {
-          if (found && found.length === 4) {
-            models = found;
-            applyModelNames();
+        Client.discoverModels(key).then(function (info) {
+          if (info && Array.isArray(info.available) && info.available.length) {
+            availableModels = info.available;
           }
+          if (info && Array.isArray(info.selected) && info.selected.length === 4) {
+            models = info.selected;
+          }
+          applyModelOptions();
         });
       }
     }
@@ -248,6 +265,7 @@
         const t0 = Date.now();
         updateSlotPair(idx, function (s) {
           s.metaEl.textContent = '0.0s';
+          s.overlay.className = 'i3d-slot-overlay';
           s.overlay.hidden = false;
           s.spinner.hidden = false;
           s.msgEl.className = 'i3d-slot-msg';
@@ -287,6 +305,7 @@
           const msg = aborted ? 'Cancelled' : ((err && err.message) || String(err));
           updateSlotPair(idx, function (s) {
             s.metaEl.textContent = aborted ? 'stop' : 'err';
+            s.overlay.className = aborted ? 'i3d-slot-overlay' : 'i3d-slot-overlay i3d-slot-overlay--err';
             s.overlay.hidden = false;
             s.spinner.hidden = true;
             s.msgEl.className = aborted ? 'i3d-slot-msg' : 'i3d-slot-msg i3d-slot-msg--err';
@@ -391,7 +410,8 @@
       keyInput.value = '';
       discoveredKey = '';
       models = Client.DEFAULT_FOUR_MODELS.slice();
-      applyModelNames();
+      availableModels = Client.DEFAULT_FOUR_MODELS.slice();
+      applyModelOptions();
       refreshKeyState();
     });
     keyInput.addEventListener('keydown', function (e) {
