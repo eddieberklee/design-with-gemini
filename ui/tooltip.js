@@ -93,9 +93,13 @@
    */
   function adoptTitle(s) {
     var title = typeof s.title === 'string' ? s.title.trim() : '';
-    var hasTitle = typeof s.title === 'string';
+    var hasTitle = typeof s.title === 'string' || Boolean(s.hasTitle);
     var dataTip = typeof s.dataTip === 'string' ? s.dataTip.trim() : null;
     var authored = dataTip !== null && dataTip !== '' && !s.fromTitle;
+
+    if (s.fromTitle && hasTitle && !title) {
+      return { tip: '', setDataTip: '', fromTitle: false, removeTitle: true, ariaLabel: '' };
+    }
 
     var out = { tip: '', setDataTip: null, fromTitle: Boolean(s.fromTitle), removeTitle: hasTitle, ariaLabel: null };
     if (authored) {
@@ -155,8 +159,11 @@
   var lingerTimer = 0;
   var lastHideAt = -Infinity;
   var suppressed = null;     // Escape/pointerdown: no re-show until the pointer leaves it
+  var suppressedLeaveEl = null;
   var armed = false;         // transient listeners attached
   var observer = null;
+  var watchedDialog = null;
+  var openedDisabled = false;
   var lp = null;             // long-press state {el, x, y, timer, id}
   var started = false;
 
@@ -164,12 +171,54 @@
     return global.performance && typeof global.performance.now === 'function' ? global.performance.now() : Date.now();
   }
 
+  function tagOf(el) {
+    return el && el.tagName ? String(el.tagName).toUpperCase() : '';
+  }
+
+  function safeMatches(el, sel) {
+    try {
+      return Boolean(el && el.matches && el.matches(sel));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function containsNode(root, node) {
+    return Boolean(root && node && node.nodeType === 1 && (root === node || (typeof root.contains === 'function' && root.contains(node))));
+  }
+
+  function onSuppressedLeave() {
+    if (suppressedLeaveEl) {
+      suppressedLeaveEl.removeEventListener('pointerleave', onSuppressedLeave);
+      suppressedLeaveEl = null;
+    }
+    suppressed = null;
+  }
+
+  function clearSuppressed() {
+    if (suppressedLeaveEl) {
+      suppressedLeaveEl.removeEventListener('pointerleave', onSuppressedLeave);
+      suppressedLeaveEl = null;
+    }
+    suppressed = null;
+  }
+
+  function suppress(el) {
+    clearSuppressed();
+    if (!el) return;
+    suppressed = el;
+    if (typeof el.addEventListener === 'function') {
+      suppressedLeaveEl = el;
+      el.addEventListener('pointerleave', onSuppressedLeave, { once: true });
+    }
+  }
+
   function findTarget(node) {
     if (!node || node.nodeType !== 1 || typeof node.closest !== 'function') return null;
-    if (bubble && bubble.contains(node)) return null;
+    if (bubble && containsNode(bubble, node)) return null;
     var el = node.closest(TIP_SELECTOR);
     while (el) {
-      if (!SKIP_TAGS[el.tagName] && !el.closest('[data-tip-off]') && hasTipText(el)) return el;
+      if (!SKIP_TAGS[tagOf(el)] && !el.closest('[data-tip-off]') && hasTipText(el)) return el;
       el = el.parentElement ? el.parentElement.closest(TIP_SELECTOR) : null;
     }
     return null;
@@ -184,15 +233,15 @@
 
   // Only interactive elements need a name; aria-label on a plain div/span is not allowed.
   function isInteractive(el) {
-    if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|SUMMARY)$/.test(el.tagName)) return true;
+    if (/^(BUTTON|A|INPUT|SELECT|TEXTAREA|SUMMARY)$/.test(tagOf(el))) return true;
     var role = el.getAttribute('role');
-    if (role && /^(button|link|slider|checkbox|radio|switch|tab|menuitem|option|application|spinbutton)$/.test(role)) return true;
+    if (role && /^(button|link|slider|checkbox|radio|switch|tab|menuitem|option|application|spinbutton)$/i.test(role.trim())) return true;
     return el.hasAttribute('tabindex');
   }
 
   function hasAccessibleName(el) {
     if (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby')) return true;
-    if (el.tagName === 'IMG' && el.getAttribute('alt')) return true;
+    if (tagOf(el) === 'IMG' && el.getAttribute('alt')) return true;
     var txt = el.textContent;
     if (txt && txt.replace(/[\s↗↘⤢⤡→←↑↓↻×✕]+/g, '').length) return true;
     var img = el.querySelector && el.querySelector('img[alt]:not([alt=""])');
@@ -217,19 +266,32 @@
   }
 
   function resolveText(el) {
+    var autoAria = el.hasAttribute('data-tip-aria-from-title');
     var res = adoptTitle({
       title: el.getAttribute('title'),
       dataTip: el.getAttribute('data-tip'),
       fromTitle: el.hasAttribute('data-tip-from-title'),
-      hasName: !isInteractive(el) || hasAccessibleName(el)
+      hasName: !isInteractive(el) || (hasAccessibleName(el) && !autoAria)
     });
     // Write only real changes: the MutationObserver below watches these attributes.
-    if (res.setDataTip !== null && el.getAttribute('data-tip') !== res.setDataTip) el.setAttribute('data-tip', res.setDataTip);
+    if (res.setDataTip === '') {
+      if (el.hasAttribute('data-tip')) el.removeAttribute('data-tip');
+    } else if (res.setDataTip !== null && el.getAttribute('data-tip') !== res.setDataTip) {
+      el.setAttribute('data-tip', res.setDataTip);
+    }
     if (res.fromTitle !== el.hasAttribute('data-tip-from-title')) {
       if (res.fromTitle) el.setAttribute('data-tip-from-title', '');
       else el.removeAttribute('data-tip-from-title');
     }
-    if (res.ariaLabel && el.getAttribute('aria-label') !== res.ariaLabel) el.setAttribute('aria-label', res.ariaLabel);
+    if (res.ariaLabel === '') {
+      if (autoAria) {
+        if (el.hasAttribute('aria-label')) el.removeAttribute('aria-label');
+        el.removeAttribute('data-tip-aria-from-title');
+      }
+    } else if (res.ariaLabel) {
+      if (el.getAttribute('aria-label') !== res.ariaLabel) el.setAttribute('aria-label', res.ariaLabel);
+      if (!autoAria) el.setAttribute('data-tip-aria-from-title', '');
+    }
     if (res.removeTitle && el.hasAttribute('title')) el.removeAttribute('title');
     return res.tip;
   }
@@ -248,11 +310,26 @@
 
   function removeDescribedBy(el) {
     if (!el) return;
-    var ids = (el.getAttribute('aria-describedby') || '').split(/\s+/).filter(function (id) {
+    var raw = el.getAttribute('aria-describedby');
+    if (!raw) return;
+    var ids = raw.split(/\s+/).filter(function (id) {
       return id && id !== 'ui-tip';
     });
-    if (ids.length) el.setAttribute('aria-describedby', ids.join(' '));
-    else el.removeAttribute('aria-describedby');
+    if (ids.length) {
+      var joined = ids.join(' ');
+      if (joined !== raw) el.setAttribute('aria-describedby', joined);
+    } else {
+      el.removeAttribute('aria-describedby');
+    }
+  }
+
+  function syncDescribedBy(el, text, key) {
+    var dup = !key && (
+      text === (el.getAttribute('aria-label') || '').trim() ||
+      text === (el.textContent || '').trim()
+    );
+    if (dup) removeDescribedBy(el);
+    else addDescribedBy(el);
   }
 
   function mountBubble(el) {
@@ -263,12 +340,15 @@
     if (bubble.parentNode !== host) host.appendChild(bubble);
     if (usePopover) {
       try {
-        if (bubble.matches(':popover-open')) bubble.hidePopover();
+        if (safeMatches(bubble, ':popover-open')) bubble.hidePopover();
         bubble.showPopover(); // re-show so it lands above any newer top-layer element
+        bubble.classList.remove('is-open');
         return;
       } catch (_e) {
-        usePopover = false;
-        bubble.removeAttribute('popover');
+        if (!bubble.isConnected) {
+          usePopover = false;
+          bubble.removeAttribute('popover');
+        }
       }
     }
     bubble.classList.add('is-open');
@@ -289,13 +369,23 @@
 
   function show(el) {
     clearTimeout(timer);
+    timer = 0;
+    clearTimeout(lingerTimer);
+    lingerTimer = 0;
     pending = null;
-    if (!el || !el.isConnected || !el.getClientRects().length) return;
+    if (!el || !el.isConnected || !el.getClientRects().length) {
+      hide(false);
+      return;
+    }
     var text = resolveText(el);
-    if (!text) return;
+    if (!text) {
+      hide(false);
+      return;
+    }
     var switching = Boolean(current);
     if (current && current !== el) removeDescribedBy(current);
     current = el;
+    openedDisabled = Boolean(el.disabled || el.hasAttribute('disabled'));
     ensureBubble();
     // Moving between adjacent tips swaps the text in place: no second fade-in.
     if (switching) bubble.setAttribute('data-switch', '');
@@ -306,15 +396,19 @@
     keyEl.hidden = !key;
     mountBubble(el);
     position(el);
-    addDescribedBy(el);
+    syncDescribedBy(el, text, key);
     arm();
     watch(el);
   }
 
   function hide(recordTime) {
     clearTimeout(timer);
+    timer = 0;
     clearTimeout(lingerTimer);
+    lingerTimer = 0;
     pending = null;
+    watchedDialog = null;
+    openedDisabled = false;
     if (current) {
       removeDescribedBy(current);
       current = null;
@@ -323,7 +417,7 @@
     if (bubble) {
       if (usePopover) {
         try {
-          if (bubble.matches(':popover-open')) bubble.hidePopover();
+          if (safeMatches(bubble, ':popover-open')) bubble.hidePopover();
         } catch (_e) { /* already closed */ }
       }
       bubble.classList.remove('is-open');
@@ -345,12 +439,27 @@
     }, HOVER_DELAY_MS);
   }
 
+  function isDialogClosed(dlg) {
+    if (!dlg) return false;
+    if (!dlg.isConnected) return true;
+    if (dlg.open === false) return true;
+    return !dlg.open && !dlg.hasAttribute('open');
+  }
+
   function watch(el) {
     if (typeof global.MutationObserver !== 'function') return;
     if (!observer) {
       observer = new global.MutationObserver(function (records) {
         if (!current) return;
-        if (!current.isConnected || !current.getClientRects().length) {
+        if (
+          !current.isConnected ||
+          !current.getClientRects().length ||
+          (!openedDisabled && (current.disabled || current.hasAttribute('disabled'))) ||
+          current.hidden ||
+          current.hasAttribute('hidden') ||
+          (current.closest && current.closest('[data-tip-off]')) ||
+          isDialogClosed(watchedDialog)
+        ) {
           hide(true);
           return;
         }
@@ -364,17 +473,38 @@
           hide(true);
           return;
         }
-        if (textEl.textContent !== text) {
+        var key = keyLabel(current.getAttribute('data-tip-key'));
+        var changed = false;
+        if (textEl && textEl.textContent !== text) {
           textEl.textContent = text;
-          position(current);
+          changed = true;
         }
+        if (keyEl && (keyEl.textContent !== key || keyEl.hidden !== !key)) {
+          keyEl.textContent = key;
+          keyEl.hidden = !key;
+          changed = true;
+        }
+        if (changed) position(current);
+        syncDescribedBy(current, text, key);
       });
     }
     observer.disconnect();
-    observer.observe(el, { attributes: true, attributeFilter: ['data-tip', 'title', 'hidden', 'disabled'] });
+    watchedDialog = el.closest ? el.closest('dialog') : null;
+    observer.observe(el, {
+      attributes: true,
+      attributeFilter: ['data-tip', 'title', 'hidden', 'disabled', 'data-tip-key', 'data-tip-off']
+    });
     // Re-rendering cells replace whole subtrees; catch the target being detached.
-    var root = el.closest('dialog[open], .cell') || doc.body;
-    observer.observe(root, { childList: true, subtree: true });
+    var root = (el.closest && el.closest('dialog[open], .cell')) || doc.body;
+    if (root) observer.observe(root, { childList: true, subtree: true });
+    if (watchedDialog) {
+      observer.observe(watchedDialog, {
+        attributes: true,
+        attributeFilter: ['open', 'hidden', 'data-tip-off']
+      });
+      var dlgParent = watchedDialog.parentNode || doc.body;
+      if (dlgParent && dlgParent !== root) observer.observe(dlgParent, { childList: true, subtree: true });
+    }
   }
 
   // --- always-on listeners -----------------------------------------------------
@@ -382,7 +512,7 @@
   function onPointerOver(e) {
     if (e.pointerType === 'touch' || e.pointerType === 'pen') return;
     // Leaving the element that was dismissed (Escape / click) re-enables it.
-    if (suppressed && !suppressed.contains(e.target)) suppressed = null;
+    if (suppressed && e.target && e.target.nodeType === 1 && !containsNode(suppressed, e.target)) clearSuppressed();
     var el = findTarget(e.target);
     if (!el) {
       if (current || pending) hide(true);
@@ -391,13 +521,12 @@
     if (el === suppressed) return;
     if (el === current || el === pending) return;
     var instant = isOpen() || now() - lastHideAt < SKIP_DELAY_MS;
-    if (current) removeDescribedBy(current);
     schedule(el, instant);
   }
 
   function onPointerDown(e) {
     if (current || pending) {
-      suppressed = current || pending;
+      suppress(current || pending);
       hide(true);
     }
     if (e.pointerType === 'touch' || e.pointerType === 'pen') startLongPress(e);
@@ -407,36 +536,44 @@
     var el = findTarget(e.target);
     if (!el) return;
     var keyboard = true;
-    try {
-      keyboard = e.target.matches(':focus-visible');
-    } catch (_e) { /* older engines: treat as keyboard */ }
+    if (e.target && typeof e.target.matches === 'function') {
+      try {
+        keyboard = Boolean(e.target.matches(':focus-visible'));
+      } catch (_e) { /* older engines: treat as keyboard */ }
+    }
     if (!keyboard) return;
-    suppressed = null;
+    clearSuppressed();
     schedule(el, true);
   }
 
   // --- transient listeners (only while pending/shown) ---------------------------
 
   function onPointerOut(e) {
+    if (e.pointerType === 'touch' || e.pointerType === 'pen') return;
     var el = current || pending;
     if (!el) return;
-    if (suppressed && e.target && suppressed.contains(e.target) && !suppressed.contains(e.relatedTarget)) suppressed = null;
-    if (el.contains(e.target) && !el.contains(e.relatedTarget)) {
-      if (doc.activeElement === el && el.matches(':focus-visible')) return; // keep the keyboard tip
+    if (suppressed && containsNode(suppressed, e.target) && !containsNode(suppressed, e.relatedTarget)) clearSuppressed();
+    if (containsNode(el, e.target) && !containsNode(el, e.relatedTarget)) {
+      if (doc.activeElement === el && safeMatches(el, ':focus-visible')) return; // keep the keyboard tip
       hide(true);
     }
   }
 
   function onFocusOut(e) {
-    if (current && (e.target === current || current.contains(e.target)) && !current.contains(e.relatedTarget)) {
-      if (!current.matches(':hover')) hide(true);
+    if (current && containsNode(current, e.target) && !containsNode(current, e.relatedTarget)) {
+      if (!safeMatches(current, ':hover')) hide(true);
     }
   }
 
   function onKeyDown(e) {
     if (e.key === 'Escape' || e.key === 'Esc') {
-      suppressed = current || pending;
+      var wasOpen = Boolean(current);
+      suppress(current || pending);
       hide(true);
+      if (wasOpen) {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+      }
     }
   }
 
@@ -484,12 +621,7 @@
     lp = { el: el, x: e.clientX, y: e.clientY, id: e.pointerId, timer: 0 };
     lp.timer = setTimeout(function () {
       if (!lp) return;
-      var target = lp.el;
-      show(target);
-      clearTimeout(lingerTimer);
-      lingerTimer = setTimeout(function () {
-        if (current === target) hide(true);
-      }, TOUCH_LINGER_MS + LONG_PRESS_MS);
+      show(lp.el);
     }, LONG_PRESS_MS);
     doc.addEventListener('pointermove', onLongPressMove, { capture: true, passive: true });
     doc.addEventListener('pointerup', onLongPressEnd, true);
@@ -498,12 +630,27 @@
 
   function onLongPressMove(e) {
     if (!lp || e.pointerId !== lp.id) return;
-    if (Math.abs(e.clientX - lp.x) > LONG_PRESS_SLOP_PX || Math.abs(e.clientY - lp.y) > LONG_PRESS_SLOP_PX) cancelLongPress();
+    if (Math.abs(e.clientX - lp.x) > LONG_PRESS_SLOP_PX || Math.abs(e.clientY - lp.y) > LONG_PRESS_SLOP_PX) {
+      var target = lp.el;
+      cancelLongPress();
+      if (current === target) hide(false);
+    }
   }
 
   function onLongPressEnd(e) {
     if (!lp || e.pointerId !== lp.id) return;
+    var target = lp.el;
     cancelLongPress();
+    if (current === target) {
+      if (e && e.type === 'pointercancel') {
+        hide(false);
+      } else {
+        clearTimeout(lingerTimer);
+        lingerTimer = setTimeout(function () {
+          hide(false);
+        }, TOUCH_LINGER_MS);
+      }
+    }
   }
 
   function cancelLongPress() {
@@ -529,18 +676,27 @@
   function destroy() {
     hide(false);
     cancelLongPress();
+    clearSuppressed();
+    if (observer) {
+      observer.disconnect();
+      observer = null;
+    }
+    if (bubble && bubble.parentNode) bubble.parentNode.removeChild(bubble);
+    bubble = null;
+    textEl = null;
+    keyEl = null;
+    usePopover = false;
+    lastHideAt = -Infinity;
     if (!started) return;
     started = false;
     doc.removeEventListener('pointerover', onPointerOver, { capture: true, passive: true });
     doc.removeEventListener('pointerdown', onPointerDown, { capture: true, passive: true });
     doc.removeEventListener('focusin', onFocusIn, true);
-    if (bubble && bubble.parentNode) bubble.parentNode.removeChild(bubble);
-    bubble = null;
   }
 
   api.__live = true;
   api._state = function () {
-    return { current: current, pending: pending, armed: armed, bubble: bubble, usePopover: usePopover };
+    return { current: current, pending: pending, armed: armed, bubble: bubble, usePopover: usePopover, suppressed: suppressed };
   };
   init();
 })(typeof window !== 'undefined' ? window : globalThis);
