@@ -290,3 +290,79 @@ test('image-gen.css lets the hidden attribute hide the footer actions (and every
   assert.match(css, /\.cell--image-gen \[hidden\]\s*\{\s*display:\s*none !important;?\s*\}/);
   assert.match(css, /\.ig-foot-actions\s*\{[^}]*display:\s*inline-flex/);
 });
+
+test('checkReferenceFile: rejects non-images and oversized files with a message, accepts images', () => {
+  assert.match(client.checkReferenceFile({ name: 'notes.pdf', type: 'application/pdf', size: 10 }), /notes\.pdf is not an image/);
+  assert.match(client.checkReferenceFile({ name: 'x', type: '', size: 10 }), /not an image/);
+  assert.match(client.checkReferenceFile({ name: 'huge.png', type: 'image/png', size: 64 * 1048576 }), /huge\.png is 64 MB; reference images are limited to 20 MB/);
+  assert.equal(client.checkReferenceFile({ name: 'ok.jpg', type: 'image/jpeg', size: 2 * 1048576 }), '');
+  assert.match(client.checkReferenceFile(null), /No file/);
+});
+
+test('createLatestGuard: a slow earlier read cannot replace a later one, and invalidate drops both', () => {
+  const guard = client.createLatestGuard();
+  const first = guard.next();
+  const second = guard.next();
+  assert.equal(guard.isLatest(first), false);
+  assert.equal(guard.isLatest(second), true);
+  guard.invalidate(); // the slot was cleared while the read was pending
+  assert.equal(guard.isLatest(second), false);
+});
+
+// ui.js needs a real DOM (it is exercised in the browser); these pin the wiring rules that
+// were lost once already when the file was rewritten (static checks on the source).
+const uiSrc = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
+
+function functionBody(src, name) {
+  const start = src.indexOf('function ' + name + '(');
+  assert.notEqual(start, -1, 'ui.js must define ' + name);
+  let depth = 0;
+  for (let i = src.indexOf('{', start); i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  throw new Error('unbalanced ' + name);
+}
+
+test('ui.js: no request on load or key sync: refreshKeyState never discovers; discovery runs from runGeneration only', () => {
+  assert.equal(/discoverImageModels|discoverModelsOnce|generateImage/.test(functionBody(uiSrc, 'refreshKeyState')), false);
+  assert.equal(uiSrc.split('\n').filter((l) => /discoverModelsOnce\(key\);/.test(l)).length, 1);
+  assert.match(functionBody(uiSrc, 'runGeneration'), /discoverModelsOnce\(key\);/);
+  assert.equal((uiSrc.match(/client\.discoverImageModels\(/g) || []).length, 1);
+  assert.equal((uiSrc.match(/client\.generateImage\(/g) || []).length, 1);
+});
+
+test('ui.js: preset chips only fill the prompt (a chip click must not generate)', () => {
+  const chips = uiSrc.slice(uiSrc.indexOf('PRESETS.forEach'), uiSrc.indexOf('function closeKeyBar'));
+  assert.ok(chips.length > 0);
+  assert.equal(/runGeneration\(/.test(chips), false);
+});
+
+test('ui.js: one run slot per tile (cancel race), one revoked object URL per result, decode before showing', () => {
+  assert.match(uiSrc, /client\.createRunSlot\(\)/);
+  assert.equal(/activeController/.test(uiSrc), false);
+  const run = functionBody(uiSrc, 'runGeneration');
+  assert.match(run, /if \(runSlot\.finish\(ctrl\)\) setBusy\(false\)/);
+  assert.match(run, /await loadImage\(url\)/);
+  assert.match(functionBody(uiSrc, 'showResult'), /URL\.revokeObjectURL\(previousUrl\)/);
+  assert.equal(/result\.dataUrl/.test(uiSrc), false);
+});
+
+test('ui.js: the key is never prefilled, empty Save is a no-op, other tiles\' key changes repaint', () => {
+  assert.equal(/keyInput\.value\s*=\s*client\.KeyStore\.get\(\)/.test(uiSrc), false);
+  assert.match(uiSrc, /if \(!keyInput\.value\.trim\(\)\)/);
+  assert.match(uiSrc, /addEventListener\('gemini-key-changed', refreshKeyState\)/);
+});
+
+test('ui.js: reference images: no FileReader copy, white under transparency, errors shown, latest wins', () => {
+  const read = functionBody(uiSrc, 'readImageFile');
+  assert.equal(/FileReader/.test(read), false);
+  assert.match(read, /URL\.revokeObjectURL\(src\)/);
+  assert.match(read, /fillStyle = '#ffffff'/);
+  assert.match(read, /checkReferenceFile\(file\)/);
+  const spot = functionBody(uiSrc, 'wireRefSpot');
+  assert.equal(/catch\(function \(\) \{\}\)/.test(spot), false);
+  assert.match(spot, /guard\.isLatest\(token\)/);
+  // Enter on the clear button must clear the slot, not open the file picker.
+  assert.match(spot, /if \(e\.target !== spotEl\) return;/);
+});

@@ -182,6 +182,33 @@
     return new Blob([bytes], { type: mimeType });
   }
 
+  // Reference images are re-encoded in the browser (canvas -> JPEG), so a file only has to be
+  // an image the browser can decode; the size cap keeps a huge file from stalling the tab.
+  const MAX_REFERENCE_BYTES = 20 * 1024 * 1024;
+
+  // '' when the file may be read, otherwise the message to show.
+  function checkReferenceFile(file) {
+    if (!file) return 'No file was dropped.';
+    const name = String(file.name || 'That file');
+    if (!/^image\//i.test(String(file.type || ''))) {
+      return name + ' is not an image. Use a PNG, JPEG or WebP file.';
+    }
+    if (typeof file.size === 'number' && file.size > MAX_REFERENCE_BYTES) {
+      return name + ' is ' + (file.size / 1048576).toFixed(0) + ' MB; reference images are limited to 20 MB.';
+    }
+    return '';
+  }
+
+  // Latest-wins guard for async reads (a slow first file must not replace a later one).
+  function createLatestGuard() {
+    let n = 0;
+    return {
+      next: function () { n += 1; return n; },
+      isLatest: function (token) { return token === n; },
+      invalidate: function () { n += 1; }
+    };
+  }
+
   function stripModelsPrefix(name) {
     return String(name || '').replace(/^models\//, '');
   }
@@ -399,6 +426,9 @@
     KeyStore: KeyStore,
     isHeaderSafeKey: isHeaderSafeKey,
     createRunSlot: createRunSlot,
+    createLatestGuard: createLatestGuard,
+    checkReferenceFile: checkReferenceFile,
+    MAX_REFERENCE_BYTES: MAX_REFERENCE_BYTES,
     decodeBase64Image: decodeBase64Image,
     rankImageModels: rankImageModels,
     buildGenerateRequest: buildGenerateRequest,
