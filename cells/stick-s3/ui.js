@@ -988,7 +988,8 @@
 
     function renderTwinAndScope(col) {
       const rotX = ColorEngine.clamp(-state.pitch, -78, 78);
-      const rotY = ColorEngine.clamp(state.roll, -78, 78) + (state.az < 0 ? 180 : 0);
+      const rollClamped = ColorEngine.clamp(state.roll, -78, 78);
+      const rotY = state.az < 0 ? (180 - rollClamped) : rollClamped;
       twinRig.style.transform = 'rotateX(' + rotX.toFixed(1) + 'deg) rotateY(' + rotY.toFixed(1) + 'deg)';
 
       const ctx = twinLcdCanvas.getContext('2d');
