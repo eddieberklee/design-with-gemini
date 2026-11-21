@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="cells/prosody/prosody.css">
   <link rel="stylesheet" href="cells/motion/motion.css">
   <link rel="stylesheet" href="cells/api-matrix/api-matrix.css">
+  <link rel="stylesheet" href="cells/left-grille/left-grille.css">
   <style>
     *, *::before, *::after {
       box-sizing: border-box;
@@ -50,7 +51,7 @@
     <section class="cell cell--prosody" id="cell-prosody" aria-label="Voice Prosody Button Sizer prototype"></section>
     <section class="cell cell--motion" id="cell-motion" aria-label="iPhone Motion Grid Controller prototype"></section>
     <section class="cell cell--api-matrix" id="cell-api-matrix" aria-label="Google Gemini API Matrix"></section>
-    <div class="cell"></div>
+    <section class="cell cell--left-grille" id="cell-left-grille" aria-label="Left Grille Acoustic Swipe Sonar"></section>
     <div class="cell"></div>
     <div class="cell"></div>
     <div class="cell"></div>
@@ -70,5 +71,8 @@
   <script defer src="cells/api-matrix/audio.js"></script>
   <script defer src="cells/api-matrix/probes.js"></script>
   <script defer src="cells/api-matrix/ui.js"></script>
+  <script defer src="cells/left-grille/acoustic-engine.js"></script>
+  <script defer src="cells/left-grille/acoustic-controller.js"></script>
+  <script defer src="cells/left-grille/ui.js"></script>
 </body>
 </html>

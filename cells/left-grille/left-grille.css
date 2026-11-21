@@ -1,0 +1,807 @@
+/* ==========================================================================
+   Cell 05 — Left Grille Acoustic Swipe Sonar (`cells/left-grille/left-grille.css`)
+   Strictly scoped to `.cell--left-grille`, `.lg-secondary-page`, and
+   `::view-transition-*(lg-stage-portal)` so `.grid` and sibling cells stay pure.
+   ========================================================================== */
+
+:root {
+  --lg-bg: #ffffff;
+  --lg-well: #f5f5f3;
+  --lg-well-border: #e4e4e0;
+  --lg-border: #e5e5e5;
+  --lg-ink: #141413;
+  --lg-ink-sec: #52524e;
+  --lg-ink-muted: #70706b; /* >= 4.8:1 WCAG AA contrast on #ffffff */
+  --lg-up: #0052cc;        /* Approaching Blueshift Cobalt (>= 6.3:1 on white) */
+  --lg-up-soft: rgba(0, 82, 204, 0.11);
+  --lg-down: #c93700;      /* Receding Braun Vermilion (>= 5.4:1 on white) */
+  --lg-down-soft: rgba(201, 55, 0, 0.11);
+  --lg-ok: #047857;
+  --lg-ok-soft: rgba(4, 120, 87, 0.12);
+  --lg-amber: #9a4700;
+  --lg-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --lg-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+main.grid[hidden],
+.lg-secondary-page[hidden] {
+  display: none !important;
+}
+
+/* Spatial Homothety View Transition (Cell 05 <-> Secondary 3x3 Grid) */
+::view-transition-old(lg-stage-portal),
+::view-transition-new(lg-stage-portal) {
+  animation-duration: 280ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  object-fit: cover;
+  object-position: left top;
+  overflow: clip;
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(lg-stage-portal),
+  ::view-transition-new(lg-stage-portal) {
+    animation-duration: 1ms;
+  }
+}
+
+/* ==========================================================================
+   1. MAIN GRID PORTAL CELL (`#cell-left-grille`)
+   ========================================================================== */
+
+.cell--left-grille {
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  font-family: var(--lg-sans);
+  color: var(--lg-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lg-portal-btn {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: var(--lg-bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: clamp(10px, 4.2cqw, 18px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.lg-portal-btn:hover {
+  background: #fcfcfb;
+}
+
+.lg-portal-btn:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: -3px;
+}
+
+.lg-portal-top,
+.lg-portal-bottom {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lg-kicker {
+  font-family: var(--lg-mono);
+  font-size: clamp(9px, 2.5cqw, 11px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--lg-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lg-portal-arrow {
+  font-family: var(--lg-mono);
+  font-size: clamp(11px, 3cqw, 14px);
+  color: var(--lg-ink-sec);
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), color 150ms ease;
+}
+
+.lg-portal-btn:hover .lg-portal-arrow,
+.lg-portal-btn:focus-visible .lg-portal-arrow {
+  transform: translate(2px, -2px);
+  color: var(--lg-down);
+}
+
+.lg-portal-graphic {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-block: 4px;
+}
+
+.lg-portal-svg {
+  height: 100%;
+  max-height: clamp(64px, 42cqw, 168px);
+  width: auto;
+  overflow: visible;
+}
+
+.lg-portal-needle {
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.lg-portal-btn:hover .lg-portal-needle,
+.lg-portal-btn:focus-visible .lg-portal-needle {
+  transform: translateY(-28px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lg-portal-needle,
+  .lg-portal-arrow {
+    transition: none;
+  }
+}
+
+.lg-portal-title-group {
+  min-width: 0;
+}
+
+.lg-portal-title {
+  font-size: clamp(12px, 3.4cqw, 15px);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--lg-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-portal-sub {
+  font-size: clamp(10px, 2.5cqw, 12px);
+  color: var(--lg-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-portal-spec {
+  font-family: var(--lg-mono);
+  font-size: clamp(9px, 2.3cqw, 11px);
+  color: var(--lg-ink-sec);
+  background: var(--lg-well);
+  border: 1px solid var(--lg-well-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+@container (max-width: 230px) {
+  .lg-portal-sub,
+  .lg-portal-spec {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   2. SECONDARY PAGE SHELL & BACK NAVIGATION BAR
+   ========================================================================== */
+
+.lg-secondary-page {
+  width: 100%;
+  font-family: var(--lg-sans);
+  color: var(--lg-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.lg-nav-bar {
+  width: 100%;
+  max-width: min(92vw, 1600px);
+  margin: 0 auto 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.lg-nav-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.lg-back-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--lg-border);
+  background: #ffffff;
+  color: var(--lg-ink);
+  font-family: var(--lg-sans);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+/* Invisible 44px touch target expansion without pushing layout */
+.lg-back-btn::after {
+  content: "";
+  position: absolute;
+  inset: -8px -4px;
+}
+
+.lg-back-btn:hover {
+  background: var(--lg-well);
+  border-color: #d4d4d0;
+}
+
+.lg-back-btn:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: 2px;
+}
+
+.lg-breadcrumb {
+  font-family: var(--lg-mono);
+  font-size: 11px;
+  color: var(--lg-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-kbd-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--lg-mono);
+  font-size: 11px;
+  color: var(--lg-ink-muted);
+}
+
+.lg-kbd-hint kbd {
+  font-family: var(--lg-mono);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--lg-border);
+  background: #ffffff;
+  color: var(--lg-ink-sec);
+}
+
+@media (max-width: 560px) {
+  .lg-kbd-hint {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   3. SECONDARY GRID CELL 1 — LEFT GRILLE INSTRUMENT (`#lg-sec-cell-1`)
+   Strict `aspect-ratio: 4 / 3` lock via `position: absolute; inset: 0;`
+   ========================================================================== */
+
+.lg-instrument-cell {
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.lg-inst-stage {
+  position: absolute;
+  inset: 0;
+  padding: clamp(7px, 2.4cqw, 12px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  row-gap: clamp(5px, 1.8cqw, 9px);
+  background: var(--lg-bg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Top Micro-Bezel */
+.lg-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.lg-bezel-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.lg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(20px, 5.4cqw, 24px);
+  padding: 0 clamp(6px, 1.8cqw, 9px);
+  border-radius: 5px;
+  border: 1px solid var(--lg-well-border);
+  background: var(--lg-well);
+  color: var(--lg-ink);
+  font-family: var(--lg-mono);
+  font-size: clamp(9px, 2.3cqw, 11px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.lg-btn:hover {
+  background: #ecece8;
+}
+
+.lg-btn:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: 1px;
+}
+
+.lg-btn--arm[data-armed="true"] {
+  background: var(--lg-ink);
+  border-color: var(--lg-ink);
+  color: #ffffff;
+}
+
+.lg-btn--sonar[aria-pressed="true"] {
+  border-color: rgba(0, 82, 204, 0.35);
+  color: var(--lg-up);
+  background: var(--lg-up-soft);
+}
+
+.lg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9c9c96;
+  flex: 0 0 auto;
+}
+
+.lg-btn--arm[data-armed="true"] .lg-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+}
+
+.lg-status-pill {
+  font-family: var(--lg-mono);
+  font-size: clamp(8.5px, 2.1cqw, 10.5px);
+  color: var(--lg-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.lg-status-pill[data-veto="true"] {
+  color: var(--lg-amber);
+  font-weight: 600;
+}
+
+/* Main 2-Column Instrument Body: 22% Physical Left Grille + 78% Readout & Scope */
+.lg-body {
+  display: grid;
+  grid-template-columns: minmax(52px, 22%) minmax(0, 1fr);
+  column-gap: clamp(7px, 2.4cqw, 12px);
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Left Column: Physical 11.0 cm Left-Grille Vernier Rail */
+.lg-rail-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: var(--lg-well);
+  border: 1px solid var(--lg-well-border);
+  border-radius: 6px;
+  padding: 5px 6px;
+  min-height: 0;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.lg-rail-wrap:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: 1px;
+}
+
+.lg-rail-cap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--lg-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9.5px);
+  font-weight: 600;
+  color: var(--lg-ink-muted);
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+
+.lg-rail-track {
+  position: relative;
+  flex: 1 1 auto;
+  margin-block: 4px;
+  border-radius: 4px;
+  background: #eaeae6;
+  overflow: hidden;
+}
+
+/* Perforation pattern: dark top CNC through-holes (8-22%) + subtle blind dimples (28-96%) */
+.lg-rail-holes {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.lg-mic-zone-badge {
+  position: absolute;
+  top: 14%;
+  right: 3px;
+  transform: translateY(-50%);
+  font-family: var(--lg-mono);
+  font-size: 7.5px;
+  font-weight: 700;
+  color: var(--lg-ink-sec);
+  background: rgba(255, 255, 255, 0.84);
+  padding: 0 3px;
+  border-radius: 2px;
+  pointer-events: none;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+
+.lg-rail-track[data-pinhole-lock="true"] .lg-mic-zone-badge {
+  background: var(--lg-down);
+  color: #ffffff;
+}
+
+/* Stroke start->end span ribbon */
+.lg-span-ribbon {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0%;
+  background: var(--lg-up-soft);
+  border-block: 1px dashed rgba(0, 82, 204, 0.35);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 180ms ease;
+}
+
+.lg-span-ribbon[data-dir="down"] {
+  background: var(--lg-down-soft);
+  border-block-color: rgba(201, 55, 0, 0.35);
+}
+
+.lg-span-ribbon[data-visible="true"] {
+  opacity: 1;
+}
+
+/* Heteroscedastic +-1 sigma uncertainty band */
+.lg-sigma-band {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: 16%;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  background: rgba(20, 20, 19, 0.08);
+  pointer-events: none;
+  transition: height 90ms linear, top 45ms linear;
+}
+
+/* 2px high-contrast vernier needle */
+.lg-needle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2.5px;
+  transform: translateY(-50%);
+  background: var(--lg-ink);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+
+.lg-needle[data-dir="up"] {
+  background: var(--lg-up);
+}
+
+.lg-needle[data-dir="down"] {
+  background: var(--lg-down);
+}
+
+/* Right Column: 3 Calm Swiss Telemetry Tiers */
+.lg-telemetry {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  row-gap: clamp(4px, 1.5cqw, 8px);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Tier 1: Hero Direction + Speed */
+.lg-tier-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 6px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.lg-card {
+  background: var(--lg-well);
+  border: 1px solid var(--lg-well-border);
+  border-radius: 6px;
+  padding: clamp(5px, 1.8cqw, 8px) clamp(6px, 2cqw, 10px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.lg-label {
+  font-family: var(--lg-mono);
+  font-size: clamp(8px, 2cqw, 9.5px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--lg-ink-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lg-dir-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 2px;
+  min-width: 0;
+}
+
+.lg-dir-text {
+  font-size: clamp(13px, 4.2cqw, 20px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--lg-ink);
+  white-space: nowrap;
+}
+
+.lg-dir-text[data-dir="up"] {
+  color: var(--lg-up);
+}
+
+.lg-dir-text[data-dir="down"] {
+  color: var(--lg-down);
+}
+
+.lg-conf-badge {
+  font-family: var(--lg-mono);
+  font-size: clamp(8.5px, 2.1cqw, 10.5px);
+  font-variant-numeric: tabular-nums;
+  color: var(--lg-ink-sec);
+  white-space: nowrap;
+}
+
+.lg-speed-val {
+  font-family: var(--lg-mono);
+  font-size: clamp(13px, 4.1cqw, 19px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--lg-ink);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.lg-speed-unit {
+  font-size: 0.65em;
+  font-weight: 500;
+  color: var(--lg-ink-muted);
+}
+
+.lg-sub-meta {
+  font-family: var(--lg-mono);
+  font-size: clamp(8px, 1.9cqw, 9.5px);
+  font-variant-numeric: tabular-nums;
+  color: var(--lg-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+/* Tier 2: Dual-Reference Relative Distance (From Top & From Bottom) */
+.lg-tier-dist {
+  background: var(--lg-well);
+  border: 1px solid var(--lg-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.5cqw, 7px) clamp(6px, 2cqw, 10px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lg-dist-pair {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(6px, 2.2cqw, 12px);
+  font-family: var(--lg-mono);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.lg-dist-item {
+  font-size: clamp(9.5px, 2.5cqw, 12px);
+  color: var(--lg-ink);
+  white-space: nowrap;
+}
+
+.lg-dist-item strong {
+  font-weight: 700;
+}
+
+.lg-dist-tag {
+  font-size: 0.82em;
+  color: var(--lg-ink-muted);
+}
+
+.lg-sim-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.lg-mini-btn {
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--lg-border);
+  background: #ffffff;
+  color: var(--lg-ink-sec);
+  font-family: var(--lg-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.lg-mini-btn:hover {
+  background: #f0f0ec;
+  color: var(--lg-ink);
+}
+
+.lg-mini-btn:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: 1px;
+}
+
+/* Tier 3: Live 2-Trace Acoustic Trajectory & Doppler Scope */
+.lg-scope-box {
+  position: relative;
+  background: var(--lg-well);
+  border: 1px solid var(--lg-well-border);
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+.lg-scope-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.lg-scope-caption {
+  position: absolute;
+  left: 6px;
+  bottom: 4px;
+  right: 6px;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-family: var(--lg-mono);
+  font-size: 8.5px;
+  color: var(--lg-ink-muted);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* Calibration / Error Inline Banner inside Scope Box (zero vertical overflow!) */
+.lg-inline-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(3px);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  z-index: 3;
+}
+
+.lg-inline-overlay[hidden] {
+  display: none !important;
+}
+
+.lg-overlay-text {
+  font-size: clamp(9.5px, 2.4cqw, 11.5px);
+  line-height: 1.3;
+  color: var(--lg-ink);
+}
+
+.lg-overlay-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.lg-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Responsive Container Breakpoints for Narrow 4:3 Cells */
+@container (max-width: 335px) {
+  .lg-btn--sonar,
+  .lg-sub-meta,
+  .lg-scope-caption {
+    display: none;
+  }
+  .lg-sim-actions .lg-mini-btn--flip {
+    display: none;
+  }
+}
+
+@container (max-width: 245px) {
+  .lg-scope-box,
+  .lg-sim-actions,
+  .lg-conf-badge {
+    display: none;
+  }
+  .lg-telemetry {
+    grid-template-rows: auto auto;
+    align-content: center;
+  }
+}
