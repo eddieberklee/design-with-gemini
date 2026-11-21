@@ -1,0 +1,829 @@
+/* ==========================================================================
+   ui/base.css — shared design system for design-with-gemini
+   Loaded first in index.html, before every cell stylesheet.
+
+   Contains only:
+     1. Tokens on :root (--ui-*).
+     2. Page-level rules (moved from index.html's inline <style>).
+     3. Opt-in classes under the ui- prefix (tile anatomy + controls).
+     4. The tooltip bubble (.ui-tip, created by ui/tooltip.js).
+   It never targets a cell class. Loading it changes no cell until the cell
+   uses a ui- class or a --ui- token. Contract and markup: ui/NOTES.md.
+   ========================================================================== */
+
+/* 1. Tokens ---------------------------------------------------------------- */
+
+:root {
+  /* Surfaces */
+  --ui-paper: #f5f5f3;        /* page */
+  --ui-surface: #ffffff;      /* tile, dialog, control face */
+  --ui-well: #f7f7f5;         /* sunken stage inside a tile */
+
+  /* Ink (contrast on --ui-surface / --ui-well) */
+  --ui-ink: #161615;          /* 18.1 / 16.9 */
+  --ui-ink-2: #4f4f4b;        /*  8.2 /  7.7 */
+  --ui-ink-3: #66665f;        /*  5.8 /  5.4  — smallest text allowed */
+
+  /* Lines */
+  --ui-hairline: #e5e5e2;     /* tile borders, dividers */
+  --ui-line: #d3d3ce;         /* control outlines */
+
+  /* Signal colours. Accent = live or needs attention. Positive = really connected. */
+  --ui-accent: #b4441a;       /* 5.6 on surface, 4.9 on its tint */
+  --ui-accent-tint: #fbeee8;
+  --ui-positive: #087250;     /* 5.9 on surface, 5.3 on its tint */
+  --ui-positive-tint: #e8f5ee;
+
+  /* Focus */
+  --ui-focus: #2f62d8;
+  --ui-ring: 2px solid var(--ui-focus);
+
+  /* Type: system stacks only (no downloads) */
+  --ui-sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --ui-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --ui-fs-1: 10px;            /* mono caps labels, pills, keycaps */
+  --ui-fs-2: 11.5px;          /* controls, secondary readouts, small prose */
+  --ui-fs-3: 13px;            /* tile titles, prose */
+  --ui-fs-4: 16px;            /* studio titles, secondary heroes */
+  --ui-fs-5: 24px;            /* hero readouts */
+  --ui-caps-track: 0.06em;
+
+  /* Space: 4 px scale */
+  --ui-1: 4px;
+  --ui-2: 8px;
+  --ui-3: 12px;
+  --ui-4: 16px;
+  --ui-6: 24px;
+
+  /* Radii: two only (pills use 999px, a shape, not a radius step) */
+  --ui-radius-sm: 5px;        /* controls, wells, chips-in-boxes */
+  --ui-radius: 8px;           /* tiles, dialogs */
+
+  /* Anatomy */
+  --ui-head-h: 36px;
+  --ui-foot-h: 30px;
+  --ui-ctl-h: 28px;           /* minimum hit target in tiles */
+  --ui-ctl-h-sm: 24px;        /* visible height of compact controls; hit area stays 28 */
+  --ui-grid-gap: 4px;         /* cells/motion/motion.css fixed3 math assumes 4px */
+
+  /* Motion */
+  --ui-dur: 150ms;
+  --ui-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Elevation (popovers, tooltip, dialogs only) */
+  --ui-shadow-pop: 0 8px 24px rgba(22, 22, 21, 0.14), 0 1px 3px rgba(22, 22, 21, 0.12);
+}
+
+/* 2. Page ------------------------------------------------------------------ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  min-height: 100dvh;
+  background: var(--ui-paper);
+  padding: clamp(16px, 3vw, 40px);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-grid-gap);
+  width: 100%;
+  max-width: min(92vw, 1600px);
+  margin-inline: auto;
+}
+
+@media (min-width: 768px) {
+  .grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.cell {
+  aspect-ratio: 4 / 3;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius);
+}
+
+/* 3. Opt-in classes ---------------------------------------------------------- */
+
+/* 3.1 Tile anatomy: head (36) / body (rest) / optional foot (30) ------------ */
+
+.ui-tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+  container: ui-tile / inline-size;
+  font-family: var(--ui-sans);
+  color: var(--ui-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.ui-tile-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-2);
+  height: var(--ui-head-h);
+  padding: 0 var(--ui-2) 0 var(--ui-3);
+  border-bottom: 1px solid var(--ui-hairline);
+  min-width: 0;
+}
+
+.ui-tile-index {
+  flex: 0 0 auto;
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ui-caps-track);
+  color: var(--ui-ink-3);
+}
+
+.ui-tile-step {            /* Decisions strip: "1 · INPUT" in place of the index */
+  flex: 0 1 auto;
+  min-width: 0;
+  font: 600 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-tile-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  font: 600 var(--ui-fs-3) / 1.2 var(--ui-sans);
+  letter-spacing: -0.005em;
+  color: var(--ui-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-tile-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.ui-tile-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-2);
+  padding: var(--ui-3);
+}
+
+.ui-tile-body--flush {
+  padding: 0;
+  gap: 0;
+}
+
+.ui-tile-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-2);
+  height: var(--ui-foot-h);
+  padding: 0 var(--ui-2) 0 var(--ui-3);
+  border-top: 1px solid var(--ui-hairline);
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.02em;
+  color: var(--ui-ink-3);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ui-tile-foot > :last-child:not(:first-child) {
+  margin-left: auto;
+}
+
+.ui-truncate {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Whole tile as one button (API Matrix, Left Grille portal). */
+.ui-tile-trigger {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  cursor: pointer;
+  border-radius: inherit;
+  text-align: left;
+}
+
+.ui-tile-trigger:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: -3px;
+}
+
+.ui-tile:has(> .ui-tile-trigger:hover) {
+  border-color: var(--ui-line);
+}
+
+/* 3.2 Buttons ---------------------------------------------------------------- */
+
+.ui-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+  height: var(--ui-ctl-h);
+  padding: 0 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease),
+    color var(--ui-dur) var(--ui-ease), transform var(--ui-dur) var(--ui-ease);
+}
+
+.ui-btn:hover {
+  background: var(--ui-well);
+  border-color: var(--ui-ink-3);
+}
+
+.ui-btn:active {
+  transform: translateY(0.5px);
+}
+
+.ui-btn[aria-pressed="true"],
+.ui-btn[aria-expanded="true"] {
+  background: var(--ui-well);
+  border-color: var(--ui-ink);
+  color: var(--ui-ink);
+}
+
+.ui-btn--sm {
+  height: var(--ui-ctl-h-sm);
+  padding: 0 8px;
+}
+
+/* Hit areas: every control reaches 28 px high even when it looks smaller. */
+.ui-btn--sm::after,
+.ui-chip::after,
+.ui-pill:is(button, a)::after,
+.ui-seg > button::after {
+  content: "";
+  position: absolute;
+}
+
+.ui-btn--sm::after,
+.ui-chip::after {
+  inset: -3px 0;                  /* 24 visible + 1px borders -> 28+ hit */
+}
+
+.ui-pill:is(button, a)::after {
+  inset: -5px -2px;               /* 20 visible -> 30 x (w+4) hit */
+}
+
+.ui-seg > button::after {
+  inset: -3px -1px;               /* 22 inside the 28 px track -> fills it */
+}
+
+.ui-btn--icon {
+  width: var(--ui-ctl-h);
+  padding: 0;
+}
+
+.ui-btn--sm.ui-btn--icon {
+  width: var(--ui-ctl-h-sm);
+}
+
+.ui-btn--primary {
+  background: var(--ui-ink);
+  border-color: var(--ui-ink);
+  color: var(--ui-surface);
+  border-radius: 999px;
+  padding: 0 14px;
+  font-weight: 600;
+}
+
+.ui-btn--primary:hover {
+  background: #2e2e2c;
+  border-color: #2e2e2c;
+}
+
+.ui-btn--primary[aria-pressed="true"] {   /* primary toggle that is running (e.g. mic on) */
+  background: var(--ui-accent);
+  border-color: var(--ui-accent);
+  color: var(--ui-surface);
+}
+
+.ui-btn--quiet {                    /* text-only action, e.g. "JSON ↗" in a foot */
+  border-color: transparent;
+  background: transparent;
+  color: var(--ui-ink-2);
+}
+
+.ui-btn--quiet:hover {
+  border-color: transparent;
+  background: var(--ui-well);
+  color: var(--ui-ink);
+}
+
+.ui-btn:disabled,
+.ui-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  background: var(--ui-surface);
+  border-color: var(--ui-hairline);
+  color: var(--ui-ink-3);
+  transform: none;
+}
+
+/* 3.3 Segmented control -------------------------------------------------------- */
+
+.ui-seg {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  height: var(--ui-ctl-h);
+  padding: 2px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
+  min-width: 0;
+}
+
+.ui-seg > button {
+  appearance: none;
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--ui-radius-sm) - 2px);
+  background: transparent;
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease), color var(--ui-dur) var(--ui-ease),
+    box-shadow var(--ui-dur) var(--ui-ease);
+}
+
+.ui-seg > button:hover {
+  color: var(--ui-ink);
+}
+
+.ui-seg > button:is([aria-pressed="true"], [aria-selected="true"], [aria-checked="true"]) {
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  box-shadow: 0 0 0 1px var(--ui-line), 0 1px 1px rgba(22, 22, 21, 0.05);
+}
+
+.ui-seg--mono > button {
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* 3.4 Status pill: dot + label --------------------------------------------------
+   data-tone="idle" (default, grey) | "attention" (rust) | "ok" (green: only when
+   something is really connected) */
+
+.ui-pill {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.ui-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ui-ink-3);
+  flex: 0 0 auto;
+}
+
+.ui-pill[data-tone="attention"] {
+  color: var(--ui-accent);
+  border-color: color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  background: var(--ui-accent-tint);
+}
+
+.ui-pill[data-tone="attention"]::before {
+  background: var(--ui-accent);
+}
+
+.ui-pill[data-tone="ok"] {
+  color: var(--ui-positive);
+  border-color: color-mix(in srgb, var(--ui-positive) 30%, transparent);
+  background: var(--ui-positive-tint);
+}
+
+.ui-pill[data-tone="ok"]::before {
+  background: var(--ui-positive);
+}
+
+.ui-pill:is(button, a) {
+  cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease);
+}
+
+.ui-pill:is(button, a):hover {
+  border-color: var(--ui-line);
+}
+
+/* 3.5 Chip -------------------------------------------------------------------------- */
+
+.ui-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  height: var(--ui-ctl-h-sm);
+  padding: 0 10px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: 999px;
+  background: var(--ui-surface);
+  color: var(--ui-ink-2);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-sans);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease), color var(--ui-dur) var(--ui-ease),
+    background-color var(--ui-dur) var(--ui-ease);
+}
+
+.ui-chip:hover {
+  border-color: var(--ui-line);
+  color: var(--ui-ink);
+}
+
+.ui-chip[aria-pressed="true"] {
+  border-color: var(--ui-ink);
+  color: var(--ui-ink);
+}
+
+/* 3.6 Slider (input type=range) ------------------------------------------------------ */
+
+.ui-slider {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  height: var(--ui-ctl-h);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  accent-color: var(--ui-ink);
+}
+
+.ui-slider::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-line);
+}
+
+.ui-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--ui-surface);
+  background: var(--ui-ink);
+  box-shadow: 0 0 0 1px var(--ui-ink), 0 1px 2px rgba(22, 22, 21, 0.2);
+  transition: transform var(--ui-dur) var(--ui-ease);
+}
+
+.ui-slider:active::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+.ui-slider::-moz-range-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-line);
+}
+
+.ui-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--ui-surface);
+  background: var(--ui-ink);
+  box-shadow: 0 0 0 1px var(--ui-ink);
+}
+
+.ui-slider:focus-visible {
+  outline: none;
+}
+
+.ui-slider:focus-visible::-webkit-slider-thumb {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
+}
+
+.ui-slider:focus-visible::-moz-range-thumb {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
+}
+
+/* 3.7 Readouts and labels ------------------------------------------------------------- */
+
+.ui-label {
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
+}
+
+.ui-readout {
+  font: 500 var(--ui-fs-2) / 1.2 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-ink);
+  white-space: nowrap;
+}
+
+.ui-readout--quiet {
+  color: var(--ui-ink-3);
+  font-weight: 400;
+}
+
+.ui-readout--hero {
+  font: 500 var(--ui-fs-5) / 1 var(--ui-mono);
+  letter-spacing: -0.02em;
+}
+
+.ui-readout-unit {
+  font-size: 0.55em;
+  font-weight: 400;
+  color: var(--ui-ink-3);
+  margin-left: 0.25em;
+  letter-spacing: 0;
+}
+
+.ui-kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 4px;
+  border: 1px solid var(--ui-line);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--ui-surface);
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+}
+
+.ui-well {
+  background: var(--ui-well);
+  border-radius: var(--ui-radius-sm);
+}
+
+.ui-sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 3.8 Secondary surfaces (studio pages and dialogs) ------------------------------------ */
+
+.ui-studio-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-3);
+  min-height: 48px;
+  padding: var(--ui-2) var(--ui-4);
+  border-bottom: 1px solid var(--ui-hairline);
+  background: var(--ui-surface);
+  font-family: var(--ui-sans);
+  color: var(--ui-ink);
+  min-width: 0;
+}
+
+.ui-studio-title {
+  min-width: 0;
+  font: 600 var(--ui-fs-4) / 1.2 var(--ui-sans);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-studio-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-2);
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ui-dialog {
+  padding: 0;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  box-shadow: var(--ui-shadow-pop);
+  max-width: min(1120px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  font-family: var(--ui-sans);
+}
+
+.ui-dialog::backdrop {
+  background: rgba(22, 22, 21, 0.28);
+}
+
+/* 3.9 Container steps. Kept after every control rule so they win ties. ------------ */
+
+/* Compact (< 320 px tile): foot and secondary controls go. */
+@container ui-tile (max-width: 319px) {
+  .ui-tile-foot,
+  .ui-hide-compact {
+    display: none !important;
+  }
+
+  .ui-tile-head {
+    padding: 0 6px 0 var(--ui-2);
+    gap: 6px;
+  }
+
+  .ui-tile-body {
+    padding: var(--ui-2);
+  }
+}
+
+/* Tiny (< 240 px tile, the 2-column phone layout): header + hero only. */
+@container ui-tile (max-width: 239px) {
+  .ui-hide-tiny {
+    display: none !important;
+  }
+
+  .ui-tile-head {
+    height: 30px;
+  }
+
+  .ui-tile-title {
+    font-size: var(--ui-fs-2);
+  }
+
+  .ui-pill .ui-pill-label {        /* status collapses to its dot; tip + aria keep the words */
+    display: none;
+  }
+
+  .ui-pill {
+    padding: 0;
+    width: 20px;
+    justify-content: center;
+  }
+
+  .ui-pill:is(button, a)::after {
+    inset: -5px -5px;             /* dot-only pill still has a 30 x 30 hit area */
+  }
+}
+
+/* 3.10 Focus ------------------------------------------------------------------------------ */
+
+:is(.ui-btn, .ui-chip, .ui-pill, .ui-seg > button):focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
+}
+
+/* 4. Tooltip (bubble created by ui/tooltip.js) -------------------------------------------
+   No display value on the base rule: the browser's [popover] closed state must stay
+   display:none. Layout display lives only on the open states. */
+
+.ui-tip {
+  position: fixed;
+  inset: auto;
+  left: 0;
+  top: 0;
+  z-index: 2147483647;
+  margin: 0;
+  padding: 6px 9px;
+  width: max-content;
+  max-width: min(260px, calc(100vw - 16px));
+  height: auto;
+  border: 0;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-ink);
+  color: var(--ui-surface);
+  box-shadow: var(--ui-shadow-pop);
+  font: 400 12px / 1.4 var(--ui-sans);
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ui-tip:not([popover]):not(.is-open) {
+  display: none;
+}
+
+.ui-tip:popover-open,
+.ui-tip.is-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: ui-tip-in 120ms var(--ui-ease);
+}
+
+.ui-tip[data-switch] {
+  animation: none;
+}
+
+.ui-tip[data-placement="bottom"] {
+  --ui-tip-dy: -3px;
+}
+
+.ui-tip-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;           /* adopted titles can be whole paragraphs */
+  overflow: hidden;
+  min-width: 0;
+}
+
+.ui-tip-key {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ui-ink);
+  font: 600 var(--ui-fs-1) / 1 var(--ui-mono);
+}
+
+.ui-tip-key[hidden] {
+  display: none;
+}
+
+@keyframes ui-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--ui-tip-dy, 3px));
+  }
+}
+
+/* 5. Reduced motion ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn,
+  .ui-seg > button,
+  .ui-pill,
+  .ui-chip,
+  .ui-slider::-webkit-slider-thumb {
+    transition: none;
+  }
+
+  .ui-tip:popover-open,
+  .ui-tip.is-open {
+    animation: none;
+  }
+}
