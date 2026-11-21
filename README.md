@@ -7,6 +7,7 @@ Interactive 3×3 grid of focused Gemini capability prototypes. Open [`index.html
 | # | Prototype | Directory & Docs |
 | :--- | :--- | :--- |
 | **01** | **Gemini Decisions API** (`gemini-decision-1`) — calibrated `noul`, `choice`, and `score` single-pass zero-output-token instrument with multimodal image+text specimens, A/B perturbation, live schema builder, and wire JSON/cURL inspector | [`cells/decisions/`](cells/decisions/) · [`NOTES.md`](cells/decisions/NOTES.md) |
+| **02** | **Voice Prosody Button Sizer** (`gemini-2.5-flash` native audio) — maps vocal stress, elongation, and tone directly to a centered button's scale with live waveform capture, ghost-outline delta comparison, and instant prosody demo chips | [`cells/prosody/`](cells/prosody/) · [`NOTES.md`](cells/prosody/NOTES.md) |
 
 ## License
 
