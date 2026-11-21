@@ -8,6 +8,8 @@
   'use strict';
 
   var CARRIER_HZ = 19000;
+  var CELL_NUMBER = '06';
+  var AUDIO_RESUME_TIMEOUT_MS = 2000;
   var FEATURE_SCALES = [6.0, 4.5, 0.40, 0.30, 0.25, 0.35];
   var FEATURE_NAMES = [
     'Env Slope',
@@ -1193,6 +1195,60 @@
     return URL.createObjectURL(blob);
   }
 
+  // Only a constraint failure is worth a relaxed second getUserMedia. Retrying after
+  // NotAllowedError / NotFoundError re-prompts (Safari, Firefox) or just fails twice.
+  function isConstraintError(err) {
+    var name = err && err.name;
+    return name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError' || name === 'TypeError';
+  }
+
+  function armErrorMessage(err) {
+    var name = (err && err.name) || 'Error';
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+      return 'Microphone permission denied (' + name + '). Allow mic access, then Arm again, or try Demo ↑↓.';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'No microphone found (' + name + '). Try Demo ↑↓.';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+      return 'Microphone busy or unavailable (' + name + '). Free it in other apps, then Arm again.';
+    }
+    if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+      return 'Selected microphone is unavailable (' + name + '). Pick another input.';
+    }
+    if (name === 'AudioResumeTimeout') {
+      return 'Browser kept audio suspended (autoplay policy). Click Arm Mic again.';
+    }
+    return 'Audio start failed (' + name + '). Try Demo ↑↓.';
+  }
+
+  // AudioContext.resume() stays pending forever when the browser will not start audio
+  // (no user activation). Resolve true once running, false at the ceiling or on rejection.
+  function resumeWithCeiling(ctx, ms) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = null;
+      var finish = function (ok) {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        resolve(ok);
+      };
+      timer = setTimeout(function () { finish(ctx.state === 'running'); }, ms);
+      var p;
+      try {
+        p = ctx.resume();
+      } catch (_) {
+        finish(false);
+        return;
+      }
+      Promise.resolve(p).then(
+        function () { finish(ctx.state === 'running'); },
+        function () { finish(false); }
+      );
+    });
+  }
+
   // =========================================================================
   // Interactive Browser UI Controller for Cell 06 (#cell-grille-swipe)
   // =========================================================================
@@ -1204,10 +1260,9 @@
       ? window.matchMedia('(prefers-reduced-motion: reduce)')
       : { matches: false };
 
-    var slotIndex = cellEl.parentElement
-      ? Array.prototype.indexOf.call(cellEl.parentElement.children, cellEl) + 1
-      : 6;
-    var numPrefix = String(slotIndex > 0 ? slotIndex : 6).padStart(2, '0');
+    // README numbering: the 3-tile Decisions triptych counts as 01, so this cell is 06
+    // even though it is the 8th child of main.grid. Never derive it from DOM position.
+    var numPrefix = CELL_NUMBER;
 
     cellEl.innerHTML = [
       '<div class="ag-shell" role="region" aria-label="16-inch MacBook Pro Right Grille Acoustic Swipe Instrument">',
@@ -1331,6 +1386,10 @@
     var deviceChangeTimer = null;
     var demoSeedSeq = 0;
     var loadedCalKey = '';
+    var pendingArmCleanup = null; // cleanupLocal of the in-flight armAudio, released when superseded
+    var toastOwner = ''; // '' | 'cal' | 'demo' | 'session': lets a toast clear when its condition ends
+    var focusReturnEl = null;
+    var calSnapshot = null; // { slots, model } taken when a Cal run starts; restored on cancel
 
     var state = {
       expanded: false,
@@ -1365,6 +1424,8 @@
       workletUrl: null,
       idleSleepTimer: null,
       sonarSleeping: false,
+      probePending: false, // a loopback probe config was sent and no probe result has arrived
+      reprobeOnVisible: false, // hiding cancelled (or deferred) a probe: re-run it when visible
       scrubDragging: false,
       lastDragY: 0
     };
@@ -1412,6 +1473,7 @@
         return;
       }
       loadedCalKey = key;
+      calSnapshot = null;
       state.calSlots = [null, null, null, null];
       state.ldaModel = null;
       state.calActiveSlot = -1;
@@ -1472,14 +1534,24 @@
       }
     }
 
-    function showToast(msg, tone) {
+    function showToast(msg, tone, owner) {
       els.toastText.textContent = msg;
       els.toast.dataset.tone = tone || 'info';
       els.toast.hidden = false;
+      toastOwner = owner || '';
     }
 
     function hideToast() {
       els.toast.hidden = true;
+      toastOwner = '';
+    }
+
+    function hideToastOwnedBy(owner) {
+      if (toastOwner === owner && !els.toast.hidden) hideToast();
+    }
+
+    function isDocHidden() {
+      return typeof document !== 'undefined' && !!document.hidden;
     }
 
     function resetIdleWatchdog() {
@@ -1521,25 +1593,55 @@
       }
     }
 
+    // Any non-probe config cancels an in-flight engine probe, so a pending probe is re-sent
+    // instead of being replaced by operating gain that never passed the loopback check.
     function pushWorkletConfig(runProbe) {
       var canTrySonar = state.armed &&
         state.mode === 'sonar' &&
         state.grille === 'right' &&
         (!state.audioCtx || state.audioCtx.sampleRate >= 44100);
-      var wantSonar = canTrySonar && (!!runProbe || state.sonarCoupled) && !state.sonarSleeping;
+      var probeWanted = !!runProbe || state.probePending;
+      var wantSonar = canTrySonar && (probeWanted || state.sonarCoupled) && !state.sonarSleeping;
+      var probe = !!(wantSonar && probeWanted);
+      if (wantSonar && isDocHidden()) {
+        // Never emit the tone from a hidden tab; onVisChange restores it (and the probe).
+        if (probe) state.reprobeOnVisible = true;
+        wantSonar = false;
+        probe = false;
+      } else if (state.probePending && !probe) {
+        // Sonar was switched off mid-probe: coupling is unknown again, so the next
+        // switch back to 19k Sonar must probe instead of trusting the optimistic flag.
+        state.sonarCoupled = false;
+      }
+      state.probePending = probe;
       sendWorkletRaw({
         type: 'config',
         sonar: wantSonar,
         operatingGain: state.operatingGain,
-        probe: !!(wantSonar && runProbe)
+        probe: probe
       });
+    }
+
+    function suspendForHidden() {
+      if (!state.audioCtx) return;
+      if (state.idleSleepTimer) {
+        clearTimeout(state.idleSleepTimer);
+        state.idleSleepTimer = null;
+      }
+      if (state.probePending) state.reprobeOnVisible = true;
+      state.probePending = false;
+      sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
+      state.audioCtx.suspend().catch(function () {});
     }
 
     function teardownActiveAudio(silent) {
       state.armed = false;
       state.sonarCoupled = false;
       state.sonarSleeping = false;
+      state.probePending = false;
+      state.reprobeOnVisible = false;
       state.fLive = 0;
+      hideToastOwnedBy('session');
       if (state.idleSleepTimer) {
         clearTimeout(state.idleSleepTimer);
         state.idleSleepTimer = null;
@@ -1583,6 +1685,7 @@
     async function armAudio(explicitDeviceId) {
       if (isDestroyed) return;
       var gen = ++armGen;
+      releasePendingArm(); // a superseded arm releases its stream/context now, not at its next await
       hideToast();
 
       if (typeof window !== 'undefined' && !window.isSecureContext) {
@@ -1621,6 +1724,8 @@
         }
       };
 
+      pendingArmCleanup = cleanupLocal;
+
       try {
         await teardownActiveAudio(true);
         if (isStale()) { cleanupLocal(); return; }
@@ -1638,12 +1743,16 @@
           return { audio: audio };
         };
 
-        try {
-          localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, true));
-        } catch (_) {
-          if (isStale()) { cleanupLocal(); return; }
-          localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, false));
-        }
+        var requestStream = async function (devId) {
+          try {
+            return await navigator.mediaDevices.getUserMedia(makeConstraints(devId, true));
+          } catch (gumErr) {
+            if (!isConstraintError(gumErr) || isStale()) throw gumErr;
+            return await navigator.mediaDevices.getUserMedia(makeConstraints(devId, false));
+          }
+        };
+
+        localStream = await requestStream(explicitDeviceId);
         if (isStale()) { cleanupLocal(); return; }
 
         // Enumerate devices now that labels are unlocked, and auto-switch off DJI / iPhone / AirPods!
@@ -1678,12 +1787,7 @@
               try { t.stop(); } catch (_) {}
             });
             localStream = null;
-            try {
-              localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, true));
-            } catch (_) {
-              if (isStale()) { cleanupLocal(); return; }
-              localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, false));
-            }
+            localStream = await requestStream(best.deviceId);
             if (isStale()) { cleanupLocal(); return; }
           }
         }
@@ -1694,9 +1798,14 @@
         } catch (_) {
           localCtx = new AudioCtx({ latencyHint: 'interactive' });
         }
-        if (localCtx.state === 'suspended') {
-          await localCtx.resume();
+        if (localCtx.state !== 'running') {
+          var resumed = await resumeWithCeiling(localCtx, AUDIO_RESUME_TIMEOUT_MS);
           if (isStale()) { cleanupLocal(); return; }
+          if (!resumed) {
+            var resumeErr = new Error('AudioContext stayed ' + localCtx.state + ' after ' + AUDIO_RESUME_TIMEOUT_MS + ' ms');
+            resumeErr.name = 'AudioResumeTimeout';
+            throw resumeErr;
+          }
         }
 
         // Pin output sink to MacBook Pro Speakers when supported (Chromium)
@@ -1715,6 +1824,8 @@
         var handleMsg = function (msg) {
           if (!msg || gen !== armGen || isDestroyed || !state.armed) return;
           if (msg.type === 'probe') {
+            state.probePending = false;
+            state.reprobeOnVisible = false;
             state.loopbackSnrDb = msg.snrDb;
             var prevCoupled = state.sonarCoupled;
             state.sonarCoupled = !!msg.ok;
@@ -1722,13 +1833,14 @@
               var wasCalibrating = state.calActiveSlot >= 0;
               loadCalibration(false);
               if (wasCalibrating && state.calActiveSlot < 0) {
+                calSnapshot = { slots: state.calSlots.slice(), model: state.ldaModel };
                 state.calSlots = [null, null, null, null];
                 state.ldaModel = null;
                 state.calActiveSlot = 0;
               }
             }
             if (!msg.ok && state.mode === 'sonar') {
-              showToast('19 kHz uncoupled (' + msg.snrDb.toFixed(1) + ' dB — check Mute / Headphones / Voice Isolation). Using Passive weights.', 'warn');
+              showToast('19 kHz uncoupled (' + msg.snrDb.toFixed(1) + ' dB — check Mute / Headphones / Voice Isolation). Using Passive weights.', 'warn', 'session');
             }
             syncControlsUI();
             resetIdleWatchdog();
@@ -1825,9 +1937,12 @@
         localCtx = null;
         localStream = null;
         localWorkletUrl = null;
+        if (pendingArmCleanup === cleanupLocal) pendingArmCleanup = null;
 
         state.armed = true;
         state.sonarSleeping = false;
+        state.probePending = false;
+        state.reprobeOnVisible = false;
         var sampleRateFallback = false;
         if (state.audioCtx.sampleRate < 44100) {
           state.mode = 'passive';
@@ -1843,23 +1958,34 @@
         pushWorkletConfig(runProbe);
         syncControlsUI();
         resetIdleWatchdog();
+        // A devicechange re-arm can finish while the tab is hidden: keep the 19 kHz tone and
+        // the processing graph off until visible (onVisChange re-runs any deferred probe).
+        if (isDocHidden()) suspendForHidden();
 
         if (sampleRateFallback) {
-          showToast('Sample rate ' + state.audioCtx.sampleRate + ' Hz < 44.1 kHz (Bluetooth HFP?). Switched to Passive.', 'warn');
+          showToast('Sample rate ' + state.audioCtx.sampleRate + ' Hz < 44.1 kHz (Bluetooth HFP?). Switched to Passive.', 'warn', 'session');
         } else if (state.externalMicWarn) {
-          showToast('External mic active (' + state.micLabel + '). Select MacBook Pro Microphone above.', 'warn');
+          showToast('External mic active (' + state.micLabel + '). Select MacBook Pro Microphone above.', 'warn', 'session');
         }
       } catch (err) {
         cleanupLocal();
+        if (pendingArmCleanup === cleanupLocal) pendingArmCleanup = null;
         if (isStale()) return;
         await teardownActiveAudio(true);
         syncControlsUI();
-        showToast('Microphone access blocked (' + (err && err.name ? err.name : 'Error') + '). Try Demo ↑↓.', 'warn');
+        showToast(armErrorMessage(err), 'warn');
       }
+    }
+
+    function releasePendingArm() {
+      var fn = pendingArmCleanup;
+      pendingArmCleanup = null;
+      if (fn) fn();
     }
 
     async function disarmAudio(silent) {
       armGen++;
+      releasePendingArm();
       if (deviceChangeTimer) {
         clearTimeout(deviceChangeTimer);
         deviceChangeTimer = null;
@@ -1902,14 +2028,21 @@
 
       // Veto checks
       if (feat.isTapVeto || feat.isThumpVeto || feat.isSpeechVeto) {
-        if (state.calActiveSlot >= 0) {
+        if (isSynthetic) {
+          // A Demo click must never be silently dropped: say which veto rejected the sample.
+          var demoReason = feat.isTapVeto ? 'tap veto (' + Math.round(feat.durMs) + ' ms < 88 ms)'
+            : feat.isThumpVeto ? 'desk-thump veto'
+              : 'voice-harmonic veto (spectral flatness ' + (Number.isFinite(feat.meanSfm) ? feat.meanSfm.toFixed(3) : '?') + ' < 0.19)';
+          showToast('Demo stroke rejected by ' + demoReason + '. Click again for a new sample.', 'warn', 'demo');
+        } else if (state.calActiveSlot >= 0) {
           var reason = feat.isTapVeto ? 'Tap (<88ms) ignored — glide smoothly along grille.'
             : feat.isThumpVeto ? 'Low-freq desk thump ignored — brush perforations lightly.'
               : 'Voice harmonic ignored — swipe speaker grille.';
-          showToast(reason, 'warn');
+          showToast(reason, 'warn', 'cal');
         }
         return;
       }
+      hideToastOwnedBy('demo');
 
       if (state.grille === 'right' && feat.isNearLeftGrille && !isSynthetic) {
         showToast('Near-field Left Grille 3-Mic overload detected! Swipe the RIGHT grille (or switch to L Ctrl).', 'warn');
@@ -1927,6 +2060,7 @@
         var nextMissing = state.calSlots.findIndex(function (s) { return !s; });
         state.calActiveSlot = nextMissing;
         if (nextMissing === -1) {
+          calSnapshot = null;
           recomputeCalibration();
           saveCalibration();
           hideToast();
@@ -1976,11 +2110,16 @@
           onStroke: function (f) { captured = f; }
         });
       }
-      if (captured) onDetectedStroke(captured, true);
+      if (captured) {
+        onDetectedStroke(captured, true);
+      } else {
+        showToast('Demo stroke was not detected by the onset gate. Click again for a new sample.', 'warn', 'demo');
+      }
     }
 
     function syncControlsUI() {
-      var sonarLive = state.armed && state.mode === 'sonar' && state.grille === 'right' && state.sonarCoupled && !state.sonarSleeping;
+      var sonarLive = state.armed && state.mode === 'sonar' && state.grille === 'right' && state.sonarCoupled &&
+        !state.sonarSleeping && !state.probePending && !state.reprobeOnVisible;
       els.led.dataset.state = !state.armed ? 'idle' : (state.externalMicWarn ? 'warn' : (sonarLive ? 'sonar' : 'live'));
       els.micWrap.dataset.warn = state.externalMicWarn ? 'true' : 'false';
 
@@ -1993,6 +2132,8 @@
       els.modeBtns.forEach(function (b) {
         b.setAttribute('aria-pressed', b.dataset.mode === state.mode ? 'true' : 'false');
       });
+
+      if (state.calActiveSlot < 0) hideToastOwnedBy('cal');
 
       var calDone = !!(state.ldaModel && state.ldaModel.calibrated);
       els.calBtn.dataset.active = state.calActiveSlot >= 0 ? 'true' : 'false';
@@ -2048,7 +2189,9 @@
       } else if (state.grille === 'left' || state.mode === 'passive') {
         els.loopStatus.innerHTML = '<strong>19kHz:</strong> Muted (Passive Mode)';
       } else if (state.sonarCoupled) {
-        if (state.sonarSleeping) {
+        if (state.probePending || state.reprobeOnVisible) {
+          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Loopback self-test…';
+        } else if (state.sonarSleeping) {
           els.loopStatus.innerHTML = '<strong>19kHz:</strong> Idle Sleep (swipe or click to wake)';
         } else {
           var snrTxt = state.loopbackSnrDb !== null ? ('+' + state.loopbackSnrDb.toFixed(1) + ' dB') : 'Locked';
@@ -2087,7 +2230,7 @@
     var placeholderEl = null;
     var expandToken = 0;
 
-    function applyExpandDOM(targetExpanded) {
+    function applyExpandDOM(targetExpanded, manageFocus) {
       var activeExp = !!(targetExpanded && !isDestroyed);
       if (activeExp) {
         if (!placeholderEl && cellEl.parentElement) {
@@ -2109,16 +2252,49 @@
       els.expandBtn.setAttribute('aria-label', expLabel);
       els.expandBtn.title = expLabel;
       els.expandBtn.textContent = activeExp ? '⤡' : '⤢';
+      if (manageFocus && !isDestroyed) moveFocusAfterExpand(activeExp);
       if (!isDestroyed) requestRender();
     }
 
+    function isFocusableVisible(el) {
+      return !!(el && typeof el.focus === 'function' &&
+        typeof el.getClientRects === 'function' && el.getClientRects().length > 0);
+    }
+
+    function activeEl() {
+      return typeof document !== 'undefined' ? document.activeElement : null;
+    }
+
+    // The micro CTA (and anything else that only exists in one layout) is display:none in
+    // the other, which would drop focus to <body>. Keep keyboard focus inside the cell.
+    function moveFocusAfterExpand(expanded) {
+      var ae = activeEl();
+      var focusInCell = !!(ae && cellEl.contains(ae));
+      var focusLost = !ae || (typeof document !== 'undefined' && ae === document.body);
+      if (!focusInCell && !focusLost) return;
+      var target = null;
+      if (!expanded && isFocusableVisible(focusReturnEl)) target = focusReturnEl;
+      if (!target && focusInCell && isFocusableVisible(ae)) return;
+      if (!target && isFocusableVisible(els.expandBtn)) target = els.expandBtn;
+      if (target) {
+        try { target.focus({ preventScroll: true }); } catch (_) {}
+      }
+      if (!expanded) focusReturnEl = null;
+    }
+
     // --- Toggle Expanded Empirical Workbench (Zero Sibling Grid Reflow & Race-Safe ViewTransition) ---
-    function toggleExpand(forceVal) {
+    // opts.focus === false: leave focus alone (outside-click collapse; the user moved on).
+    function toggleExpand(forceVal, opts) {
       if (isDestroyed && forceVal !== false) return;
       var next = typeof forceVal === 'boolean' ? forceVal : !state.expanded;
       if (next === state.expanded) return;
       state.expanded = next;
       var tok = ++expandToken;
+      var manageFocus = !(opts && opts.focus === false);
+      if (next) {
+        var ae = activeEl();
+        focusReturnEl = ae && cellEl.contains(ae) ? ae : null;
+      }
 
       if (
         !isDestroyed &&
@@ -2128,11 +2304,8 @@
       ) {
         try {
           var vt = document.startViewTransition(function () {
-            if (tok !== expandToken && !isDestroyed) {
-              applyExpandDOM(state.expanded);
-              return;
-            }
-            applyExpandDOM(state.expanded);
+            // A superseded transition still applies the latest state; only the newest moves focus.
+            applyExpandDOM(state.expanded, manageFocus && tok === expandToken);
           });
           if (vt) {
             if (vt.ready && typeof vt.ready.catch === 'function') vt.ready.catch(function () {});
@@ -2140,10 +2313,10 @@
             if (vt.updateCallbackDone && typeof vt.updateCallbackDone.catch === 'function') vt.updateCallbackDone.catch(function () {});
           }
         } catch (_) {
-          applyExpandDOM(state.expanded);
+          applyExpandDOM(state.expanded, manageFocus);
         }
       } else {
-        applyExpandDOM(state.expanded);
+        applyExpandDOM(state.expanded, manageFocus);
       }
     }
 
@@ -2205,18 +2378,28 @@
 
     els.calBtn.addEventListener('click', function () {
       if (state.calActiveSlot >= 0) {
+        // Cancel: drop the partial capture and restore what was there before the run
+        // (an in-memory snapshot, so it also works when sessionStorage is unavailable and
+        // keeps slots captured one at a time through the slot buttons).
+        if (calSnapshot) {
+          state.calSlots = calSnapshot.slots;
+          state.ldaModel = calSnapshot.model;
+        }
+        calSnapshot = null;
         state.calActiveSlot = -1;
-      } else {
-        state.calSlots = [null, null, null, null];
-        state.ldaModel = null;
-        state.calActiveSlot = 0;
-        if (!state.armed) {
-          var cellW = cellEl.clientWidth || 0;
-          if (state.expanded || cellW >= 500) {
-            showToast('Calibrating: Arm Mic for live grille swipes, or click Demo ↑ / Demo ↓ 2× each.', 'info');
-          } else {
-            showToast('Calibrating: Arm Mic for live swipes, press ↑ / ↓ keys 2×, or open ⤢ Workbench.', 'info');
-          }
+        syncControlsUI();
+        return;
+      }
+      calSnapshot = { slots: state.calSlots.slice(), model: state.ldaModel };
+      state.calSlots = [null, null, null, null];
+      state.ldaModel = null;
+      state.calActiveSlot = 0;
+      if (!state.armed) {
+        var cellW = cellEl.clientWidth || 0;
+        if (state.expanded || cellW >= 500) {
+          showToast('Calibrating: Arm Mic for live grille swipes, or click Demo ↑ / Demo ↓ 2× each.', 'info', 'cal');
+        } else {
+          showToast('Calibrating: Arm Mic for live swipes, press ↑ / ↓ keys 2×, or open ⤢ Workbench.', 'info', 'cal');
         }
       }
       syncControlsUI();
@@ -2230,6 +2413,7 @@
     });
 
     els.calReset.addEventListener('click', function () {
+      calSnapshot = null;
       state.calSlots = [null, null, null, null];
       state.ldaModel = null;
       state.calActiveSlot = -1;
@@ -2266,7 +2450,10 @@
         dPrimeOof: state.ldaModel ? state.ldaModel.dPrimeOof : null,
         weights: state.ldaModel ? state.ldaModel.w : getPriorWeights(state.grille, isSonarEffective()),
         lastFeatures: state.lastFeat ? state.lastFeat.rawX : null,
+        // contribs is a Float32Array, which JSON.stringify writes as {"0":..}; export a plain array
         lastResult: state.lastResult
+          ? Object.assign({}, state.lastResult, { contribs: Array.from(state.lastResult.contribs || []) })
+          : null
       };
       var jsonStr = JSON.stringify(payload, null, 2);
       if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
@@ -2320,6 +2507,8 @@
     els.stageWell.addEventListener('pointercancel', endDrag);
 
     els.stageWell.addEventListener('wheel', function (ev) {
+      // Horizontal trackpad scroll (deltaY 0) used to step the scrubber DOWN; let it pass.
+      if (!ev.deltaY) return;
       ev.preventDefault();
       if (state.sonarSleeping && state.armed) resetIdleWatchdog();
       var step = ev.deltaY < 0 ? 0.5 : -0.5;
@@ -2374,7 +2563,7 @@
     window.addEventListener('keydown', onGlobalKey);
     var onGlobalPointerDown = function (ev) {
       if (state.expanded && !cellEl.contains(ev.target)) {
-        toggleExpand(false);
+        toggleExpand(false, { focus: false });
       }
     };
     window.addEventListener('pointerdown', onGlobalPointerDown);
@@ -2382,12 +2571,7 @@
     var onVisChange = function () {
       if (isDestroyed || !state.audioCtx) return;
       if (document.hidden) {
-        if (state.idleSleepTimer) {
-          clearTimeout(state.idleSleepTimer);
-          state.idleSleepTimer = null;
-        }
-        sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
-        state.audioCtx.suspend().catch(function () {});
+        suspendForHidden();
       } else if (state.armed) {
         var resumeGen = armGen;
         var resumeCtx = state.audioCtx;
@@ -2396,10 +2580,13 @@
             return;
           }
           if (state.sonarCoupled && state.mode === 'sonar' && state.grille === 'right') {
+            var reprobe = state.reprobeOnVisible;
+            state.reprobeOnVisible = false;
             state.sonarSleeping = false;
-            pushWorkletConfig(false);
+            pushWorkletConfig(reprobe);
             resetIdleWatchdog();
           } else {
+            state.reprobeOnVisible = false;
             sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
           }
           syncControlsUI();
@@ -2408,7 +2595,9 @@
     };
     document.addEventListener('visibilitychange', onVisChange);
 
-    var onPageHide = function () { disarmAudio(true); };
+    // Not silent: a page restored from the back/forward cache must show the truthful
+    // unarmed UI, not the "■ Live" text frozen at pagehide.
+    var onPageHide = function () { disarmAudio(false); };
     window.addEventListener('pagehide', onPageHide);
 
     var onDeviceChange = function () {

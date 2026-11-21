@@ -110,6 +110,13 @@ function createBrowserEnv(opts = {}) {
         return null;
       },
       setPointerCapture() {},
+      focus() {
+        documentMock.activeElement = el;
+      },
+      // Tests mark layout-dependent elements (display:none in one tier) via el.isRendered
+      getClientRects() {
+        return typeof el.isRendered === 'function' && !el.isRendered() ? [] : [{}];
+      },
       getBoundingClientRect: () => ({ top: 0, left: 0, width: 320, height: 200 }),
       getContext: () => ({
         setTransform() {},
@@ -133,6 +140,7 @@ function createBrowserEnv(opts = {}) {
 
   // Populate queryable child nodes when mountCell assigns cellEl.innerHTML
   const parentGrid = makeEl('main', 'grid');
+  for (let i = 0; i < (opts.siblingsBefore || 0); i++) parentGrid.appendChild(makeEl('section', 'cell'));
   const cellEl = makeEl('section', 'cell cell-acoustic');
   parentGrid.appendChild(cellEl);
 
@@ -284,6 +292,7 @@ function createBrowserEnv(opts = {}) {
   const documentMock = {
     readyState: 'complete',
     hidden: false,
+    activeElement: null,
     createElement: (tag) => makeEl(tag),
     getElementById: () => null,
     addEventListener: (t, fn) => addEv(docListeners, t, fn),
@@ -985,6 +994,381 @@ test('Suite 5: Numerical & UI edge cases (nP=0/1, resampleCurve, filtfiltReal n=
     assert.equal(env.getRafCount(), 1, 'Wheel queues 1 render frame');
     env.stepRaf(32);
     assert.equal(env.getRafCount(), 0, 'RAF must sleep immediately after 1 frame under prefers-reduced-motion');
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+// =========================================================================
+// Deep-pass Regression Suite 6: label, permission paths, hidden-tab tone, probe bypass,
+// pagehide, calibration cancel, demo veto feedback, expand focus, rAF sleep
+// =========================================================================
+const tick = (ms = 15) => new Promise((r) => setTimeout(r, ms));
+const lastConfig = (node) => node.port.posted.filter((m) => m.type === 'config').slice(-1)[0];
+const liveTracks = (env) => env.tracks.filter((t) => !t.stopped).length;
+const openContexts = (env) => env.contexts.filter((c) => c.state !== 'closed').length;
+
+test('Suite 6a: tile title is README number 06 even when the cell is the 8th grid child', async () => {
+  const env = createBrowserEnv({ siblingsBefore: 7 });
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    assert.match(env.cellEl.innerHTML, /06 · RIGHT GRILLE/);
+    assert.match(env.cellEl.innerHTML, /06 · MBP-16 RIGHT GRILLE/);
+    assert.doesNotMatch(env.cellEl.innerHTML, /08 · /);
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6b: denied getUserMedia asks once and leaves a recoverable UI; only constraint errors retry', async () => {
+  {
+    const calls = [];
+    const env = createBrowserEnv({
+      getUserMedia: async (c) => {
+        calls.push(c);
+        throw Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' });
+      }
+    });
+    env.install();
+    try {
+      const api = Lab.mountCell(env.cellEl);
+      const arm = env.subMap.get('.ag-arm-btn');
+      arm.click();
+      await tick();
+      assert.equal(calls.length, 1, 'NotAllowedError must not trigger a second permission request');
+      assert.equal(arm.dataset.armed, 'false');
+      assert.equal(arm.textContent, '● Arm Mic');
+      assert.equal(env.subMap.get('.ag-led').dataset.state, 'idle');
+      assert.equal(env.subMap.get('.ag-toast').hidden, false);
+      assert.match(env.subMap.get('.ag-toast-text').textContent, /permission denied/i);
+      arm.click();
+      await tick();
+      assert.equal(calls.length, 2, 'Arm stays clickable after a denial (one request per click)');
+      await api.destroy();
+    } finally {
+      env.restore();
+    }
+  }
+  {
+    let n = 0;
+    let env = null;
+    env = createBrowserEnv({
+      getUserMedia: async () => {
+        n++;
+        if (n === 1) throw Object.assign(new Error('exact:false unsupported'), { name: 'OverconstrainedError' });
+        return env.makeStream();
+      }
+    });
+    env.install();
+    try {
+      const api = Lab.mountCell(env.cellEl);
+      env.subMap.get('.ag-arm-btn').click();
+      await tick();
+      assert.equal(n, 2, 'OverconstrainedError retries once with relaxed constraints');
+      assert.equal(env.subMap.get('.ag-arm-btn').dataset.armed, 'true');
+      await api.destroy();
+      assert.equal(liveTracks(env), 0);
+    } finally {
+      env.restore();
+    }
+  }
+});
+
+test('Suite 6c: a never-resolving AudioContext.resume() fails at a ceiling and a newer arm releases the stale one at once', async () => {
+  const env = createBrowserEnv({
+    initialCtxState: 'suspended',
+    onResume: () => new Promise(() => {})
+  });
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    const arm = env.subMap.get('.ag-arm-btn');
+    arm.click();
+    await tick(40);
+    assert.equal(liveTracks(env), 1, 'first arm holds its stream while resume() is pending');
+    arm.click(); // supersede while the first resume() is still pending
+    await tick(40);
+    assert.equal(env.tracks[0].stopped, true, 'superseded arm must stop its stream immediately');
+    assert.equal(env.contexts[0].state, 'closed', 'superseded arm must close its AudioContext immediately');
+    await tick(2200);
+    assert.equal(arm.dataset.armed, 'false');
+    assert.equal(liveTracks(env), 0, 'no live mic track after the resume ceiling');
+    assert.equal(openContexts(env), 0, 'no open AudioContext after the resume ceiling');
+    assert.match(env.subMap.get('.ag-toast-text').textContent, /suspended/i);
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6d: a devicechange re-arm that completes in a hidden tab emits no tone until visible, then re-probes', async () => {
+  const env = createBrowserEnv({ contextSampleRate: 48000 });
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    env.subMap.get('.ag-arm-btn').click();
+    await tick();
+    env.workletNodes[0].port.onmessage({ data: { type: 'probe', ok: true, snrDb: 30 } });
+    env.documentMock.hidden = true;
+    env.documentMock.fire('visibilitychange');
+    env.mediaDevices.fire('devicechange');
+    await tick(260);
+    assert.equal(env.workletNodes.length, 2, 'devicechange re-armed');
+    const node = env.workletNodes[1];
+    assert.equal(node.port.posted.filter((m) => m.type === 'config' && m.sonar === true).length, 0,
+      'hidden re-arm must not switch the 19 kHz tone on');
+    assert.equal(env.contexts[env.contexts.length - 1].state, 'suspended', 'hidden re-arm must suspend its context');
+    assert.notEqual(env.subMap.get('.ag-led').dataset.state, 'sonar', 'LED must not claim sonar before the probe passes');
+    env.documentMock.hidden = false;
+    env.documentMock.fire('visibilitychange');
+    await tick();
+    const cfg = lastConfig(node);
+    assert.equal(cfg.sonar, true);
+    assert.equal(cfg.probe, true, 'tone returns only through the loopback probe');
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6e: hiding, the Pilot slider, or a mode round-trip during the 180 ms probe never skip the probe', async () => {
+  const cases = {
+    hideShow: (env) => {
+      env.documentMock.hidden = true;
+      env.documentMock.fire('visibilitychange');
+      env.documentMock.hidden = false;
+      env.documentMock.fire('visibilitychange');
+    },
+    gainSlider: (env) => {
+      const g = env.subMap.get('.ag-gain-slider');
+      g.value = '0.20';
+      g.dispatchEvent('input');
+    },
+    modeRoundTrip: (env) => {
+      env.modeBtns[1].click(); // Passive
+      env.modeBtns[0].click(); // back to 19k Sonar
+    }
+  };
+  for (const [name, act] of Object.entries(cases)) {
+    const env = createBrowserEnv({ contextSampleRate: 48000 });
+    env.install();
+    try {
+      const api = Lab.mountCell(env.cellEl);
+      env.subMap.get('.ag-arm-btn').click();
+      await tick();
+      const node = env.workletNodes[0];
+      assert.equal(lastConfig(node).probe, true, `${name}: arm starts the probe`);
+      act(env);
+      await tick();
+      const sonarOnNoProbe = node.port.posted.filter((m) => m.type === 'config' && m.sonar === true && m.probe !== true);
+      assert.equal(sonarOnNoProbe.length, 0, `${name}: operating gain sent before any probe result`);
+      assert.equal(lastConfig(node).probe, true, `${name}: pending probe must be re-sent`);
+      assert.match(env.subMap.get('.ag-loop-status').innerHTML, /self-test/i, `${name}: strip must not claim Coupled before the probe`);
+      assert.notEqual(env.subMap.get('.ag-led').dataset.state, 'sonar', `${name}: LED must not claim sonar before the probe`);
+      node.port.onmessage({ data: { type: 'probe', ok: true, snrDb: 28 } });
+      assert.equal(env.subMap.get('.ag-led').dataset.state, 'sonar', `${name}: LED turns sonar once the probe passes`);
+      assert.match(env.subMap.get('.ag-loop-status').innerHTML, /Coupled/);
+      await api.destroy();
+    } finally {
+      env.restore();
+    }
+  }
+});
+
+test('Suite 6f: pagehide resets the Arm button so a back/forward-cache restore is truthful', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    env.subMap.get('.ag-arm-btn').click();
+    await tick();
+    assert.equal(env.subMap.get('.ag-arm-btn').dataset.armed, 'true');
+    env.windowMock.fire('pagehide');
+    await tick();
+    assert.equal(env.subMap.get('.ag-arm-btn').dataset.armed, 'false');
+    assert.equal(env.subMap.get('.ag-led').dataset.state, 'idle');
+    assert.equal(liveTracks(env), 0);
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6g: cancelling a re-calibration restores the saved model and clears the calibration toast', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    const cal = env.subMap.get('.ag-cal-btn');
+    cal.click();
+    ['UP', 'UP', 'DOWN', 'DOWN'].forEach((d) => api.injectDemoStroke(d));
+    assert.equal(cal.dataset.calibrated, 'true');
+    cal.click(); // start a new run
+    assert.equal(env.subMap.get('.ag-toast').hidden, false);
+    cal.click(); // cancel it
+    assert.equal(cal.dataset.calibrated, 'true', 'saved calibration must come back on cancel');
+    assert.equal(env.subMap.get('.ag-toast').hidden, true, 'stale "Calibrating" toast must clear');
+    cal.click();
+    env.grilleBtns[1].click(); // leaving the regime also ends the run
+    assert.equal(env.subMap.get('.ag-toast').hidden, true);
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6h: every Demo click either moves the readout or explains why it did not', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    // L Ctrl and R Grille, both directions. (Synthetic left strokes are often speech-vetoed;
+    // see NOTES section 5. This test holds whether or not that is ever changed.)
+    for (const g of [1, 0]) {
+      env.grilleBtns[g].click();
+      for (let i = 0; i < 12; i++) {
+        const dir = i % 2 ? 'DOWN' : 'UP';
+        const before = env.subMap.get('.ag-vernier-mini').textContent;
+        api.injectDemoStroke(dir);
+        const moved = env.subMap.get('.ag-vernier-mini').textContent !== before ||
+          env.subMap.get('.ag-vernier-mini').textContent === (dir === 'UP' ? '+10.0' : '-10.0');
+        if (!moved) {
+          assert.equal(env.subMap.get('.ag-toast').hidden, false, 'a Demo click with no stroke must explain itself');
+          assert.match(env.subMap.get('.ag-toast-text').textContent, /^Demo stroke (rejected by .*veto|was not detected)/);
+        }
+      }
+    }
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6l: session warnings clear on disarm; the worklet-crash warning survives its own disarm', async () => {
+  const env = createBrowserEnv({ contextSampleRate: 48000 });
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    const arm = env.subMap.get('.ag-arm-btn');
+    const toast = env.subMap.get('.ag-toast');
+    arm.click();
+    await tick();
+    env.workletNodes[0].port.onmessage({ data: { type: 'probe', ok: false, snrDb: 1.2 } });
+    assert.equal(toast.hidden, false);
+    assert.match(env.subMap.get('.ag-toast-text').textContent, /uncoupled/);
+    arm.click(); // disarm
+    await tick();
+    assert.equal(arm.dataset.armed, 'false');
+    assert.equal(toast.hidden, true, 'stale "19 kHz uncoupled" warning must clear on disarm');
+
+    arm.click();
+    await tick();
+    env.workletNodes[env.workletNodes.length - 1].onprocessorerror(new Error('crash'));
+    await tick();
+    assert.equal(arm.dataset.armed, 'false');
+    assert.equal(toast.hidden, false, 'the crash explanation must stay visible');
+    assert.match(env.subMap.get('.ag-toast-text').textContent, /halted/);
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6m: cancelling a Cal run restores the previous model even without sessionStorage', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    Object.defineProperty(globalThis, 'sessionStorage', {
+      get() { throw new Error('SecurityError: storage disabled'); },
+      configurable: true
+    });
+    const api = Lab.mountCell(env.cellEl);
+    const cal = env.subMap.get('.ag-cal-btn');
+    cal.click();
+    ['UP', 'UP', 'DOWN', 'DOWN'].forEach((d) => api.injectDemoStroke(d));
+    assert.equal(cal.dataset.calibrated, 'true');
+    const label = cal.textContent;
+    cal.click();
+    api.injectDemoStroke('UP'); // partial capture of the new run
+    cal.click(); // cancel
+    assert.equal(cal.dataset.calibrated, 'true');
+    assert.equal(cal.textContent, label, 'the pre-run model, not the partial run, is restored');
+    assert.ok(env.slotBtns.every((b) => b.dataset.filled === 'true'));
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6i: expanding from the micro CTA keeps focus in the cell and Escape returns it to the CTA', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    const cta = env.subMap.get('.ag-micro-cta');
+    const expandBtn = env.subMap.get('.ag-expand-btn');
+    cta.isRendered = () => !env.cellEl.classList.contains('is-expanded');
+    cta.focus();
+    cta.click();
+    assert.equal(env.cellEl.classList.contains('is-expanded'), true);
+    assert.equal(env.documentMock.activeElement, expandBtn, 'focus moves off the now-hidden CTA');
+    env.windowMock.fire('keydown', { key: 'Escape' });
+    assert.equal(env.cellEl.classList.contains('is-expanded'), false);
+    assert.equal(env.documentMock.activeElement, cta, 'focus returns to the control that opened the workbench');
+
+    cta.click();
+    const outside = { parentElement: null };
+    env.documentMock.activeElement = outside;
+    env.windowMock.fire('pointerdown', { target: outside });
+    assert.equal(env.cellEl.classList.contains('is-expanded'), false);
+    assert.equal(env.documentMock.activeElement, outside, 'outside-click collapse must not steal focus');
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6j: the render loop sleeps after a Demo stroke settles (no idle rAF)', async () => {
+  const env = createBrowserEnv();
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    api.injectDemoStroke('UP');
+    let frames = 0;
+    let ts = 16;
+    while (env.getRafCount() > 0 && frames < 600) {
+      ts += 16;
+      env.stepRaf(ts);
+      frames++;
+    }
+    assert.equal(env.getRafCount(), 0, `render loop still scheduled after ${frames} frames`);
+    assert.ok(frames > 5, 'the stroke animates for a while before sleeping');
+    await api.destroy();
+  } finally {
+    env.restore();
+  }
+});
+
+test('Suite 6k: horizontal wheel leaves the scrubber alone and Copy JSON exports contribs as an array', async () => {
+  let copied = null;
+  const env = createBrowserEnv({ clipboard: { writeText: async (t) => { copied = t; } } });
+  env.install();
+  try {
+    const api = Lab.mountCell(env.cellEl);
+    const well = env.subMap.get('.ag-stage-well');
+    let prevented = false;
+    well.dispatchEvent('wheel', { deltaX: 40, deltaY: 0, preventDefault() { prevented = true; } });
+    assert.equal(env.subMap.get('.ag-vernier-mini').textContent, '+0.0', 'deltaY 0 must not step the scrubber');
+    assert.equal(prevented, false, 'horizontal scroll must not be swallowed');
+    api.injectDemoStroke('UP');
+    env.subMap.get('.ag-export-btn').click();
+    await tick();
+    const payload = JSON.parse(copied);
+    assert.ok(Array.isArray(payload.lastResult.contribs), 'contribs must serialize as an array');
+    assert.equal(payload.lastResult.contribs.length, 6);
     await api.destroy();
   } finally {
     env.restore();
