@@ -2,14 +2,14 @@
  * UI & Seamless Secondary-Grid Portal (`cells/left-grille/ui.js`)
  *
  * Mounts:
- * 1. Main Grid Cell (`#cell-left-grille`): Tactile Swiss/Braun specimen card with inline SVG
- *    MacBook Pro left speaker grille elevation (`8%–22%` CNC mic through-holes + blind dimples
- *    outside `8%–22%`).
- * 2. Secondary Page (`#left-grille-page`): Replaces `<main class="grid">` seamlessly in-page
- *    with a Back button (`← Grid`, `Escape`, and History `#left-grille` sync), a global
- *    `[● ARM ARRAY]` toggle in `.lg-nav-bar` wired to `window.LeftGrilleLab.bus`, and a
- *    secondary `.grid` of 9 `.cell` cards (`#lg-sec-cell-1` .. `#lg-sec-cell-9`) obeying
- *    the exact same sizing and layout rules as the main grid.
+ * 1. Main Grid Cell (`#cell-left-grille.ui-tile`): one `ui-tile-trigger` with the shared head /
+ *    hero / foot; the hero is an SVG of the MacBook Pro left speaker grille (`8%–22%` mic
+ *    through-holes + blind dimples) with a rust sweep line.
+ * 2. Secondary Page (`#left-grille-page`): Replaces `<main class="grid">` in-page with a
+ *    `ui-studio-bar` (05, title, bus readout, the ARM ARRAY toggle wired to
+ *    `window.LeftGrilleLab.bus`, then Close / `Escape`, with History `#left-grille` sync) over a
+ *    secondary `.grid` of `.cell.ui-tile` slots (`#lg-sec-cell-1` .. `#lg-sec-cell-9`; empty
+ *    slots are hidden). Frame contract: NOTES.md "Sensor cell frame".
  * 3. Secondary Cell 1 (`#lg-sec-cell-1`): Live Left-Grille Acoustic Swipe Instrument displaying
  *    Direction (`UP` vs `DOWN`), Speed (`cm/s` + peak), Dual-Reference Relative Distance
  *    (`% FROM TOP` & `% FROM BTM` + `cm`), 1:1 vernier rail with `±1σ` uncertainty halo,
@@ -118,6 +118,7 @@
         const cx = Math.round(((c + 0.5) / cols) * (width - 12) + 6);
         dots.push(
           svgEl('circle', {
+            class: isMicPort ? 'lg-hole lg-hole--port' : 'lg-hole',
             cx,
             cy,
             r: isMicPort ? 1.55 : 1.15,
@@ -131,6 +132,7 @@
     if (opts.withNeedle) {
       dots.push(
         svgEl('rect', {
+          class: 'lg-mic-zone',
           x: 2,
           y: Math.round(0.08 * (height - 12) + 4),
           width: width - 4,
@@ -145,6 +147,7 @@
       );
       const needleGroup = svgEl('g', { class: 'lg-portal-needle' }, [
         svgEl('rect', {
+          class: 'lg-sweep',
           x: -3,
           y: Math.round(height * 0.68) - 1,
           width: width + 6,
@@ -166,6 +169,7 @@
       },
       [
         svgEl('rect', {
+          class: 'lg-grille-frame',
           x: 0.5,
           y: 0.5,
           width: width - 1,
@@ -229,23 +233,29 @@
     // -------------------------------------------------------------------------
     // 1. Render Main Grid Portal Cell (`#cell-left-grille`)
     // -------------------------------------------------------------------------
+    // Shared tile anatomy (`ui/NOTES.md` section 2): one trigger wrapping head / hero / foot.
+    // Only phrasing elements inside the button; nothing interactive.
     const portalBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-portal-btn',
+        className: 'ui-tile-trigger lg-portal-btn',
         'aria-label': 'Open Left Grille Acoustic Swipe Sonar secondary grid',
         onClick: () => openSecondaryView({ fromUserTap: true })
       },
       [
-        h('div', { className: 'lg-portal-top' }, [
-          h('div', { className: 'lg-portal-head-left' }, [
-            h('span', { className: 'lg-kicker', textContent: '05' }),
-            h('span', { className: 'lg-portal-title', textContent: 'Left Grille Sonar' })
-          ]),
-          h('span', { className: 'lg-portal-arrow', 'aria-hidden': 'true', textContent: '↗' })
+        h('span', { className: 'ui-tile-head lg-portal-top' }, [
+          h('span', { className: 'ui-tile-index', textContent: '05' }),
+          h('span', { className: 'ui-tile-title', textContent: 'Left Grille' }),
+          h('span', { className: 'ui-tile-actions' }, [
+            h('span', {
+              className: 'ui-btn ui-btn--sm ui-btn--icon lg-portal-arrow ui-hide-tiny',
+              'aria-hidden': 'true',
+              textContent: '↗'
+            })
+          ])
         ]),
-        h('div', { className: 'lg-portal-graphic' }, [
+        h('span', { className: 'ui-tile-body lg-portal-graphic' }, [
           buildGrilleSvg({
             width: 48,
             height: 132,
@@ -255,12 +265,19 @@
             className: 'lg-portal-svg'
           })
         ]),
-        h('div', { className: 'lg-portal-bottom' }, [
-          h('span', { className: 'lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' }),
-          h('span', { className: 'lg-portal-spec', textContent: '48 kHz · L' })
+        h('span', { className: 'ui-tile-foot lg-portal-bottom' }, [
+          h('span', { className: 'ui-truncate lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' }),
+          h('span', {
+            className: 'lg-portal-spec',
+            'data-tip': 'Samples 48,000 times a second via the left speaker and mics.',
+            textContent: '48 kHz · L'
+          })
         ])
       ]
     );
+    if (typeof portalCell.className === 'string' && !/(^|\s)ui-tile(\s|$)/.test(portalCell.className)) {
+      portalCell.className = `${portalCell.className} ui-tile`.trim();
+    }
     portalCell.appendChild(portalBtn);
 
     // -------------------------------------------------------------------------
@@ -280,99 +297,113 @@
       }, 20);
     }
 
+    // Close rule (`ui/NOTES.md` section 0): last item on the right, Esc does the same.
     const backBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-back-btn',
-        'aria-label': 'Back to main grid',
+        className: 'ui-btn lg-back-btn',
+        'data-tip': 'Back to the grid.',
+        'data-tip-key': 'Esc',
         onClick: () => requestCloseSecondaryView()
       },
-      ['← Grid']
+      ['Close']
     );
 
+    const BUS_TIP_IDLE = 'Sensors 02 to 06 share one mic stream; ARM ARRAY turns it on.';
     const busStatusMeta = h('span', {
-      className: 'lg-bus-meta',
+      className: 'ui-readout ui-readout--quiet lg-bus-meta',
       dataset: { error: 'false' },
-      textContent: 'Cells 02–06'
+      'data-tip': BUS_TIP_IDLE,
+      textContent: '02–06'
     });
 
-    const armArrayDot = h('span', { className: 'lg-dot', 'aria-hidden': 'true' });
-    const armArrayLabel = h('span', { textContent: 'ARM ARRAY' });
+    const ARM_ARRAY_TIP_IDLE =
+      'Turn on the shared mic and inaudible tone for sensors 02–06; stops sensor 01’s mic.';
+    const armArrayLabel = h('span', { textContent: 'Arm array' });
     const armArrayBtn = h(
       'button',
       {
         type: 'button',
         id: 'lg-arm-array-btn',
-        className: 'lg-arm-array-btn',
+        className: 'ui-btn ui-btn--primary lg-arm-array-btn',
         dataset: { armed: 'false', state: 'idle' },
         'aria-pressed': 'false',
-        title: 'Arm or disarm shared 48 kHz microphone and stereo sonar bus for Cells 02–06',
+        'data-tip': ARM_ARRAY_TIP_IDLE,
         onClick: () => toggleSharedArray()
       },
-      [armArrayDot, armArrayLabel]
+      [armArrayLabel]
     );
 
-    const navBar = h('nav', { className: 'lg-nav-bar', 'aria-label': 'Secondary page navigation' }, [
-      h('div', { className: 'lg-nav-left' }, [
-        backBtn,
-        h('span', { className: 'lg-breadcrumb', textContent: '05 / Left Grille Acoustic Sonar' })
-      ]),
-      h('div', { className: 'lg-nav-right' }, [
-        busStatusMeta,
-        armArrayBtn,
-        h('span', { className: 'lg-kbd-hint' }, [h('kbd', { textContent: 'Esc' }), 'back'])
-      ])
+    const navBar = h('header', { className: 'ui-studio-bar lg-nav-bar' }, [
+      h('span', { className: 'ui-tile-index', textContent: '05' }),
+      h('h2', { className: 'ui-studio-title', textContent: 'Left Grille' }),
+      h('div', { className: 'ui-studio-actions' }, [busStatusMeta, armArrayBtn, backBtn])
     ]);
 
-    // Build Instrument UI inside Secondary Cell 1
-    const armDot = h('span', { className: 'lg-dot', 'aria-hidden': 'true' });
-    const armLabel = h('span', { textContent: 'ARM MIC' });
+    // Sensor cell 01 in the frame every secondary slot shares (NOTES.md "Sensor cell frame"):
+    // head (01, title, status pill, Arm, 19k) / body (grille strip hero + readouts) / foot.
+    const armLabel = h('span', { textContent: 'Arm' });
     const armBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-btn lg-btn--arm',
+        className: 'ui-btn ui-btn--sm lg-btn--arm',
         dataset: { armed: 'false' },
         'aria-pressed': 'false',
-        title: 'Start or stop 48 kHz Left-Speaker Sonar + Built-in Mic Array',
+        'data-tip': 'Turn on the mic for this sensor alone; stops the shared array.',
         onClick: () => toggleArm()
       },
-      [armDot, armLabel]
+      [armLabel]
     );
 
-    const statusPill = h('span', {
-      className: 'lg-status-pill',
-      textContent: 'READY · Arm or drag'
-    });
+    const statusPillLabel = h('span', { className: 'ui-pill-label', textContent: 'Ready' });
+    const statusPill = h(
+      'span',
+      {
+        className: 'ui-pill lg-status-pill',
+        role: 'note',
+        tabindex: '0',
+        'data-tip': 'Arm the mic, or drag the grille strip to try a simulated swipe.'
+      },
+      [statusPillLabel]
+    );
 
+    const SONAR_TIP_ON = 'Inaudible 18–21 kHz tone from the left speaker while armed. Click for mic only.';
+    const SONAR_TIP_OFF = 'Mic only. Click to add the inaudible 18–21 kHz tone from the left speaker.';
+    const SONAR_TIP_BLOCKED = 'The tone needs a mic running at 40 kHz or more; this one is slower.';
     const sonarBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-btn lg-btn--sonar',
+        className: 'ui-btn ui-btn--sm lg-btn--sonar ui-hide-compact',
         'aria-pressed': 'true',
-        title: 'Toggle 18.4–21.4 kHz Left-Speaker ultrasonic pilot comb',
-        onClick: () => controller.setSonarEnabled(!controller.txEnabled)
+        'aria-disabled': 'false',
+        'data-tip': SONAR_TIP_ON,
+        onClick: () => {
+          if (sonarBtn.getAttribute('aria-disabled') === 'true') return;
+          controller.setSonarEnabled(!controller.txEnabled);
+        }
       },
-      ['19k L-CH']
+      ['19k']
     );
 
     const calBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-btn',
+        className: 'ui-btn ui-btn--sm ui-btn--quiet',
         'aria-expanded': 'false',
-        title: 'Calibrate top/bottom left-grille anchors or invert mic polarity',
+        'data-tip': 'Calibrate with 14 guided rubs and swipes; turns on the mic.',
         onClick: () => openCalibrationWizard(calBtn)
       },
-      ['CAL']
+      ['Calibrate']
     );
 
-    const bezel = h('div', { className: 'lg-bezel' }, [
-      h('div', { className: 'lg-bezel-group' }, [armBtn, statusPill]),
-      h('div', { className: 'lg-bezel-group' }, [sonarBtn, calBtn])
+    const bezel = h('header', { className: 'ui-tile-head lg-bezel' }, [
+      h('span', { className: 'ui-tile-index', textContent: '01' }),
+      h('span', { className: 'ui-tile-title', textContent: 'Swipe sonar' }),
+      h('div', { className: 'ui-tile-actions' }, [statusPill, armBtn, sonarBtn])
     ]);
 
     // Physical 11.0 cm Left-Grille Vernier Rail (`aria-valuenow` = % from bottom so ArrowUp increases!)
@@ -411,15 +442,15 @@
         'aria-valuemax': '100',
         'aria-valuenow': '50',
         'aria-valuetext': '50% from top, 50% from bottom',
-        title: 'Swipe physical left speaker grille when armed, or drag vertically here'
+        'data-tip': 'The left grille, Esc to Fn. Drag to try a swipe; arrow keys simulate one.'
       },
       [
-        h('div', { className: 'lg-rail-cap' }, [
+        h('div', { className: 'lg-rail-cap', 'aria-hidden': 'true' }, [
           h('span', { textContent: 'TOP' }),
           h('span', { textContent: 'ESC' })
         ]),
         railTrack,
-        h('div', { className: 'lg-rail-cap' }, [
+        h('div', { className: 'lg-rail-cap', 'aria-hidden': 'true' }, [
           h('span', { textContent: 'BTM' }),
           h('span', { textContent: 'FN' })
         ])
@@ -428,11 +459,19 @@
 
     // Telemetry Readouts
     const dirText = h('span', { className: 'lg-dir-text', textContent: '— IDLE' });
-    const confBadge = h('span', { className: 'lg-conf-badge', textContent: '' });
+    const confBadge = h('span', {
+      className: 'ui-readout ui-readout--quiet lg-conf-badge',
+      'data-tip': 'How sure the detector is about the last swipe’s direction.',
+      textContent: ''
+    });
     const modeMeta = h('div', { className: 'lg-sub-meta', textContent: 'Swipe left speaker grille ↑/↓' });
 
     const speedNum = h('span', { textContent: '0.0' });
-    const speedPeakMeta = h('div', { className: 'lg-sub-meta', textContent: 'pk 0.0 cm/s' });
+    const speedPeakMeta = h('div', {
+      className: 'lg-sub-meta',
+      'data-tip': 'Peak speed during the last swipe, and how long it took.',
+      textContent: 'pk 0.0 cm/s'
+    });
 
     const topPctStrong = h('strong', { textContent: '50%' });
     const btmPctStrong = h('strong', { textContent: '50%' });
@@ -445,28 +484,28 @@
       'button',
       {
         type: 'button',
-        className: 'lg-mini-btn',
-        title: 'Inject synthetic 48 kHz Swipe Up through DSP engine',
-        onClick: () => controller.runSimulatedSwipe('up')
+        className: 'ui-btn ui-btn--sm ui-btn--quiet',
+        'data-tip': 'Simulate an upward swipe through the real detector; no mic needed.',
+        onClick: () => playSimulatedSwipe('up')
       },
-      ['Sim ↑']
+      ['Up']
     );
     const simDownBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-mini-btn',
-        title: 'Inject synthetic 48 kHz Swipe Down through DSP engine',
-        onClick: () => controller.runSimulatedSwipe('down')
+        className: 'ui-btn ui-btn--sm ui-btn--quiet',
+        'data-tip': 'Simulate a downward swipe through the real detector; no mic needed.',
+        onClick: () => playSimulatedSwipe('down')
       },
-      ['Sim ↓']
+      ['Down']
     );
     const flipBtn = h(
       'button',
       {
         type: 'button',
-        className: 'lg-mini-btn lg-mini-btn--flip',
-        title: 'Invert top/bottom microphone polarity',
+        className: 'ui-btn ui-btn--sm ui-btn--quiet lg-mini-btn--flip',
+        'data-tip': 'Swap which mic counts as top, for when up and down read reversed.',
         onClick: () => controller.togglePolarity()
       },
       ['Flip']
@@ -476,34 +515,43 @@
     const scopeLeftNote = h('span', { textContent: 'Position y(t) · 11.0 cm left grille' });
     const scopeRightNote = h('span', { textContent: 'Doppler ±Δf' });
 
-    const scopeBox = h('div', { className: 'lg-scope-box' }, [
-      scopeCanvas,
-      h('div', { className: 'lg-scope-caption' }, [scopeLeftNote, scopeRightNote])
-    ]);
+    const scopeBox = h(
+      'div',
+      {
+        className: 'lg-scope-box',
+        'data-tip': 'Finger position over time, blue moving up and rust down; bars at right are Doppler shift.'
+      },
+      [scopeCanvas, h('div', { className: 'lg-scope-caption' }, [scopeLeftNote, scopeRightNote])]
+    );
 
-    // Calibration / Error Overlay mounted directly on `.lg-telemetry` so it stays visible at <= 245px!
+    // Calibration / Error Overlay mounted directly on `.lg-telemetry` so the grille strip stays
+    // visible beside it.
     const calStepPill = h('span', {
-      className: 'lg-cal-step-pill',
+      className: 'ui-readout lg-cal-step-pill',
       textContent: '1 / 14'
     });
-    const calCollectorBadge = h('span', {
-      className: 'lg-cal-disk-badge',
-      dataset: { online: 'false' },
-      textContent: '○ LOCAL + JSON'
-    });
+    const calCollectorLabel = h('span', { className: 'ui-pill-label', textContent: 'Local + JSON' });
+    const calCollectorBadge = h(
+      'span',
+      {
+        className: 'ui-pill lg-cal-disk-badge',
+        dataset: { online: 'false' }
+      },
+      [calCollectorLabel]
+    );
     const calMeterFill = h('div', {
       className: 'lg-cal-meter-fill',
       dataset: { hot: 'false' }
     });
     const calMeterText = h('span', {
-      className: 'lg-cal-meter-db',
+      className: 'ui-readout ui-readout--quiet lg-cal-meter-db',
       textContent: '+0dB'
     });
     const calMeterWrap = h(
       'div',
       {
         className: 'lg-cal-meter',
-        title: 'Live acoustic signal-to-noise ratio (dB)'
+        'data-tip': 'How far the rub or swipe stands above background noise, in dB.'
       },
       [h('div', { className: 'lg-cal-meter-track' }, [calMeterFill]), calMeterText]
     );
@@ -530,8 +578,10 @@
     );
 
     const simActionsWrap = h('div', { className: 'lg-sim-actions' }, [
+      h('span', { className: 'ui-label', textContent: 'Sim' }),
       simUpBtn,
       simDownBtn,
+      h('span', { className: 'lg-foot-sep', 'aria-hidden': 'true' }),
       flipBtn
     ]);
 
@@ -561,36 +611,51 @@
     const telemetryCol = h('div', { className: 'lg-telemetry' }, [
       h('div', { className: 'lg-tier-hero' }, [
         h('div', { className: 'lg-card' }, [
-          h('span', { className: 'lg-label', textContent: 'Direction' }),
+          h('span', { className: 'ui-label', textContent: 'Direction' }),
           h('div', { className: 'lg-dir-readout' }, [dirText, confBadge]),
           modeMeta
         ]),
         h('div', { className: 'lg-card' }, [
-          h('span', { className: 'lg-label', textContent: 'Speed' }),
+          h('span', { className: 'ui-label', textContent: 'Speed' }),
           h('div', { className: 'lg-speed-val' }, [
             speedNum,
-            h('span', { className: 'lg-speed-unit', textContent: ' cm/s' })
+            h('span', { className: 'ui-readout-unit', textContent: 'cm/s' })
           ]),
           speedPeakMeta
         ])
       ]),
-      h('div', { className: 'lg-tier-dist' }, [
-        h('div', { className: 'lg-dist-pair' }, [
+      h(
+        'div',
+        {
+          className: 'lg-tier-dist',
+          'data-tip': 'Finger position along the 11 cm grille: from the top, from the bottom, in cm.'
+        },
+        [
           h('span', { className: 'lg-dist-item' }, [
             topPctStrong,
-            h('span', { className: 'lg-dist-tag', textContent: ' TOP' })
+            h('span', { className: 'lg-dist-tag', textContent: ' top' })
           ]),
           h('span', { className: 'lg-dist-item' }, [
             btmPctStrong,
-            h('span', { className: 'lg-dist-tag', textContent: ' BTM' })
+            h('span', { className: 'lg-dist-tag', textContent: ' btm' })
           ]),
           cmSpanText
-        ]),
-        simActionsWrap
-      ]),
+        ]
+      ),
       scopeBox,
       inlineOverlay
     ]);
+
+    const footReadout = h('span', {
+      className: 'ui-readout ui-readout--quiet lg-foot-readout',
+      'data-tip': 'Mic off. Readings come from dragging the strip or the Sim buttons.',
+      textContent: 'Mic off'
+    });
+
+    const PILL_TIP_READY = 'Arm the mic, or drag the grille strip to try a simulated swipe.';
+    const FOOT_TIP_LISTENING = 'Mic mode, sample rate in kHz, and INV when the mics are flipped.';
+    let pillKey = '';
+    let footText = '';
 
     const secCell1 = h(
       'section',
@@ -600,9 +665,17 @@
         'aria-label': 'Left Grille Acoustic Swipe Detector'
       },
       [
-        h('div', { className: 'lg-inst-stage' }, [
+        h('div', { className: 'lg-inst-stage lg-cell-stage' }, [
           bezel,
-          h('div', { className: 'lg-body' }, [railWrap, telemetryCol])
+          h('div', { className: 'ui-tile-body lg-body' }, [
+            railWrap,
+            telemetryCol,
+            h('p', {
+              className: 'lg-compact-note',
+              textContent: 'Sim, Flip and Calibrate need a wider tile.'
+            })
+          ]),
+          h('footer', { className: 'ui-tile-foot lg-foot' }, [simActionsWrap, calBtn, footReadout])
         ]),
         srLive
       ]
@@ -661,7 +734,7 @@
       armArrayBtn.dataset.state = st.state || 'idle';
       armArrayBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
       armArrayLabel.textContent =
-        st.state === 'requesting' ? 'ARMING…' : st.state === 'listening' ? 'ARRAY LIVE' : 'ARM ARRAY';
+        st.state === 'requesting' ? 'Arming…' : st.state === 'listening' ? 'Array live' : 'Arm array';
 
       if (st.state === 'listening') {
         const rateKhz = Math.round((st.sampleRate || 48000) / 100) / 10;
@@ -672,25 +745,32 @@
             : 'PASSIVE';
         busStatusMeta.dataset.error = 'false';
         busStatusMeta.textContent = `${rateKhz}k · ${txTag}`;
+        busStatusMeta.setAttribute(
+          'data-tip',
+          txTag === 'PASSIVE'
+            ? `Mic sample rate in kHz; no tone is playing (listen only).`
+            : `Mic sample rate in kHz, then the inaudible tone now playing (${txTag}).`
+        );
         armArrayBtn.setAttribute(
-          'title',
-          `Shared array live (${st.micLabel || 'Mic'} · ${rateKhz} kHz · ${txTag}) — click to disarm`
+          'data-tip',
+          `Array live on ${st.micLabel || 'the mic'} at ${rateKhz} kHz. Click to turn it off.`
         );
       } else if (st.state === 'requesting') {
         busStatusMeta.dataset.error = 'false';
-        busStatusMeta.textContent = 'ARMING…';
+        busStatusMeta.textContent = 'Arming…';
+        busStatusMeta.setAttribute('data-tip', 'Waiting for the browser to open the mic.');
+        armArrayBtn.setAttribute('data-tip', 'Opening the mic. Click to cancel.');
       } else if (st.state === 'error' && st.error) {
         busStatusMeta.dataset.error = 'true';
-        busStatusMeta.textContent = 'SIM ONLY';
-        armArrayBtn.setAttribute('title', st.error);
+        busStatusMeta.textContent = 'Sim only';
+        busStatusMeta.setAttribute('data-tip', 'No mic: the sensors here run on simulated input only.');
+        armArrayBtn.setAttribute('data-tip', `${st.error} Click to try again.`);
         announce(st.error);
       } else {
         busStatusMeta.dataset.error = 'false';
-        busStatusMeta.textContent = 'Cells 02–06';
-        armArrayBtn.setAttribute(
-          'title',
-          'Arm or disarm shared 48 kHz microphone and stereo sonar bus for Cells 02–06'
-        );
+        busStatusMeta.textContent = '02–06';
+        busStatusMeta.setAttribute('data-tip', BUS_TIP_IDLE);
+        armArrayBtn.setAttribute('data-tip', ARM_ARRAY_TIP_IDLE);
       }
     }
 
@@ -780,29 +860,110 @@
       }
     }
 
+    // Status pill and foot readout: write only when the state really changes (telemetry runs
+    // per audio block), so `data-tip` follows the state without per-frame DOM churn.
+
+    function setStatus(key, label, tone, tip) {
+      if (pillKey === key) return;
+      pillKey = key;
+      statusPillLabel.textContent = label;
+      statusPill.dataset.tone = tone;
+      statusPill.setAttribute('data-tip', tip);
+    }
+
+    function setLiveStatus() {
+      const rateK = Math.round((controller.sampleRate || 48000) / 1000);
+      setStatus(
+        `live-${rateK}`,
+        `Live · ${rateK}k`,
+        'attention',
+        `Listening for swipes at ${rateK} kHz. Click Live to stop.`
+      );
+    }
+
+    // Sim ↑ / ↓ say so in the pill while the simulated swipe plays (mic not in use).
+    let simPillTimer = null;
+
+    function restorePillAfterSim() {
+      simPillTimer = null;
+      if (pillKey.indexOf('sim-') !== 0) return;
+      if (controller.state === 'error') {
+        setStatus('error', 'Sim only', 'attention', String(controller.errorMessage || PILL_TIP_READY));
+      } else if (controller.state === 'idle') {
+        setStatus('ready', 'Ready', 'idle', PILL_TIP_READY);
+      }
+    }
+
+    function playSimulatedSwipe(dir) {
+      if (controller.state !== 'listening' && controller.state !== 'requesting') {
+        setStatus(
+          `sim-${dir}`,
+          dir === 'up' ? 'Sim · up' : 'Sim · down',
+          'idle',
+          `Playing a simulated ${dir === 'up' ? 'upward' : 'downward'} swipe; the mic is not used.`
+        );
+        if (simPillTimer) clearTimeout(simPillTimer);
+        simPillTimer = setTimeout(restorePillAfterSim, 1500);
+      }
+      controller.runSimulatedSwipe(dir);
+    }
+
+    function setFoot(text, tip) {
+      if (footText === text) return;
+      footText = text;
+      footReadout.textContent = text;
+      footReadout.setAttribute('data-tip', tip);
+    }
+
     function handleControllerState(st) {
       const armed = st.state === 'listening' || st.state === 'requesting';
       armBtn.dataset.armed = armed ? 'true' : 'false';
+      armBtn.dataset.tone = armed ? 'attention' : '';
       armBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
       armLabel.textContent =
-        st.state === 'requesting' ? 'ARMING…' : st.state === 'listening' ? 'LIVE' : 'ARM MIC';
+        st.state === 'requesting'
+          ? 'Arming…'
+          : st.state === 'listening'
+            ? 'Live'
+            : st.state === 'error'
+              ? 'Retry'
+              : 'Arm';
+      armBtn.setAttribute(
+        'data-tip',
+        st.state === 'listening'
+          ? 'Mic is on for this sensor. Click to turn it off.'
+          : st.state === 'requesting'
+            ? 'Opening the mic. Click to stop.'
+            : st.state === 'error'
+              ? 'The mic did not start. Click to try again.'
+              : 'Turn on the mic for this sensor alone; stops the shared array.'
+      );
 
       const sonarActive = Boolean(st.txEnabled && st.canUseSonar !== false);
-      sonarBtn.disabled = st.state === 'listening' && st.canUseSonar === false;
+      const sonarBlocked = st.state === 'listening' && st.canUseSonar === false;
+      sonarBtn.setAttribute('aria-disabled', sonarBlocked ? 'true' : 'false');
       sonarBtn.setAttribute('aria-pressed', sonarActive ? 'true' : 'false');
-      sonarBtn.textContent = sonarActive ? '19k L-CH' : 'PASSIVE';
+      sonarBtn.setAttribute(
+        'data-tip',
+        sonarBlocked ? SONAR_TIP_BLOCKED : sonarActive ? SONAR_TIP_ON : SONAR_TIP_OFF
+      );
 
       if (st.state === 'error' && st.error) {
         statusPill.dataset.veto = 'false';
-        statusPill.textContent = 'SIM MODE';
+        setStatus('error', 'Sim only', 'attention', String(st.error));
+        setFoot('No mic', 'The mic could not start; readings are simulated.');
         showErrorOverlay(st.error, armBtn);
+      } else if (st.state === 'requesting') {
+        statusPill.dataset.veto = 'false';
+        setStatus('arming', 'Arming…', 'attention', 'Waiting for the browser to open the mic.');
       } else if (st.state === 'listening') {
         if (!calWizardActive && !calOpening && !calSummaryActive) {
           inlineOverlay.hidden = true;
           syncBackgroundControlsInert();
         }
         statusPill.dataset.veto = 'false';
-        statusPill.textContent = formatListeningStatus();
+        setLiveStatus();
+        setFoot(formatListeningStatus(), FOOT_TIP_LISTENING);
       } else if (st.state === 'idle') {
         if (calWizardActive || calOpening || calSummaryActive) {
           closeCalibrationWizard({ restoreFocus: false, keepMicArmed: true });
@@ -813,7 +974,13 @@
         wasStrokeActive = false;
         restoreIdleDirDisplay();
         statusPill.dataset.veto = 'false';
-        statusPill.textContent = st.calibrated ? 'CAL READY · Arm or drag' : 'READY · Arm or drag';
+        setStatus(
+          st.calibrated ? 'ready-cal' : 'ready',
+          'Ready',
+          'idle',
+          st.calibrated ? 'Calibrated. Arm the mic, or drag the strip to try a swipe.' : PILL_TIP_READY
+        );
+        setFoot('Mic off', 'Mic off. Readings come from dragging the strip or the Sim buttons.');
       }
     }
 
@@ -843,13 +1010,24 @@
     function handleTelemetry(pkt) {
       if (pkt.vetoReason) {
         statusPill.dataset.veto = 'true';
-        statusPill.textContent = pkt.vetoReason === 'key' ? 'KEY CLICK IGNORED' : 'VOICE IGNORED';
+        if (pkt.vetoReason === 'key') {
+          setStatus('veto-key', 'Ignored', 'attention', 'Ignored a key click so it is not read as a swipe.');
+        } else {
+          setStatus('veto-voice', 'Ignored', 'attention', 'Ignored a voice so it is not read as a swipe.');
+        }
       } else {
         statusPill.dataset.veto = 'false';
         if (controller.state === 'listening') {
-          statusPill.textContent = pkt.active
-            ? `TRACKING · +${Math.max(0, Math.round(pkt.fricSnrDb))}dB`
-            : formatListeningStatus();
+          if (pkt.active) {
+            setStatus('tracking', 'Tracking', 'attention', 'A finger is moving on the grille now.');
+            setFoot(
+              `+${Math.max(0, Math.round(pkt.fricSnrDb))} dB`,
+              'How far the rub stands above background noise, in dB.'
+            );
+          } else {
+            setLiveStatus();
+            setFoot(formatListeningStatus(), FOOT_TIP_LISTENING);
+          }
         }
       }
 
@@ -950,10 +1128,14 @@
 
     function updateCollectorBadge() {
       calCollectorBadge.dataset.online = calCollectorOnline ? 'true' : 'false';
-      calCollectorBadge.textContent = calCollectorOnline ? '● DISK REC' : '○ LOCAL + JSON';
-      calCollectorBadge.title = calCollectorOnline
-        ? 'Local disk collector active (127.0.0.1:8792 -> .worktrees/cal-data/latest-session.json)'
-        : 'Collector offline — saving in browser & JSON export';
+      calCollectorBadge.dataset.tone = calCollectorOnline ? 'ok' : 'idle';
+      calCollectorLabel.textContent = calCollectorOnline ? 'Disk rec' : 'Local + JSON';
+      calCollectorBadge.setAttribute(
+        'data-tip',
+        calCollectorOnline
+          ? 'Each step is also saved to disk by cal-collector.mjs on 127.0.0.1:8792.'
+          : 'Steps save in this browser; use JSON to download them. No disk collector found.'
+      );
     }
 
     function highlightCalibrationStepOnRail(step) {
@@ -1099,7 +1281,7 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
+          className: 'ui-btn ui-btn--sm',
           onClick: () => dismissOverlay({ restoreFocus: true })
         },
         ['Dismiss']
@@ -1279,7 +1461,7 @@
           'button',
           {
             type: 'button',
-            className: 'lg-mini-btn lg-mini-btn--primary',
+            className: 'ui-btn ui-btn--sm ui-btn--primary',
             onClick: () => closeCalibrationWizard({ restoreFocus: true })
           },
           ['Done']
@@ -1288,7 +1470,8 @@
           'button',
           {
             type: 'button',
-            className: 'lg-mini-btn',
+            className: 'ui-btn ui-btn--sm',
+            'data-tip': 'Download the calibration and its recorded steps as JSON.',
             onClick: () => handleDownloadCalibrationJson()
           },
           ['JSON']
@@ -1297,7 +1480,8 @@
           'button',
           {
             type: 'button',
-            className: 'lg-mini-btn',
+            className: 'ui-btn ui-btn--sm',
+            'data-tip': 'Erase the saved calibration and go back to the defaults.',
             onClick: () => handleResetCalibration()
           },
           ['Reset']
@@ -1356,7 +1540,7 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn lg-mini-btn--primary',
+          className: 'ui-btn ui-btn--sm ui-btn--primary',
           onClick: () => handleSaveAndNextStep()
         },
         [primaryCtaLabel]
@@ -1365,8 +1549,9 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
-          disabled: calStepIndex === 0,
+          className: 'ui-btn ui-btn--sm',
+          'aria-disabled': calStepIndex === 0 ? 'true' : 'false',
+          'data-tip': calStepIndex === 0 ? 'Already at the first step.' : 'Go back one step and record it again.',
           onClick: () => handlePrevStep()
         },
         ['Back']
@@ -1376,10 +1561,15 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn lg-cal-secondary-btn',
-          disabled: !canFitEarly,
-          title: 'Fit empirical calibration model early (enabled once >= 2 UP and >= 2 DOWN swipes are captured)',
-          onClick: () => handleFitCalibration()
+          className: 'ui-btn ui-btn--sm lg-cal-secondary-btn',
+          'aria-disabled': canFitEarly ? 'false' : 'true',
+          'data-tip': canFitEarly
+            ? 'Fit the calibration now from the steps recorded so far.'
+            : 'Record at least 2 up and 2 down swipes before fitting early.',
+          onClick: () => {
+            if (!canFitEarly) return;
+            handleFitCalibration();
+          }
         },
         ['Fit Early']
       );
@@ -1387,8 +1577,8 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn lg-cal-secondary-btn',
-          title: 'Download recorded left-grille-calibration.json bundle',
+          className: 'ui-btn ui-btn--sm lg-cal-secondary-btn',
+          'data-tip': 'Download the recorded steps as left-grille-calibration.json.',
           onClick: () => handleDownloadCalibrationJson()
         },
         ['JSON']
@@ -1397,7 +1587,8 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn lg-cal-secondary-btn',
+          className: 'ui-btn ui-btn--sm lg-cal-secondary-btn',
+          'data-tip': 'Erase the saved calibration and go back to the defaults.',
           onClick: () => handleResetCalibration()
         },
         ['Reset']
@@ -1406,7 +1597,7 @@
         'button',
         {
           type: 'button',
-          className: 'lg-mini-btn',
+          className: 'ui-btn ui-btn--sm',
           onClick: () => closeCalibrationWizard({ restoreFocus: true })
         },
         ['Cancel']
@@ -1682,6 +1873,23 @@
     // -------------------------------------------------------------------------
     let canvasCssW = 0;
     let canvasCssH = 0;
+    // Scope palette from the page tokens, read once (not per frame); literals are fallbacks.
+    let scopePalette = null;
+
+    function readScopePalette() {
+      const pal = { ink: '#161615', up: '#0052cc', down: '#b4441a', line: '#d3d3ce' };
+      try {
+        const cs = global.getComputedStyle && global.getComputedStyle(scopeBox);
+        if (cs) {
+          const pick = (name, fallback) => (cs.getPropertyValue(name) || '').trim() || fallback;
+          pal.ink = pick('--ui-ink', pal.ink);
+          pal.up = pick('--lg-sig-up', pal.up);
+          pal.down = pick('--lg-sig-down', pal.down);
+          pal.line = pick('--ui-line', pal.line);
+        }
+      } catch (_) {}
+      return pal;
+    }
 
     function syncCanvasSize() {
       const rect = scopeBox.getBoundingClientRect();
@@ -1709,6 +1917,8 @@
 
     function drawScope() {
       if (!canvasCssW || !canvasCssH) return;
+      if (!scopePalette) scopePalette = readScopePalette();
+      const pal = scopePalette;
       const ctx = scopeCanvas.getContext('2d');
       if (!ctx) return;
       const dpr = scopeCanvas.width / canvasCssW;
@@ -1752,7 +1962,7 @@
         ctx.fill();
 
         ctx.lineWidth = 1.75;
-        ctx.strokeStyle = '#141413';
+        ctx.strokeStyle = pal.ink;
         ctx.beginPath();
         for (let i = 0; i < scopeHist.length; i++) {
           const x = 4 + (i / (SCOPE_LEN - 1)) * (traceW - 6);
@@ -1768,7 +1978,7 @@
           const y0 = padY + clamp(scopeHist[i - 1].y, 0, 1) * plotH;
           const x1 = 4 + (i / (SCOPE_LEN - 1)) * (traceW - 6);
           const y1 = padY + clamp(scopeHist[i].y, 0, 1) * plotH;
-          ctx.strokeStyle = y1 <= y0 ? '#0052cc' : '#c93700';
+          ctx.strokeStyle = y1 <= y0 ? pal.up : pal.down;
           ctx.lineWidth = 2.2;
           ctx.beginPath();
           ctx.moveTo(x0, y0);
@@ -1780,7 +1990,7 @@
       if (dopW >= 18) {
         const xBase = traceW + 4;
         const midY = padY + plotH * 0.5;
-        ctx.strokeStyle = '#dcdcd6';
+        ctx.strokeStyle = pal.line;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.moveTo(xBase, midY);
@@ -1794,7 +2004,7 @@
           const rowIdx = isPos ? 31 - b : 15 - b + 16;
           const mag = clamp((bins[b] || 0) / 3.5, 0, 1);
           const barW = Math.max(1, mag * (dopW - 4));
-          ctx.fillStyle = isPos ? 'rgba(0, 82, 204, 0.72)' : 'rgba(201, 55, 0, 0.72)';
+          ctx.fillStyle = isPos ? 'rgba(0, 82, 204, 0.72)' : 'rgba(180, 68, 26, 0.72)';
           ctx.fillRect(xBase + 1, padY + rowIdx * binStep, barW, Math.max(1, binStep - 0.6));
         }
       }
@@ -2047,6 +2257,25 @@
         }
       }
     });
+
+    // Close's own tip shows its Esc keycap, and it is the tip a keyboard user sees on open (focus
+    // lands on Close). The shared tooltip swallows the Escape that hides a visible tip, which
+    // would make that Esc a no-op; when the visible tip is Close's, Esc closes in one press.
+    if (typeof global.addEventListener === 'function') {
+      global.addEventListener(
+        'keydown',
+        (e) => {
+          if (!e || e.key !== 'Escape' || !targetOpen) return;
+          if (calWizardActive || calOpening || calSummaryActive || !inlineOverlay.hidden) return;
+          if (backBtn.getAttribute('aria-describedby') !== 'ui-tip') return;
+          e.preventDefault();
+          if (typeof e.stopPropagation === 'function') e.stopPropagation();
+          if (global.UITooltip && typeof global.UITooltip.hide === 'function') global.UITooltip.hide();
+          requestCloseSecondaryView();
+        },
+        true
+      );
+    }
 
     document.addEventListener('visibilitychange', () => {
       const hidden = Boolean(document.hidden);

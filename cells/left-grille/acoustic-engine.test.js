@@ -710,7 +710,8 @@ test('UI View Transition re-entrancy, popstate+hashchange deduplication, and mid
   assert.equal(portalCell.style.viewTransitionName, '');
 
   // 2. Normal Back click firing popstate + hashchange must start ONLY 1 close View Transition!
-  const backBtn = doc._secondary.children[0].children[0].children[0];
+  // Close is the last control in the studio bar's actions (bar > [index, title, actions]).
+  const backBtn = doc._secondary.children[0].children[2].children[2];
   vtCount = 0;
   backBtn.dispatch('click');
   assert.equal(vtCount, 1, 'popstate + hashchange must deduplicate into 1 close transition');

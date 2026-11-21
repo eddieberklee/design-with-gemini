@@ -774,7 +774,7 @@ test('UI + SharedAcousticBus integration: #lg-sec-cell-2..9, [ARM ARRAY] nav but
 
   // 3. Arming Cell 1 standalone mic must automatically disarm bus first (only 1 stream open, no close event!)
   const secCell1 = doc.getElementById('lg-sec-cell-1');
-  const cell1ArmBtn = secCell1.children[0].children[0].children[0].children[0];
+  const cell1ArmBtn = secCell1.children[0].children[0].children[2].children[1]; // stage > head > actions > [pill, Arm]
   cell1ArmBtn.dispatch('click');
   await new Promise((r) => setTimeout(r, 15));
   assert.equal(win.LeftGrilleLab.bus.state, 'idle', 'Cell 1 arming must stop shared bus');
@@ -789,7 +789,8 @@ test('UI + SharedAcousticBus integration: #lg-sec-cell-2..9, [ARM ARRAY] nav but
   assert.equal(activeStreams, 1);
 
   // 5. Closing secondary view via Back button calls bus.stopAll() and dispatches lg-secondary-close!
-  const backBtn = doc._secondary.children[0].children[0].children[0];
+  // Close is the last control in the studio bar's actions (bar > [index, title, actions]).
+  const backBtn = doc._secondary.children[0].children[2].children[2];
   backBtn.dispatch('click');
   await new Promise((r) => setTimeout(r, 35));
   assert.equal(win.LeftGrilleLab.bus.state, 'idle');
@@ -1578,7 +1579,7 @@ test('UI close: skipped view transitions are handled, hidden tab skips VT, doubl
     vm.runInNewContext(uiCode, win);
 
     const page = doc._secondary;
-    const backBtn = page.children[0].children[0].children[0];
+    const backBtn = page.children[0].children[2].children[2]; // studio bar > actions > Close
 
     // 1. Animated open whose transition is skipped: DOM still swaps, no unhandled rejection
     portalCell.children[0].dispatch('click');
