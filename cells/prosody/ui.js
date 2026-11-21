@@ -47,6 +47,61 @@
 
   const MARQUEE_PLACEHOLDER = 'Detected words stream here…';
 
+  // Status pill states (ui/NOTES.md green rule: green only while really streaming; a saved key is
+  // idle grey). Labels are sentence case; .ui-pill shows them in mono caps.
+  const BADGE_STATES = {
+    demo: {
+      label: 'Demo',
+      tone: 'idle',
+      tip: 'Demo: phrases simulate speech. Click to add a Gemini key for the live mic.'
+    },
+    key: {
+      label: 'Key set',
+      tone: 'idle',
+      tip: 'Key saved, not streaming. Start the mic to go live, or click to edit the key.'
+    },
+    connecting: {
+      label: 'Connecting',
+      tone: 'attention',
+      tip: 'Asking for the mic and opening a Gemini Live session. Click to edit the key.'
+    },
+    live: {
+      label: 'Live',
+      tone: 'ok',
+      tip: 'Streaming your voice to Gemini now. Click to edit the key.'
+    }
+  };
+
+  // Demo chip tips by DEMO_PRESETS id (client.js). Chips push the preset transcript and apply its
+  // step through the same path as a live tool call; nothing is spoken or recorded.
+  const CHIP_TIPS = {
+    'neutral-small': 'Simulates a plainly spoken request: one standard step smaller (−12%).',
+    'stressed-little': 'Simulates a stretched “little”: only a tiny step smaller (−3%).',
+    'stressed-much-bigger': 'Simulates a stressed “MUCH”: a big step bigger (+26%).'
+  };
+
+  let wavePalette = null;
+
+  // Canvas stroke colours from the shared tokens, read once (not per frame).
+  function readWavePalette() {
+    if (wavePalette) return wavePalette;
+    const pal = { idle: '#d3d3ce', live: '#b4441a' };
+    try {
+      const root = document.documentElement;
+      if (root && typeof global.getComputedStyle === 'function') {
+        const cs = global.getComputedStyle(root);
+        const idle = cs && typeof cs.getPropertyValue === 'function' ? cs.getPropertyValue('--ui-line').trim() : '';
+        const live = cs && typeof cs.getPropertyValue === 'function' ? cs.getPropertyValue('--ui-accent').trim() : '';
+        if (idle) pal.idle = idle;
+        if (live) pal.live = live;
+      }
+    } catch (_e) {
+      // keep fallbacks
+    }
+    wavePalette = pal;
+    return pal;
+  }
+
   function mount(container) {
     if (!container) return function () {};
 
@@ -77,49 +132,53 @@
     };
 
     container.textContent = '';
+    // Shared tile anatomy (ui/base.css): head 36 / stage / controls / foot 30, and the ui-tile
+    // container that the compact (< 320 px) and tiny (< 240 px) steps query.
+    if (container.classList) container.classList.add('ui-tile');
 
-    // --- Header ---
-    const header = el('div', 'ps-header');
-    const titleGroup = el('div', 'ps-title-group');
-    titleGroup.appendChild(el('span', 'ps-index', '02'));
-    titleGroup.appendChild(el('span', 'ps-title', 'Live Prosody Sizer'));
+    // --- Header: index + title + status pill + actions ---
+    const header = el('header', 'ui-tile-head ps-header');
+    header.appendChild(el('span', 'ui-tile-index ps-index', '02'));
+    header.appendChild(el('span', 'ui-tile-title ps-title', 'Live Prosody Sizer'));
 
-    const headerActions = el('div', 'ps-header-actions');
-    const modeBadge = el('button', 'ps-badge');
+    const headerActions = el('div', 'ui-tile-actions ps-header-actions');
+    const modeBadge = el('button', 'ui-pill ps-badge');
     modeBadge.type = 'button';
+    modeBadge.setAttribute('aria-haspopup', 'dialog');
     modeBadge.setAttribute('aria-expanded', 'false');
-    modeBadge.title = 'Configure Gemini API key for continuous Live API audio streaming';
-    const badgeDot = el('span', 'ps-badge-dot');
-    badgeDot.setAttribute('aria-hidden', 'true');
-    const badgeLabel = el('span', '', 'SIM · +KEY');
-    modeBadge.appendChild(badgeDot);
+    const badgeLabel = el('span', 'ui-pill-label', BADGE_STATES.demo.label);
     modeBadge.appendChild(badgeLabel);
 
     const initialMuted = Boolean(NS.Client.SoundFX.isMuted && NS.Client.SoundFX.isMuted());
-    const sfxBtn = el('button', 'ps-icon-btn', initialMuted ? 'SFX Off' : 'SFX On');
+    const sfxBtn = el('button', 'ui-btn ui-btn--sm ui-hide-compact ps-icon-btn', 'SFX');
     sfxBtn.type = 'button';
-    sfxBtn.setAttribute('aria-pressed', initialMuted ? 'false' : 'true');
-    sfxBtn.title = 'Toggle synthesized resize sound effects';
 
-    const resetBtn = el('button', 'ps-icon-btn', 'Reset');
+    const resetBtn = el('button', 'ui-btn ui-btn--sm ui-hide-compact ps-icon-btn ps-reset-btn', 'Reset');
     resetBtn.type = 'button';
+    resetBtn.setAttribute('data-tip', 'Back to 100% and clear the heard words.');
 
     headerActions.appendChild(modeBadge);
     headerActions.appendChild(sfxBtn);
     headerActions.appendChild(resetBtn);
-    header.appendChild(titleGroup);
     header.appendChild(headerActions);
 
     // --- API Key Popover ---
     const keyPanel = el('div', 'ps-key-panel');
     keyPanel.setAttribute('role', 'dialog');
-    keyPanel.setAttribute('aria-label', 'Gemini API Key');
-    keyPanel.appendChild(el('div', 'ps-key-panel-title', 'Gemini Live API Key'));
+    keyPanel.setAttribute('aria-label', 'Gemini API key');
+    const keyHead = el('div', 'ps-key-head');
+    keyHead.appendChild(el('div', 'ps-key-panel-title', 'Gemini API key'));
+    const keyCloseBtn = el('button', 'ui-btn ui-btn--sm ps-icon-btn', 'Close');
+    keyCloseBtn.type = 'button';
+    keyCloseBtn.setAttribute('data-tip', 'Close the key panel without saving.');
+    keyCloseBtn.setAttribute('data-tip-key', 'Escape');
+    keyHead.appendChild(keyCloseBtn);
+    keyPanel.appendChild(keyHead);
     keyPanel.appendChild(
       el(
         'div',
         'ps-key-panel-desc',
-        'Streams live 16kHz mic audio over WebSocket to Gemini Live API so vocal stress resizes the button in real time. Shared with Cell 01.'
+        'Streams your mic to Gemini Live; how you stress a size word resizes the button. Shared with cells 01 and 04.'
       )
     );
     const keyInput = el('input', 'ps-key-input');
@@ -129,31 +188,34 @@
     keyInput.setAttribute('aria-label', 'Gemini API key');
 
     const keyActions = el('div', 'ps-key-actions');
-    const keyClearBtn = el('button', 'ps-icon-btn', 'Clear');
+    const keyClearBtn = el('button', 'ui-btn ui-btn--sm ui-btn--quiet ps-icon-btn', 'Clear');
     keyClearBtn.type = 'button';
-    const keyCloseBtn = el('button', 'ps-icon-btn', 'Close');
-    keyCloseBtn.type = 'button';
-    const keySaveBtn = el('button', 'ps-btn-primary', 'Save');
+    keyClearBtn.setAttribute('data-tip', 'Remove the saved key; Decisions and API Matrix use it too.');
+    const keySaveBtn = el('button', 'ui-btn ui-btn--sm ui-btn--primary ps-btn-primary', 'Save');
     keySaveBtn.type = 'button';
+    keySaveBtn.setAttribute('data-tip', 'Save the key in this browser; cells 01 and 04 share it.');
+    keySaveBtn.setAttribute('data-tip-key', 'Enter');
 
     const keyNotice = el('div', 'ps-key-notice', '');
     keyNotice.setAttribute('role', 'alert');
 
     keyActions.appendChild(keyClearBtn);
-    keyActions.appendChild(keyCloseBtn);
     keyActions.appendChild(keySaveBtn);
     keyPanel.appendChild(keyInput);
     keyPanel.appendChild(keyNotice);
     keyPanel.appendChild(keyActions);
 
-    // --- Center Stage ---
-    const stage = el('div', 'ps-stage');
-    const metricsCorner = el('div', 'ps-metrics-corner', '100% · 136×44px');
-    const deltaPill = el('div', 'ps-delta-pill', '');
+    // --- Stage: the hero button on a faint dot-grid scale ---
+    const stage = el('div', 'ui-tile-body ui-tile-body--flush ps-stage');
+    const metricsCorner = el('div', 'ui-readout ui-readout--quiet ps-metrics-corner', '100% · 136×44px');
+    metricsCorner.setAttribute('data-tip', 'Button size now: scale, then width × height in pixels.');
+    const deltaPill = el('div', 'ui-readout ps-delta-pill', '');
+    deltaPill.setAttribute('data-tip', 'Size change the last phrase applied; MAX or MIN means a size limit.');
 
     const buttonWrap = el('div', 'ps-button-wrap');
     const targetBtn = el('button', 'ps-target-btn', 'Confirm');
     targetBtn.type = 'button';
+    targetBtn.setAttribute('data-tip', 'Demo target: it resizes when you speak or tap a phrase.');
     const ghostBtn = el('div', 'ps-ghost-btn');
     ghostBtn.setAttribute('aria-hidden', 'true');
 
@@ -161,7 +223,8 @@
     buttonWrap.appendChild(ghostBtn);
 
     // Live Word Marquee Ribbon at bottom of stage
-    const marqueeWrap = el('div', 'ps-marquee');
+    const marqueeWrap = el('div', 'ps-marquee ui-hide-tiny');
+    marqueeWrap.setAttribute('data-tip', 'Words heard from you or the tapped phrase; the stressed word is highlighted.');
     const marqueeTrack = el('div', 'ps-marquee-track');
     marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', MARQUEE_PLACEHOLDER));
     marqueeWrap.appendChild(marqueeTrack);
@@ -171,38 +234,29 @@
     stage.appendChild(buttonWrap);
     stage.appendChild(marqueeWrap);
 
-    // --- Footer ---
-    const footer = el('div', 'ps-footer');
-    const controlsRow = el('div', 'ps-controls-row');
+    // --- Controls: mic + level, then demo phrases. Compact (< 320 px): mic only. Tiny: none. ---
+    const controlsRow = el('div', 'ps-controls ui-hide-tiny');
 
-    const micBtn = el('button', 'ps-mic-btn');
+    const micBtn = el('button', 'ui-btn ui-btn--sm ps-mic-btn');
     micBtn.type = 'button';
     micBtn.setAttribute('aria-pressed', 'false');
     const micDot = el('span', 'ps-mic-dot');
     micDot.setAttribute('aria-hidden', 'true');
-    const micLabel = el('span', '', 'Start Live Mic');
+    const micLabel = el('span', '', 'Start mic');
     micBtn.appendChild(micDot);
     micBtn.appendChild(micLabel);
 
-    const waveCanvas = el('canvas', 'ps-wave-canvas');
+    const waveCanvas = el('canvas', 'ps-wave-canvas ui-hide-compact');
     waveCanvas.setAttribute('aria-hidden', 'true');
+    waveCanvas.setAttribute('data-tip', 'Mic level; a flat line until the live mic is on.');
 
-    controlsRow.appendChild(micBtn);
-    controlsRow.appendChild(waveCanvas);
-
-    const readout = el('div', 'ps-readout');
-    const readoutText = el('div', 'ps-readout-text', 'Stream live audio or tap a prosody demo chip.');
-    readoutText.setAttribute('role', 'status');
-    readoutText.setAttribute('aria-live', 'polite');
-    const txRxBadge = el('span', 'ps-tx-rx', '');
-    txRxBadge.setAttribute('aria-hidden', 'true');
-    readout.appendChild(readoutText);
-    readout.appendChild(txRxBadge);
-
-    const demosRow = el('div', 'ps-demos');
+    const demosRow = el('div', 'ps-demos ui-hide-compact');
+    demosRow.setAttribute('role', 'group');
+    demosRow.setAttribute('aria-label', 'Demo phrases');
     NS.Client.DEMO_PRESETS.forEach(function (preset) {
-      const chip = el('button', 'ps-demo-chip', preset.label);
+      const chip = el('button', 'ui-chip ps-demo-chip', preset.label);
       chip.type = 'button';
+      if (CHIP_TIPS[preset.id]) chip.setAttribute('data-tip', CHIP_TIPS[preset.id]);
       chip.addEventListener('click', function () {
         pushMarqueeWords(preset.transcript, preset.emphasized_word);
         applyProsodyResult(preset);
@@ -210,23 +264,75 @@
       demosRow.appendChild(chip);
     });
 
-    footer.appendChild(controlsRow);
-    footer.appendChild(readout);
-    footer.appendChild(demosRow);
+    // Compact tiles hide the foot; this line beside the mic carries the same status there (only
+    // one of the two is ever rendered, so screen readers hear it once).
+    const compactStatus = el('div', 'ui-truncate ps-compact-status', '');
+    compactStatus.setAttribute('role', 'status');
+    compactStatus.setAttribute('aria-live', 'polite');
+
+    controlsRow.appendChild(micBtn);
+    controlsRow.appendChild(waveCanvas);
+    controlsRow.appendChild(compactStatus);
+    controlsRow.appendChild(demosRow);
+
+    // --- Footer: status line + TX/RX counters ---
+    const footer = el('footer', 'ui-tile-foot ps-footer');
+    const readoutText = el('div', 'ui-truncate ps-readout-text', 'Tap a phrase, or start the mic.');
+    readoutText.setAttribute('role', 'status');
+    readoutText.setAttribute('aria-live', 'polite');
+    const txRxBadge = el('span', 'ps-tx-rx', '');
+    txRxBadge.setAttribute('aria-hidden', 'true');
+    txRxBadge.setAttribute('data-tip', 'Audio chunks sent to Gemini (TX) and messages received back (RX).');
+    footer.appendChild(readoutText);
+    footer.appendChild(txRxBadge);
 
     container.appendChild(header);
     container.appendChild(keyPanel);
     container.appendChild(stage);
+    container.appendChild(controlsRow);
     container.appendChild(footer);
 
     // --- Rendering helpers ---
-    // 'LIVE' only while a Gemini Live session is actually streaming; a saved key alone is 'KEY SET'
-    // (the demo chips still simulate until the mic session is up).
+    // Pill: 'Live' (green) only while a Gemini Live session is actually streaming; 'Connecting'
+    // (rust) while the mic/socket open; a saved key alone is idle 'Key set'; no key is 'Demo'
+    // (the phrases simulate). Also keeps the state-dependent tips and names in step: every key
+    // and stream change (onKeySync, save, clear, start, ready, stop) calls this.
     function syncBadge() {
       if (unmounted) return;
       const hasKey = Boolean(NS.Client.KeyStore.get());
-      modeBadge.classList.toggle('ps-badge--live', hasKey);
-      badgeLabel.textContent = state.streaming ? 'LIVE' : hasKey ? 'KEY SET' : 'SIM · +KEY';
+      const mode = state.streaming ? 'live' : state.connecting ? 'connecting' : hasKey ? 'key' : 'demo';
+      const b = BADGE_STATES[mode];
+      if (badgeLabel.textContent !== b.label) badgeLabel.textContent = b.label;
+      modeBadge.setAttribute('data-tone', b.tone);
+      modeBadge.setAttribute('data-tip', b.tip);
+      modeBadge.setAttribute('aria-label', b.label + ' · Gemini key settings');
+      micBtn.setAttribute(
+        'data-tip',
+        state.streaming
+          ? 'Streaming your voice to Gemini. Click to stop the mic.'
+          : state.connecting
+            ? 'Connecting to Gemini. Click to cancel.'
+            : hasKey
+              ? 'Stream your voice to Gemini; how you say size words resizes the button.'
+              : 'Needs a Gemini key; opens the key panel first.'
+      );
+    }
+
+    function syncSfx(muted) {
+      sfxBtn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+      sfxBtn.setAttribute(
+        'data-tip',
+        muted
+          ? 'Sound effects off. Click to hear a short tone on each resize.'
+          : 'Sound effects on: a short tone on each resize and mic start. Click to mute.'
+      );
+    }
+    syncSfx(initialMuted);
+
+    // Phrase row scrolls sideways when the tile is too narrow for all three; the fade marks it.
+    function syncDemosOverflow() {
+      const over = demosRow.scrollWidth > demosRow.clientWidth + 1;
+      demosRow.classList.toggle('is-overflowing', over);
     }
 
     function setKeyNotice(text) {
@@ -300,7 +406,7 @@
       const cw = stage.clientWidth;
       const ch = stage.clientHeight;
       if (!(cw > 0) || !(ch > 0)) return null;
-      let pad = [28, 12, 34, 12];
+      let pad = [28, 12, 32, 12];
       if (typeof global.getComputedStyle === 'function') {
         try {
           const cs = global.getComputedStyle(stage);
@@ -361,7 +467,16 @@
         readoutText.textContent = nextText;
       }
       readoutText.classList.toggle('is-error', Boolean(isError));
-      readoutText.title = nextText;
+      if (compactStatus.textContent !== nextText) compactStatus.textContent = nextText;
+      compactStatus.classList.toggle('is-error', Boolean(isError));
+      if (nextText) compactStatus.setAttribute('data-tip', nextText);
+      else compactStatus.removeAttribute('data-tip');
+      // The status line truncates; its tip carries the full text only when it is cut off.
+      if (nextText && readoutText.scrollWidth > readoutText.clientWidth + 1) {
+        readoutText.setAttribute('data-tip', nextText);
+      } else {
+        readoutText.removeAttribute('data-tip');
+      }
     }
 
     function renderTelemetry(tx, rx) {
@@ -401,7 +516,7 @@
       const w = waveCanvas.width;
       const h = waveCanvas.height;
       ctx.clearRect(0, 0, w, h);
-      ctx.strokeStyle = '#e5e5e5';
+      ctx.strokeStyle = readWavePalette().idle;
       ctx.lineWidth = Math.max(1.5, Math.min(2, global.devicePixelRatio || 1));
       ctx.beginPath();
       ctx.moveTo(8, h / 2);
@@ -415,6 +530,7 @@
       if (!ctx || !state.analyser || typeof global.requestAnimationFrame !== 'function') return;
       const buf = new Uint8Array(state.analyser.fftSize);
       const dpr = Math.min(2, global.devicePixelRatio || 1);
+      const liveStroke = readWavePalette().live;
 
       function frame() {
         if (unmounted || !state.streaming || !state.analyser) return;
@@ -422,7 +538,7 @@
         const w = waveCanvas.width;
         const h = waveCanvas.height;
         ctx.clearRect(0, 0, w, h);
-        ctx.strokeStyle = '#b43a10';
+        ctx.strokeStyle = liveStroke;
         ctx.lineWidth = 1.6 * dpr;
         ctx.beginPath();
         const slice = w / buf.length;
@@ -583,7 +699,8 @@
       state.sessionKey = '';
       micBtn.classList.remove('is-recording', 'is-processing');
       micBtn.setAttribute('aria-pressed', 'false');
-      micLabel.textContent = 'Start Live Mic';
+      micBtn.removeAttribute('data-tone');
+      micLabel.textContent = 'Start mic';
       if (!unmounted) {
         clearTelemetry();
         drawIdleWave();
@@ -600,7 +717,7 @@
       const apiKey = NS.Client.KeyStore.get();
       if (!apiKey) {
         openKeyPanel();
-        renderReadout('Add a Gemini API key for live streaming, or tap a demo chip below.', false);
+        renderReadout('Add a Gemini key to stream, or tap a phrase.', false);
         return;
       }
 
@@ -622,6 +739,7 @@
       micBtn.classList.add('is-processing');
       micBtn.setAttribute('aria-pressed', 'true');
       micLabel.textContent = 'Connecting…';
+      syncBadge();
       renderReadout('Requesting microphone access…', false);
 
       navigator.mediaDevices
@@ -759,7 +877,8 @@
               micBtn.classList.remove('is-processing');
               micBtn.classList.add('is-recording');
               micBtn.setAttribute('aria-pressed', 'true');
-              micLabel.textContent = 'Live · Click to Stop';
+              micBtn.setAttribute('data-tone', 'attention');
+              micLabel.textContent = 'Stop mic';
               syncBadge();
               NS.Client.SoundFX.playStreamToggle(true);
               renderTelemetry(txCount, rxCount);
@@ -855,9 +974,7 @@
     });
 
     sfxBtn.addEventListener('click', function () {
-      const muted = NS.Client.SoundFX.toggleMute();
-      sfxBtn.textContent = muted ? 'SFX Off' : 'SFX On';
-      sfxBtn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+      syncSfx(NS.Client.SoundFX.toggleMute());
     });
 
     resetBtn.addEventListener('click', function () {
@@ -896,7 +1013,7 @@
       NS.Client.KeyStore.set(keyInput.value, keepLocal);
       closeKeyPanel(true);
       syncBadge();
-      renderReadout('Gemini key saved — click Start Live Mic to stream.', false);
+      renderReadout('Gemini key saved — click Start mic to stream.', false);
     }
 
     keySaveBtn.addEventListener('click', saveKeyFromInput);
@@ -921,7 +1038,7 @@
       keyInput.value = '';
       setKeyNotice('');
       syncBadge();
-      renderReadout('Key cleared — demo chips only.', false);
+      renderReadout('Key cleared — demo phrases only.', false);
     });
 
     // Fired by this cell, api-matrix, decisions (gemini-key-changed), other tabs (storage) and
@@ -945,6 +1062,7 @@
     function onStageResize() {
       if (unmounted) return;
       renderButtonSize();
+      syncDemosOverflow();
       if (state.streaming) {
         syncWaveCanvasSize();
       } else {
@@ -962,7 +1080,7 @@
       if (unmounted || document.visibilityState !== 'hidden') return;
       if (state.streaming || state.connecting) {
         stopLiveStream(true);
-        renderReadout('Live stream stopped while the tab was hidden — click Start Live Mic to resume.', false);
+        renderReadout('Live stream stopped while the tab was hidden — click Start mic to resume.', false);
       }
     }
 
@@ -1015,6 +1133,7 @@
     // Initial render
     syncBadge();
     renderButtonSize();
+    syncDemosOverflow();
     drawIdleWave();
 
     return unmount;

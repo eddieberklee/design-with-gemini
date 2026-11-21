@@ -1,266 +1,56 @@
-/* Voice Prosody Button Sizer — strictly scoped under .cell--prosody and .ps-* */
+/* Cell 02 Live Prosody Sizer. Scoped to .cell--prosody and .ps-*.
+   Tile anatomy, buttons, pill, chips, readouts, foot and the compact (< 320 px) / tiny (< 240 px)
+   steps come from ui/base.css (ui.js adds .ui-tile to the section). This file keeps only the stage,
+   the hero button, the transcript strip, the control rows and the key popover. */
 
 .cell--prosody {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", sans-serif;
-  -webkit-font-smoothing: antialiased;
-  color: #171717;
-  background: #ffffff;
-  container-type: inline-size;
-  container-name: ps-card;
+  --ps-morph: 280ms;   /* hero resize: long enough to read the size change and its ghost */
 }
 
-.cell--prosody *,
-.cell--prosody *::before,
-.cell--prosody *::after {
-  box-sizing: border-box;
+.ps-target-btn:focus-visible,
+.ps-key-input:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
-.cell--prosody button,
-.cell--prosody input {
-  font-family: inherit;
-}
+/* Stage ------------------------------------------------------------------------------------- */
 
-.cell--prosody button:focus-visible,
-.cell--prosody input:focus-visible {
-  outline: 2px solid #2563eb;
-  outline-offset: 1px;
-}
-
-/* Header (harmonized with Cell 01 height) */
-.ps-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 10px;
-  min-height: 36px;
-  border-bottom: 1px solid #efefef;
-  flex-shrink: 0;
-}
-
-.ps-title-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.ps-index {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 10px;
-  font-weight: 600;
-  color: #666666;
-  letter-spacing: 0.04em;
-}
-
-.ps-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #171717;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ps-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
-.ps-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  padding: 2px 6px;
-  border-radius: 999px;
-  border: 1px solid #fde68a;
-  background: #fffbeb;
-  color: #b45309;
-  cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease;
-}
-
-.ps-badge:hover {
-  border-color: #f59e0b;
-  background: #fef3c7;
-}
-
-.ps-badge--live {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
-  color: #15803d;
-}
-
-.ps-badge--live:hover {
-  border-color: #86efac;
-  background: #dcfce7;
-}
-
-.ps-badge-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #d97706;
-}
-
-.ps-badge--live .ps-badge-dot {
-  background: #16a34a;
-}
-
-.ps-icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  padding: 0 7px;
-  border-radius: 5px;
-  border: 1px solid #e5e5e5;
-  background: #ffffff;
-  color: #525252;
-  font-size: 10px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.ps-icon-btn:hover {
-  background: #f5f5f5;
-  border-color: #d4d4d4;
-  color: #171717;
-}
-
-/* Center Stage */
 .ps-stage {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
   align-items: center;
   justify-content: center;
-  background:
-    radial-gradient(circle at 1px 1px, #e5e5e5 1px, transparent 0);
-  background-size: 16px 16px;
   overflow: hidden;
-  /* Top/bottom padding reserve the metrics corner + delta pill and the marquee; ui.js:stageInnerBox
-     reads it to size the button, so keep it >= those overlays at every @container step. */
-  padding: 28px 12px 34px;
+  background:
+    radial-gradient(circle at 1px 1px, var(--ui-line) 1px, transparent 0) 0 0 / 16px 16px,
+    var(--ui-well);
+  /* Top reserves the corner readouts, bottom the transcript strip. ui.js:stageInnerBox reads this
+     padding to fit the button, so keep it >= those overlays at every container step. */
+  padding: 28px 12px 32px;
 }
 
-/* Live Detected-Word Marquee */
-.ps-marquee {
+.ps-metrics-corner,
+.ps-delta-pill {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  top: var(--ui-2);
   z-index: 3;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  overflow-x: auto;
-  scrollbar-width: none;
-  background: rgba(255, 255, 255, 0.9);
-  border-top: 1px solid #efefef;
-  padding: 0 10px;
-  mask-image: linear-gradient(to right, transparent 0%, #000 18px, #000 calc(100% - 12px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 18px, #000 calc(100% - 12px), transparent 100%);
-}
-
-.ps-marquee::-webkit-scrollbar {
-  display: none;
-}
-
-.ps-marquee-track {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-  margin-left: auto;
-}
-
-.ps-marquee-placeholder {
-  font-size: 10px;
-  color: #6e6e6a;
-  font-style: italic;
-}
-
-.ps-marquee-word {
-  display: inline-block;
-  font-size: 10.5px;
-  font-weight: 500;
-  color: #404040;
-  animation: ps-word-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.ps-marquee-word--em {
-  font-weight: 700;
-  color: #b43a10;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  padding: 0 5px;
-  border-radius: 999px;
-}
-
-@keyframes ps-word-in {
-  from {
-    opacity: 0;
-    transform: translateX(8px) scale(0.94);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0) scale(1);
-  }
+  font-size: var(--ui-fs-1);
+  line-height: 12px;
 }
 
 .ps-metrics-corner {
-  position: absolute;
-  top: 7px;
-  left: 9px;
-  z-index: 3;
-  pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 10px;
-  color: #666666;
-  font-variant-numeric: tabular-nums;
-  background: rgba(255, 255, 255, 0.92);
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid #efefef;
+  left: var(--ui-3);
 }
 
 .ps-delta-pill {
-  position: absolute;
-  top: 7px;
-  right: 9px;
-  z-index: 3;
-  pointer-events: none;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  color: #c2410c;
+  right: var(--ui-3);
+  color: var(--ui-ink-2);
+  visibility: hidden;
   opacity: 0;
-  transform: translateY(-2px);
-  transition: opacity 180ms ease, transform 180ms ease;
+  transition: opacity var(--ui-dur) var(--ui-ease), visibility var(--ui-dur) var(--ui-ease);
 }
 
 .ps-delta-pill.is-visible {
+  visibility: visible;
   opacity: 1;
-  transform: translateY(0);
 }
 
 .ps-button-wrap {
@@ -270,403 +60,361 @@
   justify-content: center;
 }
 
-/* Ghost outline of previous size (layered above targetBtn so both shrink & grow deltas stay legible) */
-.ps-ghost-btn {
-  position: absolute;
-  z-index: 2;
-  pointer-events: none;
-  border-radius: 999px;
-  border: 1.5px dashed #b43a10;
-  opacity: 0;
-  transition: opacity 280ms ease, width 240ms ease, height 240ms ease;
-}
-
-.ps-ghost-btn.is-visible {
-  opacity: 0.85;
-}
-
-.ps-ghost-btn.is-growing {
-  border-color: #ff7a45;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
-}
-
-/* Target Resizable Button */
+/* Hero: the button being resized. Width, height and font-size are set inline by ui.js. */
 .ps-target-btn {
   position: relative;
   z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: none;
+  border: 0;
   border-radius: 999px;
-  background: #171717;
-  color: #ffffff;
+  background: var(--ui-ink);
+  color: var(--ui-surface);
+  font-family: var(--ui-sans);
   font-weight: 600;
   letter-spacing: -0.01em;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  transition:
-    width 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    font-size 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    background 140ms ease,
-    transform 120ms ease;
-  user-select: none;
   white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    width var(--ps-morph) var(--ui-ease),
+    height var(--ps-morph) var(--ui-ease),
+    font-size var(--ps-morph) var(--ui-ease),
+    background-color var(--ui-dur) var(--ui-ease),
+    transform var(--ui-dur) var(--ui-ease);
 }
 
 .ps-target-btn:hover {
-  background: #262626;
+  background: color-mix(in srgb, var(--ui-ink) 88%, var(--ui-surface));
 }
 
 .ps-target-btn:active {
   transform: scale(0.97);
 }
 
-/* Footer Controls */
-.ps-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 7px 10px 8px;
-  border-top: 1px solid #efefef;
-  background: #fafafa;
-  flex-shrink: 0;
-}
-
-.ps-controls-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ps-mic-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 10px;
+/* Ghost outline of the previous size, above the button so growth and shrink both read. */
+.ps-ghost-btn {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
   border-radius: 999px;
-  border: 1px solid #171717;
-  background: #171717;
-  color: #ffffff;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  flex-shrink: 0;
-  touch-action: none;
-  transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+  border: 1.5px dashed var(--ui-ink-3);
+  opacity: 0;
+  transition:
+    opacity var(--ui-dur) var(--ui-ease),
+    width var(--ps-morph) var(--ui-ease),
+    height var(--ps-morph) var(--ui-ease);
 }
 
-.ps-mic-btn:hover {
-  background: #262626;
+.ps-ghost-btn.is-visible {
+  opacity: 1;
 }
 
-.ps-mic-btn.is-recording {
-  background: #b43a10;
-  border-color: #b43a10;
-  animation: ps-pulse 1.1s ease-in-out infinite;
+.ps-ghost-btn.is-growing {          /* inside the black button */
+  border-color: color-mix(in srgb, var(--ui-surface) 60%, transparent);
 }
 
-.ps-mic-btn.is-processing {
-  background: #525252;
-  border-color: #525252;
-}
-
-@keyframes ps-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(180, 58, 16, 0.38); }
-  50% { box-shadow: 0 0 0 6px rgba(180, 58, 16, 0); }
-}
-
-.ps-mic-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #ffffff;
-}
-
-.ps-wave-canvas {
-  flex: 1 1 auto;
-  min-width: 48px;
-  height: 26px;
-  border-radius: 5px;
-  background: #ffffff;
-  border: 1px solid #e5e5e5;
-}
-
-/* Transcript / Prosody Readout */
-.ps-readout {
+/* Transcript strip along the stage floor; newest words on the right. */
+.ps-marquee {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  height: 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 16px;
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  color: #525252;
-  line-height: 1.3;
+  padding: 0 var(--ui-3);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--ui-6));
+  mask-image: linear-gradient(to right, transparent, #000 var(--ui-6));
 }
 
-.ps-readout-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ps-readout-text.is-error {
-  color: #b91c1c;
-}
-
-.ps-tx-rx {
-  flex-shrink: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 9.5px;
-  font-variant-numeric: tabular-nums;
-  color: #666666;
-  white-space: nowrap;
-}
-
-.ps-tx-rx:empty {
+.ps-marquee::-webkit-scrollbar {
   display: none;
 }
 
+.ps-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-1);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.ps-marquee-placeholder,
+.ps-marquee-word {
+  font: 400 var(--ui-fs-2) / 1.2 var(--ui-sans);
+  color: var(--ui-ink-3);
+}
+
+.ps-marquee-word {
+  display: inline-block;
+  font-weight: 500;
+  color: var(--ui-ink-2);
+  animation: ps-word-in var(--ui-dur) var(--ui-ease) both;
+}
+
+.ps-marquee-word--em {            /* the stressed word Gemini (or the phrase) picked */
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--ui-accent-tint);
+  color: var(--ui-accent);
+  font-weight: 600;
+}
+
+@keyframes ps-word-in {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+}
+
+/* Controls: [mic | level] / [phrases] ---------------------------------------------------- */
+
+.ps-controls {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "mic level"
+    "demos demos";
+  align-items: center;
+  gap: var(--ui-2);
+  padding: var(--ui-2) var(--ui-3);
+  min-width: 0;
+}
+
+.ps-mic-btn {
+  grid-area: mic;
+  min-width: 96px;                /* fits "Connecting…": no shift between mic states */
+}
+
+.ps-mic-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.ps-wave-canvas {
+  grid-area: level;
+  display: block;
+  width: 100%;
+  height: var(--ui-ctl-h-sm);
+}
+
 .ps-demos {
+  grid-area: demos;
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  padding: 4px;                   /* keeps the chips' hit area and focus ring inside the scroller */
+  margin: -4px;
 }
 
 .ps-demos::-webkit-scrollbar {
   display: none;
 }
 
+.ps-demos.is-overflowing {        /* narrow tiles: the row scrolls; the fade says so */
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 var(--ui-6));
+  mask-image: linear-gradient(to left, transparent, #000 var(--ui-6));
+}
+
 .ps-demo-chip {
-  font-size: 9.5px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid #e5e5e5;
-  background: #ffffff;
-  color: #525252;
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+  flex: 0 0 auto;
+  max-width: none;
 }
 
-.ps-demo-chip:hover {
-  border-color: #b43a10;
-  color: #171717;
-  background: #fff7ed;
+.ps-compact-status {              /* shown only at compact width, where the foot is hidden */
+  display: none;
+  grid-area: level;
+  font: 400 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  letter-spacing: 0.02em;
+  color: var(--ui-ink-3);
 }
 
-/* API Key Popover Overlay */
+.ps-compact-status.is-error {
+  color: var(--ui-accent);
+}
+
+/* Foot: status line + TX/RX ------------------------------------------------------------------ */
+
+.ps-readout-text {
+  flex: 1 1 auto;
+}
+
+.ps-readout-text.is-error {
+  color: var(--ui-accent);
+}
+
+.ps-tx-rx {
+  flex: 0 0 auto;
+  min-width: 15ch;                /* "TX 1234 · RX 56" without pushing the status line */
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.ps-tx-rx:empty {
+  display: none;
+}
+
+.ps-badge[aria-expanded="true"] {
+  border-color: var(--ui-ink-3);
+}
+
+/* Key popover -------------------------------------------------------------------------------- */
+
 .ps-key-panel {
   position: absolute;
-  inset: 38px 10px auto 10px;
+  inset: calc(var(--ui-head-h) + var(--ui-1)) var(--ui-2) auto;
   z-index: 20;
-  background: #ffffff;
-  border: 1px solid #d4d4d4;
-  border-radius: 8px;
-  padding: 10px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
   display: none;
   flex-direction: column;
-  gap: 8px;
-  /* The cell clips overflow; keep Save reachable in short tiles. */
-  max-height: calc(100% - 44px);
+  gap: var(--ui-2);
+  padding: var(--ui-3);
+  /* The tile clips overflow; keep Save reachable in short tiles. */
+  max-height: calc(100% - var(--ui-head-h) - var(--ui-2));
   overflow-y: auto;
-}
-
-.ps-key-notice {
-  font-size: 10px;
-  line-height: 1.3;
-  color: #b91c1c;
-}
-
-.ps-key-notice:empty {
-  display: none;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius);
+  box-shadow: var(--ui-shadow-pop);
 }
 
 .ps-key-panel.is-open {
   display: flex;
 }
 
+.ps-key-head,
+.ps-key-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-2);
+  min-width: 0;
+}
+
 .ps-key-panel-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: #171717;
+  min-width: 0;
+  font: 600 var(--ui-fs-3) / 1.2 var(--ui-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ps-key-panel-desc {
-  font-size: 10px;
-  color: #525252;
-  line-height: 1.35;
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
 }
 
 .ps-key-input {
   width: 100%;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid #d4d4d4;
-  border-radius: 5px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 11px;
-  color: #171717;
+  height: var(--ui-ctl-h);
+  padding: 0 var(--ui-2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-mono);
 }
 
-.ps-key-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
+.ps-key-input::placeholder {
+  color: var(--ui-ink-3);
 }
 
-.ps-btn-primary {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 5px;
-  border: 1px solid #171717;
-  background: #171717;
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 600;
-  cursor: pointer;
+.ps-key-notice {
+  font: 400 var(--ui-fs-2) / 1.35 var(--ui-sans);
+  color: var(--ui-accent);
 }
 
-@container ps-card (max-width: 340px) {
-  .ps-title {
-    font-size: 11px;
-  }
-  .ps-demo-chip {
-    font-size: 9px;
-    padding: 1px 6px;
-  }
-  .ps-mic-btn {
-    height: 26px;
-    padding: 0 8px;
-    font-size: 10px;
-  }
+.ps-key-notice:empty {
+  display: none;
 }
 
-@container ps-card (max-width: 300px) {
-  .ps-header {
-    padding: 5px 8px;
-    min-height: 30px;
-    gap: 5px;
-  }
-  .ps-index {
+/* Narrow tile (< 386 px, too narrow for the three phrases): one row, mic + scrolling phrases;
+   Reset leaves the header so the title keeps its width with the wider status labels. */
+
+@container ui-tile (max-width: 385px) {
+  .ps-reset-btn {
     display: none;
   }
-  .ps-header-actions {
-    gap: 3px;
+
+  .ps-controls {
+    grid-template-areas: "mic demos";
   }
-  .ps-badge {
-    font-size: 8.5px;
-    padding: 1px 5px;
-  }
-  .ps-icon-btn {
-    height: 20px;
-    padding: 0 5px;
-    font-size: 9px;
-  }
-  .ps-stage {
-    padding: 28px 8px 26px;
-  }
-  .ps-marquee {
-    height: 22px;
-    padding: 0 8px;
-  }
-  .ps-footer {
-    padding: 5px 8px 6px;
-    gap: 4px;
-  }
-  .ps-mic-btn {
-    height: 24px;
-    padding: 0 7px;
-    font-size: 9.5px;
-  }
+
   .ps-wave-canvas {
-    height: 22px;
+    display: none;
   }
+}
+
+/* Compact tile (< 320 px): mic only below the stage; foot hidden by ui/base.css. ------------- */
+
+@container ui-tile (max-width: 319px) {
+  .ps-stage {
+    padding: 24px 8px 28px;
+  }
+
+  .ps-metrics-corner {
+    left: var(--ui-2);
+  }
+
+  .ps-delta-pill {
+    right: var(--ui-2);
+  }
+
+  .ps-marquee {
+    padding: 0 var(--ui-2);
+  }
+
+  .ps-controls {
+    grid-template-areas: "mic level";
+    padding: 6px var(--ui-2);
+  }
+
+  .ps-compact-status {
+    display: block;
+  }
+
   .ps-key-panel {
-    inset: 32px 6px auto 6px;
-    max-height: calc(100% - 36px);
-    padding: 7px;
-    gap: 5px;
+    inset: calc(var(--ui-head-h) + var(--ui-1)) 6px auto;
+    padding: var(--ui-2);
+    gap: 6px;
   }
+
   .ps-key-panel-desc {
     display: none;
   }
 }
 
-@container ps-card (max-width: 280px) {
-  .ps-tx-rx {
-    display: none;
-  }
-}
+/* Tiny tile (< 240 px, phone grid): header + stage only; the stage takes the freed height. --- */
 
-@container ps-card (max-width: 265px) {
-  .ps-header {
-    padding: 4px 6px;
-    min-height: 26px;
-    gap: 4px;
+@container ui-tile (max-width: 239px) {
+  .ps-stage {
+    padding: 22px 8px 8px;
   }
-  .ps-title {
-    font-size: 10px;
-  }
+
   .ps-metrics-corner,
   .ps-delta-pill {
-    top: 4px;
-    font-size: 9px;
-    padding: 1px 4px;
+    top: 6px;
   }
-  .ps-metrics-corner {
-    left: 6px;
+
+  .ps-key-panel {          /* covers the tile, header included; Close and Esc dismiss it */
+    inset: var(--ui-1);
+    max-height: calc(100% - var(--ui-2));
   }
-  .ps-delta-pill {
-    right: 6px;
-  }
-  .ps-stage {
-    padding: 20px 6px 20px;
-  }
-  .ps-marquee {
-    height: 18px;
-    padding: 0 6px;
-  }
-  .ps-marquee-word,
-  .ps-marquee-placeholder {
-    font-size: 9px;
-  }
-  .ps-footer {
-    padding: 4px 6px;
-    gap: 3px;
-  }
-  .ps-controls-row {
-    gap: 5px;
-  }
-  .ps-mic-btn {
-    height: 22px;
-    padding: 0 6px;
-    font-size: 9px;
-    gap: 4px;
-  }
-  .ps-wave-canvas {
-    height: 20px;
-    min-width: 32px;
-  }
-  .ps-readout {
-    display: none;
-  }
-  .ps-demo-chip {
-    font-size: 8.5px;
-    padding: 1px 5px;
+
+  .ps-key-panel-title {
+    font-size: var(--ui-fs-2);
   }
 }
 
@@ -674,11 +422,7 @@
   .ps-target-btn,
   .ps-ghost-btn,
   .ps-delta-pill,
-  .ps-mic-btn,
-  .ps-marquee-word,
-  .ps-badge,
-  .ps-icon-btn,
-  .ps-demo-chip {
+  .ps-marquee-word {
     transition: none;
     animation: none;
   }

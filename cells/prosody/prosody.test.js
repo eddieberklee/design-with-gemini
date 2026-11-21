@@ -822,6 +822,31 @@ test('button stays inside the stage box at min and max on a small stage', () => 
   t.unmount();
 });
 
+test('tiny tiles (header + stage only): every phrase step visibly changes the button', () => {
+  // prosody.css tiny step (tile < 240 px): stage padding 22/8/8/8, controls and foot hidden, so
+  // the stage gets the freed height. 390 px page: tile 177x133 -> stage 175x101. Motion slider at
+  // minimum: tile 140x105 -> stage 138x73.
+  [
+    { w: 175, h: 101 },
+    { w: 138, h: 73 }
+  ].forEach((stage) => {
+    const env = loadEnv({ stage: stage, padding: [22, 8, 8, 8] });
+    const ui = mountUi(env);
+    const [small, little, much] = ui.chips();
+    const widths = [px(ui.btn().style.width)];
+    [small, little, much, much].forEach((chip) => {
+      chip.click();
+      widths.push(px(ui.btn().style.width));
+      assert.ok(px(ui.btn().style.width) <= stage.w - 16, 'width inside the stage ' + ui.metrics());
+      assert.ok(px(ui.btn().style.height) <= stage.h - 30, 'height inside the stage ' + ui.metrics());
+    });
+    for (let i = 1; i < widths.length; i++) {
+      assert.notEqual(widths[i], widths[i - 1], 'step ' + i + ' at ' + stage.w + 'x' + stage.h + ': ' + widths.join(','));
+    }
+    ui.unmount();
+  });
+});
+
 test('stage resize re-fits the button (ResizeObserver and window resize paths)', () => {
   const env = loadEnv({ stage: { w: 486, h: 240 }, padding: [28, 12, 34, 12], resizeObserver: true });
   const ui = mountUi(env);
@@ -871,10 +896,14 @@ test('Reset returns to exactly 100% and clears transcript, ghost and delta', () 
 test('SFX toggle: off means no sound and no new AudioContext', () => {
   const env = loadEnv();
   const ui = mountUi(env);
-  assert.equal(ui.sfxBtn().textContent, 'SFX On');
+  // Constant 'SFX' label (no width change); the on/off state is aria-pressed and the tip.
+  assert.equal(ui.sfxBtn().textContent, 'SFX');
+  assert.equal(ui.sfxBtn().getAttribute('aria-pressed'), 'true');
+  assert.match(ui.sfxBtn().getAttribute('data-tip'), /on/);
   ui.sfxBtn().click();
-  assert.equal(ui.sfxBtn().textContent, 'SFX Off');
+  assert.equal(ui.sfxBtn().textContent, 'SFX');
   assert.equal(ui.sfxBtn().getAttribute('aria-pressed'), 'false');
+  assert.match(ui.sfxBtn().getAttribute('data-tip'), /off/);
   ui.chips()[0].click();
   ui.resetBtn().click();
   assert.equal(env.audioContexts.length, 0);
@@ -890,7 +919,8 @@ test('key panel: blank and malformed input never clear or store a key', () => {
   const KS = env.NS.Client.KeyStore;
   KS.set('AIzaExisting');
   env.win.dispatchEvent({ type: 'gemini-key-changed' });
-  assert.equal(ui.badge().textContent, 'KEY SET');
+  assert.equal(ui.badge().textContent, 'Key set');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'idle', 'a saved key is grey, not green');
 
   ui.badge().click();
   assert.ok(ui.keyPanel().classList.contains('is-open'));
@@ -919,7 +949,9 @@ test('key panel: blank and malformed input never clear or store a key', () => {
   ui.badge().click();
   ui.keyButtons()[0].click();
   assert.equal(KS.get(), '');
-  assert.equal(ui.badge().textContent, 'SIM · +KEY');
+  assert.equal(ui.badge().textContent, 'Demo');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
+  assert.match(ui.mic().getAttribute('data-tip'), /Needs a Gemini key/);
   ui.unmount();
 });
 
@@ -939,14 +971,17 @@ test('Start Live Mic: no key opens the key panel; no mic API gives a truthful er
   const ui = mountUi(env);
   ui.mic().click();
   assert.ok(ui.keyPanel().classList.contains('is-open'));
-  assert.match(ui.mic().textContent, /Start Live Mic/);
+  assert.match(ui.mic().textContent, /Start mic/);
   assert.equal(env.sockets.length, 0);
 
   env.NS.Client.KeyStore.set('AIzaKey');
   ui.mic().click();
   assert.match(ui.readout().textContent, /Microphone capture is unavailable/);
   assert.ok(ui.readout().classList.contains('is-error'));
-  assert.match(ui.mic().textContent, /Start Live Mic/);
+  // Compact tiles hide the foot; the line beside the mic shows the same error there.
+  assert.equal(ui.q('.ps-compact-status').textContent, ui.readout().textContent);
+  assert.ok(ui.q('.ps-compact-status').classList.contains('is-error'));
+  assert.match(ui.mic().textContent, /Start mic/);
   assert.equal(ui.mic().getAttribute('aria-pressed'), 'false');
   assert.equal(env.sockets.length, 0);
   ui.unmount();
@@ -960,10 +995,15 @@ test('Start Live Mic: permission denied resets the button and opens no socket', 
   env.NS.Client.KeyStore.set('AIzaKey');
   ui.mic().click();
   assert.match(ui.mic().textContent, /Connecting/);
+  assert.equal(ui.badge().textContent, 'Connecting');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'attention');
+  assert.equal(ui.mic().getAttribute('data-tone'), null, 'rust only once really streaming');
   assert.match(ui.readout().textContent, /microphone/i);
   await flush();
   assert.match(ui.readout().textContent, /Mic error: Permission denied/);
-  assert.match(ui.mic().textContent, /Start Live Mic/);
+  assert.match(ui.mic().textContent, /Start mic/);
+  assert.equal(ui.badge().textContent, 'Key set');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
   assert.equal(ui.mic().classList.contains('is-processing'), false);
   assert.equal(env.sockets.length, 0);
   // Button is usable again.
@@ -1009,8 +1049,10 @@ test('live session (fakes): ready state, stop button, and full teardown', async 
   const env = liveEnv();
   const ui = mountUi(env);
   const sock = await startLive(env, ui);
-  assert.match(ui.mic().textContent, /Live/);
-  assert.equal(ui.badge().textContent, 'LIVE');
+  assert.match(ui.mic().textContent, /Stop mic/);
+  assert.equal(ui.mic().getAttribute('data-tone'), 'attention', 'recording mic is rust');
+  assert.equal(ui.badge().textContent, 'Live');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'ok', 'green only while streaming');
   assert.ok(sock.url.includes('AIzaLiveKey'));
   assert.equal(domContains(ui.container, 'AIzaLiveKey'), false, 'key never rendered into the DOM');
   sock.serverSend(
@@ -1021,8 +1063,10 @@ test('live session (fakes): ready state, stop button, and full teardown', async 
   assert.match(ui.metrics(), /^112% /);
   ui.mic().click();
   assertTornDown(env, sock);
-  assert.match(ui.mic().textContent, /Start Live Mic/);
-  assert.equal(ui.badge().textContent, 'KEY SET');
+  assert.match(ui.mic().textContent, /Start mic/);
+  assert.equal(ui.mic().getAttribute('data-tone'), null);
+  assert.equal(ui.badge().textContent, 'Key set');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
   ui.unmount();
 });
 
@@ -1039,7 +1083,9 @@ test('live session (fakes): removing the key elsewhere stops the open session', 
   env.win.dispatchEvent({ type: 'gemini-key-changed' });
   assertTornDown(env, sock);
   assert.match(ui.readout().textContent, /key/i);
-  assert.equal(ui.badge().textContent, 'SIM · +KEY');
+  assert.equal(ui.badge().textContent, 'Demo');
+  assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
+  assert.equal(ui.mic().getAttribute('data-tone'), null);
   ui.unmount();
 });
 
@@ -1074,7 +1120,7 @@ test('live session (fakes): server close after setup ends the session with a rea
   const sock = await startLive(env, ui);
   sock.serverClose(1011, 'Internal error');
   assert.match(ui.readout().textContent, /Live session ended: Internal error/);
-  assert.match(ui.mic().textContent, /Start Live Mic/);
+  assert.match(ui.mic().textContent, /Start mic/);
   const stream = env.streams[0];
   assert.equal(stream.track.stopped, true);
   ui.unmount();
