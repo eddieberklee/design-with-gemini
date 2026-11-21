@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Design with Gemini — Grid</title>
+  <link rel="stylesheet" href="cells/decisions/decisions.css">
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100dvh;
+      background: #fafafa;
+      padding: clamp(16px, 3vw, 40px);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      width: 100%;
+      max-width: min(92vw, 1600px);
+      margin-inline: auto;
+    }
+
+    @media (min-width: 768px) {
+      .grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .cell {
+      aspect-ratio: 4 / 3;
+      background: #ffffff;
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <main class="grid">
+    <section class="cell cell--decisions" id="cell-decisions" aria-label="Gemini Decisions API prototype"></section>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+    <div class="cell"></div>
+  </main>
+
+  <script defer src="cells/decisions/schema.js"></script>
+  <script defer src="cells/decisions/presets.js"></script>
+  <script defer src="cells/decisions/client.js"></script>
+  <script defer src="cells/decisions/ui.js"></script>
+</body>
+</html>
