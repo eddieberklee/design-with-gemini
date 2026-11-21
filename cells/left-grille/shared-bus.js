@@ -32,6 +32,15 @@
  *     and `CustomEvent('lg-secondary-close')` dispatch on `window`.
  *   - `onStateChange(fn)` -> `unsubscribe()`: immediately emits current
  *     `{ state, sampleRate, txMode, micLabel, error }` snapshot.
+ *
+ * Lifecycle contract for consumers:
+ *   - Hidden tab: the AudioContext is suspended, so audio callbacks and `timeSec` pause; on
+ *     return the bus resumes only a context it suspended itself.
+ *   - The last `subscribeAudio` unsubscribe releases mic + AudioContext (`stopAll`, no close event).
+ *   - An ended mic track (device unplugged/revoked) emits `idle` then `error`.
+ *   - `resume()` blocked by autoplay policy fails the arm with `error` after 2 s (never hangs).
+ *   - The context is requested at 48 kHz; the granted rate (e.g. 44.1 kHz) is what
+ *     `sampleRate` in snapshots and packets reports.
  */
 (function (root, factory) {
   const exportsObj = factory(root);
@@ -57,6 +66,32 @@
       (targetRoot && targetRoot.document) ||
       (typeof document !== 'undefined' ? document : null);
     return Boolean(doc && doc.hidden);
+  }
+
+  const RESUME_TIMEOUT_MS = 2000;
+
+  /**
+   * `AudioContext.resume()` stays pending forever when autoplay policy blocks audio (no user
+   * activation yet). Wait at most `ms`, then let the caller check `ctx.state`.
+   */
+  function resumeWithin(ctx, ms) {
+    if (!ctx || ctx.state !== 'suspended' || typeof ctx.resume !== 'function') {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let timer = null;
+      const finish = () => {
+        if (timer !== null) clearTimeout(timer);
+        timer = null;
+        resolve();
+      };
+      timer = setTimeout(finish, ms);
+      try {
+        Promise.resolve(ctx.resume()).then(finish, finish);
+      } catch (_) {
+        finish();
+      }
+    });
   }
 
   function disposeAudioHandles(handles) {
@@ -167,6 +202,7 @@
       this._speakerLabel = 'Stereo Speakers';
       this._error = '';
       this._hiddenMuted = false;
+      this._ctxSuspendedByVisibility = null;
 
       this._sessionEpoch = 0;
       this._armPromise = null;
@@ -285,7 +321,15 @@
       if (typeof fn !== 'function') return function () {};
       this._audioSubscribers.add(fn);
       return () => {
-        this._audioSubscribers.delete(fn);
+        // Double release is a no-op. When the last audio consumer leaves, release the mic and
+        // AudioContext instead of holding hardware for nobody.
+        if (!this._audioSubscribers.delete(fn)) return;
+        if (
+          this._audioSubscribers.size === 0 &&
+          (this._state === 'listening' || this._state === 'requesting')
+        ) {
+          this.stopAll({ immediate: true, dispatchClose: false });
+        }
       };
     }
 
@@ -353,6 +397,7 @@
       }
       if (this._hiddenMuted === next) return;
       this._hiddenMuted = next;
+      this._applyVisibilitySuspend(next);
       if (next) {
         this._activeTxPhase = 0;
         this._fadingModes.clear();
@@ -363,6 +408,33 @@
       ) {
         this._workletPushTx();
         this._workletPushTx();
+      }
+    }
+
+    /**
+     * Hidden tab: suspend the live AudioContext so mic capture and every subscriber's DSP stop.
+     * Visible again: resume only a context that this method suspended (never one that was
+     * already suspended or belongs to a stopped session).
+     */
+    _applyVisibilitySuspend(hidden) {
+      const ctx = this.audioCtx;
+      if (hidden) {
+        if (ctx && ctx.state === 'running' && typeof ctx.suspend === 'function') {
+          this._ctxSuspendedByVisibility = ctx;
+          try {
+            const p = ctx.suspend();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          } catch (_) {}
+        }
+        return;
+      }
+      const suspended = this._ctxSuspendedByVisibility;
+      this._ctxSuspendedByVisibility = null;
+      if (suspended && suspended === ctx && typeof ctx.resume === 'function') {
+        try {
+          const p = ctx.resume();
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch (_) {}
       }
     }
 
@@ -790,12 +862,13 @@
         local.audioCtx = ctx;
         const sr = Number.isFinite(ctx.sampleRate) && ctx.sampleRate > 0 ? ctx.sampleRate : 48000;
 
-        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
-          await ctx.resume();
-        }
+        await resumeWithin(ctx, RESUME_TIMEOUT_MS);
         if (myEpoch !== this._sessionEpoch) {
           disposeAudioHandles(local);
           return false;
+        }
+        if (ctx.state === 'suspended') {
+          throw new Error('Audio is blocked until you click the page — press ARM again.');
         }
 
         // Auto-prefer built-in MacBook stereo speakers via setSinkId when supported
@@ -937,12 +1010,31 @@
         this.workletNode = local.workletNode;
         this._workletPushTx = local.workletPushTx;
 
+        // Unplugged / revoked device ends the track: release everything and say so instead of
+        // staying "listening" on a dead stream that only delivers silence.
+        const onTrackEnded = () => {
+          if (myEpoch !== this._sessionEpoch) return;
+          this.stopAll({ immediate: true, dispatchClose: false });
+          this._emitState('error', {
+            error: 'Microphone disconnected — re-arm or use cell Sim controls.'
+          });
+        };
+        activeTracks.forEach((t) => {
+          if (t && typeof t.addEventListener === 'function') {
+            t.addEventListener('ended', onTrackEnded, { once: true });
+          }
+        });
+
         this._emitState('listening', {
           error: '',
           sampleRate: sr,
           micLabel,
           speakerLabel
         });
+        // Armed while the tab is hidden (or hidden during the prompt): start suspended.
+        if (isDocumentHidden(this._hiddenMuted, this._root)) {
+          this._applyVisibilitySuspend(true);
+        }
         return true;
       } catch (err) {
         const aborted = myEpoch !== this._sessionEpoch;
@@ -976,6 +1068,7 @@
       this.stream = null;
       this.audioCtx = null;
       this._workletPushTx = null;
+      this._ctxSuspendedByVisibility = null;
 
       const canFadeScriptNode = Boolean(
         !options.immediate &&

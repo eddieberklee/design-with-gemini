@@ -1251,3 +1251,373 @@ test('UI lifecycle & Escape guard: lg-secondary-open event, LeftGrilleLab.isSeco
   assert.equal(openSnapshots.length, 2);
   assert.deepEqual(openSnapshots[1], { isOpen: true, pageHidden: false });
 });
+
+function makeSuspendableCtxClass(log) {
+  return class MockSuspendableCtx {
+    constructor() {
+      this.sampleRate = 48000;
+      this.state = 'running';
+      this.destination = { maxChannelCount: 2 };
+      log.ctxs.push(this);
+    }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
+    createScriptProcessor() {
+      return { connect() {}, disconnect() {}, onaudioprocess: null };
+    }
+    async suspend() {
+      log.calls.push('suspend');
+      this.state = 'suspended';
+    }
+    async resume() {
+      log.calls.push('resume');
+      this.state = 'running';
+    }
+    async close() {
+      this.state = 'closed';
+    }
+  };
+}
+
+function makeTrackedStreamFactory(log) {
+  return async () => {
+    const listeners = {};
+    const track = {
+      label: 'MacBook Pro Microphone',
+      stop() {
+        log.stopped++;
+      },
+      addEventListener(ev, fn) {
+        listeners[ev] = fn;
+      },
+      fire(ev) {
+        if (listeners[ev]) listeners[ev]();
+      }
+    };
+    log.tracks.push(track);
+    return { getTracks: () => [track], getAudioTracks: () => [track] };
+  };
+}
+
+function makeTrackedBus(log, mockDoc) {
+  return new SharedAcousticBus({
+    root: {
+      document: mockDoc || { hidden: false },
+      AudioContext: makeSuspendableCtxClass(log),
+      navigator: {
+        mediaDevices: { getUserMedia: makeTrackedStreamFactory(log), enumerateDevices: async () => [] }
+      }
+    }
+  });
+}
+
+test('Hidden tab suspends the bus AudioContext and resumes only a context the bus suspended', async () => {
+  const log = { ctxs: [], calls: [], tracks: [], stopped: 0 };
+  const mockDoc = { hidden: false };
+  const bus = makeTrackedBus(log, mockDoc);
+
+  assert.equal(await bus.requestArm(), true);
+  const ctx = log.ctxs[0];
+  mockDoc.hidden = true;
+  bus.setHiddenMuted(true);
+  assert.deepEqual(log.calls, ['suspend'], 'Hidden tab must suspend capture');
+  assert.equal(ctx.state, 'suspended');
+  mockDoc.hidden = false;
+  bus.setHiddenMuted(false);
+  assert.deepEqual(log.calls, ['suspend', 'resume'], 'Visible again must resume what visibility suspended');
+
+  // A context suspended by something else must stay suspended after the tab returns
+  log.calls.length = 0;
+  ctx.state = 'suspended';
+  mockDoc.hidden = true;
+  bus.setHiddenMuted(true);
+  mockDoc.hidden = false;
+  bus.setHiddenMuted(false);
+  assert.deepEqual(log.calls, [], 'Must never resume a context it did not suspend');
+  ctx.state = 'running';
+
+  // Hidden -> stopAll -> visible must not resume the dead session's context
+  log.calls.length = 0;
+  mockDoc.hidden = true;
+  bus.setHiddenMuted(true);
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+  mockDoc.hidden = false;
+  bus.setHiddenMuted(false);
+  assert.deepEqual(log.calls, ['suspend']);
+  assert.equal(log.stopped, 1);
+
+  // Arming while hidden starts suspended
+  mockDoc.hidden = true;
+  bus.setHiddenMuted(true);
+  log.calls.length = 0;
+  assert.equal(await bus.requestArm(), true);
+  assert.deepEqual(log.calls, ['suspend'], 'Arm committed in a hidden tab must start suspended');
+  mockDoc.hidden = false;
+  bus.setHiddenMuted(false);
+  assert.deepEqual(log.calls, ['suspend', 'resume']);
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+});
+
+test('Last audio unsubscribe releases mic + AudioContext; double release is a no-op', async () => {
+  const log = { ctxs: [], calls: [], tracks: [], stopped: 0 };
+  const bus = makeTrackedBus(log);
+  const unsubA = bus.subscribeAudio(() => {});
+  const unsubB = bus.subscribeAudio(() => {});
+  assert.equal(await bus.requestArm(), true);
+
+  unsubA();
+  unsubA();
+  assert.equal(bus.state, 'listening', 'Remaining subscriber keeps the bus armed (double release ignored)');
+  assert.equal(log.stopped, 0);
+
+  unsubB();
+  assert.equal(bus.state, 'idle', 'Last consumer leaving must release the bus');
+  assert.equal(log.stopped, 1, 'Mic track must stop');
+  assert.equal(log.ctxs[0].state, 'closed', 'AudioContext must close');
+  unsubB();
+  assert.equal(log.stopped, 1);
+});
+
+test('Ended mic track (device unplugged) stops the bus and reports an error instead of staying live', async () => {
+  const log = { ctxs: [], calls: [], tracks: [], stopped: 0 };
+  const bus = makeTrackedBus(log);
+  assert.equal(await bus.requestArm('chirp'), true);
+  log.tracks[0].fire('ended');
+  assert.equal(bus.state, 'error');
+  assert.match(bus.error, /disconnected/i);
+  assert.equal(bus.getTxMode(), 'off');
+  assert.equal(log.ctxs[0].state, 'closed');
+
+  // A stale session's track ending later must not touch a newer session
+  assert.equal(await bus.requestArm(), true);
+  log.tracks[0].fire('ended');
+  assert.equal(bus.state, 'listening');
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+});
+
+test('Permission denied: every concurrent requestArm waiter resolves false and no listener hangs in requesting', async () => {
+  let rejectGum;
+  let gumCalls = 0;
+  const bus = new SharedAcousticBus({
+    root: {
+      document: { hidden: false },
+      navigator: {
+        mediaDevices: {
+          getUserMedia: () => {
+            gumCalls++;
+            return new Promise((_res, rej) => {
+              rejectGum = rej;
+            });
+          }
+        }
+      }
+    }
+  });
+  const seen = [];
+  bus.onStateChange((st) => seen.push(st.state));
+  const waiters = [bus.requestArm(), bus.requestArm('chirp'), bus.requestArm('lid-ping')];
+  await new Promise((r) => setTimeout(r, 0));
+  const err = new Error('denied');
+  err.name = 'NotAllowedError';
+  rejectGum(err);
+  const results = await Promise.all(waiters);
+  assert.deepEqual(results, [false, false, false]);
+  assert.equal(gumCalls, 1, 'Concurrent waiters share one prompt');
+  assert.equal(bus.state, 'error');
+  assert.equal(seen[seen.length - 1], 'error');
+  assert.equal(bus.getTxMode(), 'off');
+});
+
+test('A throwing audio subscriber, state listener or TX generator never starves the others', () => {
+  const bus = new SharedAcousticBus({ root: { document: { hidden: false } } });
+  const got = [];
+  bus.subscribeAudio(() => {
+    throw new Error('subscriber fault');
+  });
+  bus.subscribeAudio((pkt) => got.push(pkt.samples.length));
+  const states = [];
+  bus.onStateChange(() => {
+    throw new Error('listener fault');
+  });
+  bus.onStateChange((st) => states.push(st.txMode));
+  bus._deliverAudioSamples(new Float32Array(512).fill(0.1), 48000);
+  assert.deepEqual(got, [512]);
+
+  bus.registerTxGenerator('chirp', () => {
+    throw new Error('generator fault');
+  });
+  bus.setTxMode('chirp');
+  assert.equal(states[states.length - 1], 'chirp');
+  const outL = new Float32Array(512).fill(9);
+  const outR = new Float32Array(512).fill(9);
+  bus._renderTxBlock(outL, outR, 48000);
+  assert.ok(outL.every((v) => v === 0) && outR.every((v) => v === 0), 'Faulting generator yields silence');
+});
+
+test('44.1 kHz hardware: snapshot, packets and timeSec use the real rate and sonar TX stays allowed (>= 40 kHz)', async () => {
+  const log = { ctxs: [], calls: [], tracks: [], stopped: 0 };
+  const Base = makeSuspendableCtxClass(log);
+  class Ctx441 extends Base {
+    constructor(opts) {
+      super(opts);
+      log.requestedRate = opts && opts.sampleRate;
+      this.sampleRate = 44100;
+    }
+  }
+  const bus = new SharedAcousticBus({
+    root: {
+      document: { hidden: false },
+      AudioContext: Ctx441,
+      navigator: {
+        mediaDevices: { getUserMedia: makeTrackedStreamFactory(log), enumerateDevices: async () => [] }
+      }
+    }
+  });
+  const pkts = [];
+  bus.subscribeAudio((p) => pkts.push(p));
+  let genRate = 0;
+  bus.registerTxGenerator('chirp', (l, r, sr) => {
+    genRate = sr;
+    l.fill(0.3);
+    r.fill(0.3);
+  });
+  assert.equal(await bus.requestArm('chirp'), true);
+  assert.equal(log.requestedRate, 48000, 'Context is requested at 48 kHz; the browser may grant another rate');
+  const snap = bus.getSnapshot();
+  assert.equal(snap.sampleRate, 44100);
+  assert.equal(snap.canUseSonar, true);
+
+  const node = log.ctxs[0];
+  assert.ok(node);
+  const outL = new Float32Array(512);
+  const outR = new Float32Array(512);
+  for (let i = 0; i < 2; i++) {
+    bus.processDuplexFrame(new Float32Array(512), outL, outR, bus.sampleRate);
+  }
+  assert.equal(genRate, 44100);
+  assert.ok(outL[511] > 0.29, 'TX allowed at 44.1 kHz');
+  assert.equal(pkts[0].sampleRate, 44100);
+  assert.ok(Math.abs(pkts[1].timeSec - 512 / 44100) < 1e-9);
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+});
+
+test('Autoplay-blocked AudioContext (resume() never settles) fails the arm within the bound instead of hanging in requesting', async () => {
+  const log = { ctxs: [], calls: [], tracks: [], stopped: 0 };
+  const Base = makeSuspendableCtxClass(log);
+  class BlockedCtx extends Base {
+    constructor() {
+      super();
+      this.state = 'suspended';
+    }
+    resume() {
+      return new Promise(() => {});
+    }
+  }
+  const bus = new SharedAcousticBus({
+    root: {
+      document: { hidden: false },
+      AudioContext: BlockedCtx,
+      navigator: {
+        mediaDevices: { getUserMedia: makeTrackedStreamFactory(log), enumerateDevices: async () => [] }
+      }
+    }
+  });
+  const t0 = Date.now();
+  const waiters = [bus.requestArm(), bus.requestArm('chirp')];
+  assert.deepEqual(await Promise.all(waiters), [false, false]);
+  assert.ok(Date.now() - t0 < 4000, 'Arm must settle within the resume bound');
+  assert.equal(bus.state, 'error');
+  assert.match(bus.error, /blocked/i);
+  assert.equal(log.stopped, 1, 'Mic track opened for the blocked arm must be stopped');
+  assert.equal(log.ctxs[0].state, 'closed');
+});
+
+test('UI close: skipped view transitions are handled, hidden tab skips VT, double Back steps back once, other page keeps grid hidden', async () => {
+  const { win, doc, mainGrid, portalCell, winListeners } = createMockDomEnv();
+  const unhandled = [];
+  const onUnhandled = (r) => unhandled.push(String(r && r.message));
+  process.on('unhandledRejection', onUnhandled);
+
+  let vtCount = 0;
+  doc.startViewTransition = (cb) => {
+    vtCount++;
+    const abort = () => {
+      const e = new Error('Transition was aborted because of invalid state');
+      e.name = 'InvalidStateError';
+      return Promise.reject(e);
+    };
+    // Skipped transition: the update callback still runs, every promise rejects
+    setTimeout(cb, 0);
+    return { ready: abort(), updateCallbackDone: abort(), finished: abort() };
+  };
+
+  let backCalls = 0;
+  win.history.state = null;
+  win.history.pushState = (st, _t, url) => {
+    win.history.state = st;
+    win.location.hash = url;
+  };
+  win.history.back = () => {
+    backCalls++;
+    setTimeout(() => {
+      win.history.state = null;
+      win.location.hash = '';
+      (winListeners.popstate || []).forEach((fn) => fn());
+    }, 5);
+  };
+
+  try {
+    const engineCode = fs.readFileSync(path.join(__dirname, 'acoustic-engine.js'), 'utf8');
+    const controllerCode = fs.readFileSync(path.join(__dirname, 'acoustic-controller.js'), 'utf8');
+    const sharedBusCode = fs.readFileSync(path.join(__dirname, 'shared-bus.js'), 'utf8');
+    const uiCode = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
+    vm.runInNewContext(engineCode, win);
+    vm.runInNewContext(controllerCode, win);
+    vm.runInNewContext(sharedBusCode, win);
+    vm.runInNewContext(uiCode, win);
+
+    const page = doc._secondary;
+    const backBtn = page.children[0].children[0].children[0];
+
+    // 1. Animated open whose transition is skipped: DOM still swaps, no unhandled rejection
+    portalCell.children[0].dispatch('click');
+    assert.equal(vtCount, 1);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(mainGrid.hidden, true);
+    assert.equal(page.hidden, false);
+
+    // 2. Double Back while history.back() is still pending must step back only once
+    backBtn.dispatch('click');
+    backBtn.dispatch('click');
+    doc.emitDocEvent('keydown', { key: 'Escape', defaultPrevented: false, preventDefault() {} });
+    assert.equal(backCalls, 1, 'Pending history.back() must block a second close');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(mainGrid.hidden, false);
+    assert.equal(page.hidden, true);
+    assert.equal(win.LeftGrilleLab.isSecondaryOpen(), false);
+
+    // 3. Hidden tab never starts a view transition (it would be aborted)
+    vtCount = 0;
+    doc.hidden = true;
+    portalCell.children[0].dispatch('click');
+    assert.equal(vtCount, 0);
+    assert.equal(page.hidden, false, 'Hidden-tab open applies synchronously');
+    doc.hidden = false;
+
+    // 4. Cross-cell jump: another secondary page is showing -> closing must keep main grid hidden
+    const hgPage = { className: 'hg-secondary-page', hidden: false };
+    doc.body = { children: [mainGrid, page, hgPage] };
+    win.history.state = null;
+    win.location.hash = '#hand-gesture';
+    (winListeners.hashchange || []).forEach((fn) => fn());
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(page.hidden, true);
+    assert.equal(mainGrid.hidden, true, 'Must not show the main grid under another cell page');
+
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(unhandled, [], 'No unhandled rejections from skipped view transitions');
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+  }
+});

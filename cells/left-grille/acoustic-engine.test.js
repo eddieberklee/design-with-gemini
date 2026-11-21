@@ -727,3 +727,91 @@ test('UI View Transition re-entrancy, popstate+hashchange deduplication, and mid
   assert.equal(portalCell.style.viewTransitionName, '', 'No leaked viewTransitionName on portalCell');
   assert.equal(doc._secondary.children[1].style.viewTransitionName, '', 'No leaked viewTransitionName on secondaryGrid');
 });
+
+test('Controller suspends capture while hidden (resumes only what it suspended) and stops on an ended mic track', async () => {
+  const origNav = globalThis.navigator;
+  const origAudioCtx = globalThis.AudioContext;
+  const calls = [];
+  const ctxs = [];
+  const tracks = [];
+  try {
+    globalThis.AudioContext = class MockCtx {
+      constructor() {
+        this.sampleRate = 48000;
+        this.state = 'running';
+        this.destination = { maxChannelCount: 2 };
+        ctxs.push(this);
+      }
+      createMediaStreamSource() {
+        return { connect() {}, disconnect() {} };
+      }
+      createStereoPanner() {
+        return { pan: { value: 0 }, connect() {}, disconnect() {} };
+      }
+      createScriptProcessor() {
+        return { connect() {}, disconnect() {}, onaudioprocess: null };
+      }
+      async suspend() {
+        calls.push('suspend');
+        this.state = 'suspended';
+      }
+      async resume() {
+        calls.push('resume');
+        this.state = 'running';
+      }
+      async close() {
+        this.state = 'closed';
+      }
+    };
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        mediaDevices: {
+          getUserMedia: async () => {
+            const listeners = {};
+            const track = {
+              label: 'Built-in Microphone',
+              stopped: false,
+              stop() {
+                this.stopped = true;
+              },
+              addEventListener(ev, fn) {
+                listeners[ev] = fn;
+              },
+              fire(ev) {
+                if (listeners[ev]) listeners[ev]();
+              }
+            };
+            tracks.push(track);
+            return { getTracks: () => [track], getAudioTracks: () => [track] };
+          },
+          enumerateDevices: async () => []
+        }
+      }
+    });
+
+    const states = [];
+    const ctrl = new LeftGrilleSensorController({ onStateChange: (st) => states.push(st) });
+    assert.equal(await ctrl.start(), true);
+    ctrl.setHiddenMuted(true);
+    assert.deepEqual(calls, ['suspend']);
+    ctrl.setHiddenMuted(false);
+    assert.deepEqual(calls, ['suspend', 'resume']);
+
+    calls.length = 0;
+    ctxs[0].state = 'suspended'; // suspended by someone else
+    ctrl.setHiddenMuted(true);
+    ctrl.setHiddenMuted(false);
+    assert.deepEqual(calls, [], 'Must not resume a context it did not suspend');
+    ctxs[0].state = 'running';
+
+    tracks[0].fire('ended');
+    assert.equal(ctrl.state, 'error');
+    assert.match(states[states.length - 1].error, /disconnected/i);
+    assert.equal(tracks[0].stopped, true);
+    assert.equal(ctxs[0].state, 'closed');
+  } finally {
+    globalThis.AudioContext = origAudioCtx;
+    Object.defineProperty(globalThis, 'navigator', { configurable: true, value: origNav });
+  }
+});

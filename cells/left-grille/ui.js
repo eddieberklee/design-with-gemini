@@ -184,6 +184,9 @@
     let isSecondaryOpen = false;
     let enteredFromMainGrid = false;
     let vtSeq = 0;
+    // `history.back()` is async: until its popstate lands, `location.hash` and `history.state`
+    // still describe our entry, so a second close request would step back twice.
+    let backPendingUntil = 0;
 
     lab.isSecondaryOpen = () => isSecondaryOpen;
 
@@ -1194,6 +1197,22 @@
       secondaryGrid.style.viewTransitionName = '';
     }
 
+    // Another cell's page (e.g. `.hg-secondary-page` for `#hand-gesture`) may own the hidden main
+    // grid after a cross-cell hash jump; never unhide the grid underneath it (two pages at once).
+    function otherSecondaryPageVisible() {
+      const kids = document.body ? document.body.children : [];
+      for (let i = 0; i < kids.length; i++) {
+        const el = kids[i];
+        if (el === secondaryPage || el === mainGrid || el.hidden) continue;
+        if (typeof el.className === 'string' && /(^|\s)[a-z0-9]+-secondary-page(\s|$)/.test(el.className)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    let savedMainScrollY = 0;
+
     function applyDomState(openNow, restorePortalFocus) {
       const wasOpen = isSecondaryOpen;
       if (openNow) {
@@ -1201,6 +1220,7 @@
         secondaryPage.hidden = false;
         isSecondaryOpen = true;
         syncCanvasSize();
+        if (!wasOpen && typeof global.scrollTo === 'function') global.scrollTo(0, 0);
         backBtn.focus({ preventScroll: true });
         if (!wasOpen) {
           const CustomEvt =
@@ -1214,7 +1234,7 @@
         }
       } else {
         secondaryPage.hidden = true;
-        mainGrid.hidden = false;
+        if (!otherSecondaryPageVisible()) mainGrid.hidden = false;
         isSecondaryOpen = false;
         if (calWizardActive) {
           controller.cancelCalibrationStep();
@@ -1223,8 +1243,14 @@
         inlineOverlay.hidden = true;
         calBtn.setAttribute('aria-expanded', 'false');
         overlayReturnFocusEl = null;
-        if (restorePortalFocus) {
-          portalBtn.focus({ preventScroll: true });
+        if (restorePortalFocus && wasOpen && !mainGrid.hidden) {
+          if (savedMainScrollY === null) {
+            // Opened from another cell's page: the grid offset is unknown, bring the tile into view
+            portalBtn.focus();
+          } else {
+            if (typeof global.scrollTo === 'function') global.scrollTo(0, savedMainScrollY);
+            portalBtn.focus({ preventScroll: true });
+          }
         }
       }
     }
@@ -1232,6 +1258,10 @@
     function runPortalTransition(nextOpen, opts = {}) {
       const animate = Boolean(opts.animate);
       const restoreFocus = opts.restoreFocus !== false;
+      if (nextOpen && !targetOpen && !isSecondaryOpen) {
+        // Only the visible main grid's offset is ours to restore (not another cell page's)
+        savedMainScrollY = mainGrid.hidden ? null : global.scrollY || 0;
+      }
       targetOpen = nextOpen;
       const mySeq = ++vtSeq;
 
@@ -1246,6 +1276,7 @@
 
       if (
         animate &&
+        !document.hidden &&
         typeof document.startViewTransition === 'function' &&
         !prefersReducedMotion()
       ) {
@@ -1256,26 +1287,42 @@
           secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
         }
 
-        const vt = document.startViewTransition(() => {
-          if (mySeq !== vtSeq) {
-            // Superseded mid-flight: reconcile DOM directly to latest targetOpen
-            clearTransitionNames();
+        let vt = null;
+        try {
+          vt = document.startViewTransition(() => {
+            if (mySeq !== vtSeq) {
+              // Superseded mid-flight: reconcile DOM directly to latest targetOpen
+              clearTransitionNames();
+              applyDomState(targetOpen, restoreFocus);
+              return;
+            }
+            if (targetOpen) {
+              portalCell.style.viewTransitionName = '';
+              secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
+            } else {
+              secondaryGrid.style.viewTransitionName = '';
+              portalCell.style.viewTransitionName = 'lg-stage-portal';
+            }
             applyDomState(targetOpen, restoreFocus);
-            return;
-          }
-          if (targetOpen) {
-            portalCell.style.viewTransitionName = '';
-            secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
-          } else {
-            secondaryGrid.style.viewTransitionName = '';
-            portalCell.style.viewTransitionName = 'lg-stage-portal';
-          }
-          applyDomState(targetOpen, restoreFocus);
-        });
+          });
+        } catch (_) {
+          vt = null;
+        }
+        if (!vt) {
+          clearTransitionNames();
+          applyDomState(nextOpen, restoreFocus);
+          return;
+        }
 
-        Promise.resolve(vt && vt.finished)
-          .catch(() => {})
-          .finally(() => {
+        // A skipped/aborted transition (hidden tab, a newer transition, a cross-cell swap) rejects
+        // `ready`, `updateCallbackDone` and `finished`; handle all three so none surfaces as an
+        // unhandled rejection. The update callback still runs, so DOM state stays reconciled.
+        const noop = () => {};
+        if (vt.ready) Promise.resolve(vt.ready).catch(noop);
+        if (vt.updateCallbackDone) Promise.resolve(vt.updateCallbackDone).catch(noop);
+        Promise.resolve(vt.finished)
+          .catch(noop)
+          .then(() => {
             if (mySeq === vtSeq) {
               clearTransitionNames();
             }
@@ -1303,14 +1350,20 @@
     }
 
     function requestCloseSecondaryView() {
-      if (!targetOpen) return;
+      if (!targetOpen || Date.now() < backPendingUntil) return;
+      // The current entry is ours (pushed by a tile tap, or reached again with Forward): step back
+      // so Back/Forward stay symmetric instead of rewriting the entry in place.
+      const ownEntry =
+        enteredFromMainGrid ||
+        Boolean(global.history && global.history.state && global.history.state.lgSecondary);
       if (
-        enteredFromMainGrid &&
+        ownEntry &&
         location.hash === '#left-grille' &&
         global.history &&
         typeof global.history.back === 'function'
       ) {
         enteredFromMainGrid = false;
+        backPendingUntil = Date.now() + 1000;
         global.history.back();
         return;
       }
@@ -1328,6 +1381,7 @@
     }
 
     function syncLocationHash() {
+      backPendingUntil = 0;
       const wantOpen = location.hash === '#left-grille';
       if (wantOpen === targetOpen) return;
       if (wantOpen) {

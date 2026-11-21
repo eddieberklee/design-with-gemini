@@ -124,6 +124,7 @@
       this.txEnabled = true;
       this.txGain = 0.036;
       this.hiddenMuted = false;
+      this._ctxSuspendedByVisibility = null;
       this.activeMicLabel = '';
       this.activeSpeakerLabel = 'Left Speaker';
       this.sampleRate = 48000;
@@ -233,12 +234,28 @@
         const sr = ctx.sampleRate || 48000;
         const effectiveTx = this.txEnabled && sr >= 40000 && !this.hiddenMuted;
 
-        if (ctx.state === 'suspended') {
-          await ctx.resume();
+        if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+          // resume() never settles while autoplay policy blocks audio: wait at most 2 s
+          await new Promise((resolve) => {
+            const timer = setTimeout(resolve, 2000);
+            Promise.resolve(ctx.resume()).then(
+              () => {
+                clearTimeout(timer);
+                resolve();
+              },
+              () => {
+                clearTimeout(timer);
+                resolve();
+              }
+            );
+          });
         }
         if (myEpoch !== this.sessionEpoch) {
           disposeLocalHandles(local);
           return false;
+        }
+        if (ctx.state === 'suspended') {
+          throw new Error('Audio is blocked until you click the page — press ARM MIC again.');
         }
 
         let speakerLabel = 'Left Speaker (Ch 1)';
@@ -351,7 +368,27 @@
           this.txEnabled = false;
         }
 
+        // Unplugged / revoked mic ends the track: stop and report instead of showing LIVE on silence.
+        local.stream.getAudioTracks().forEach((t) => {
+          if (t && typeof t.addEventListener === 'function') {
+            t.addEventListener(
+              'ended',
+              () => {
+                if (myEpoch !== this.sessionEpoch) return;
+                this.stop({ immediate: true, silent: true });
+                this._emitState('error', {
+                  error: 'Microphone disconnected — re-arm, or drag rail / use Sim ↑↓.'
+                });
+              },
+              { once: true }
+            );
+          }
+        });
+
         this._emitState('listening', { error: '' });
+        if (this.hiddenMuted || (typeof document !== 'undefined' && document.hidden)) {
+          this.setHiddenMuted(true);
+        }
         return true;
       } catch (err) {
         const aborted = myEpoch !== this.sessionEpoch;
@@ -437,6 +474,24 @@
 
     setHiddenMuted(hidden) {
       this.hiddenMuted = Boolean(hidden);
+      // Hidden tab: suspend capture + DSP entirely; on return resume only what this suspended.
+      const ctx = this.audioCtx;
+      if (this.hiddenMuted) {
+        if (ctx && ctx.state === 'running' && typeof ctx.suspend === 'function') {
+          this._ctxSuspendedByVisibility = ctx;
+          try {
+            ctx.suspend().catch(() => {});
+          } catch (_) {}
+        }
+      } else {
+        const suspended = this._ctxSuspendedByVisibility;
+        this._ctxSuspendedByVisibility = null;
+        if (suspended && suspended === ctx && typeof ctx.resume === 'function') {
+          try {
+            ctx.resume().catch(() => {});
+          } catch (_) {}
+        }
+      }
       const activeTx = this.txEnabled && !this.hiddenMuted && this.sampleRate >= 40000;
       if (this.workletNode) {
         this.workletNode.port.postMessage({
@@ -611,6 +666,7 @@
       this.audioCtx = null;
       this.fallbackCore = null;
       this.hiddenMuted = false;
+      this._ctxSuspendedByVisibility = null;
 
       if (!opts.silent) {
         this._emitState('idle', { error: '' });

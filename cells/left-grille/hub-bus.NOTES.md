@@ -39,6 +39,12 @@
 - **`sessionEpoch` Handle Detach & Single-Prompt `NotAllowedError` (`shared-bus.js:SharedAcousticBus.stopAll` / `_requestRawMic`)**: `stopAll()` increments `_sessionEpoch` and detaches Web Audio handles synchronously before the `20 ms` TX ramp-down, and `_requestRawMic()` retries relaxed boolean constraints only on `OverconstrainedError`/`TypeError`.
 - **Close Event Even When Bus Was Idle (`shared-bus.js:SharedAcousticBus.stopAll`)**: `stopAll()` dispatches `CustomEvent('lg-secondary-close')` even when `bus.state === 'idle'` so non-mic secondary cells (`06` Lid HID SSE, `07` iPhone BLE/WSS) still tear down cleanly when leaving `#left-grille` (whereas internal handoffs to Cell `01` pass `{ dispatchClose: false }`).
 - **Secondary `.cell` Layout Lock (`left-grille.css:#left-grille-secondary-grid > .cell`)**: Every `#lg-sec-cell-1` .. `#lg-sec-cell-9` preserves `.cell` (`aspect-ratio: 4 / 3`) plus `position: relative; overflow: hidden; container-type: inline-size;` scoped strictly under `#left-grille-secondary-grid`.
+- **Hidden-Tab Capture Suspend (`shared-bus.js:SharedAcousticBus._applyVisibilitySuspend`)**: A hidden tab suspends the live `AudioContext`, so subscriber callbacks and `timeSec` pause (time does not jump on return). On return the bus resumes only the context it suspended itself; a context suspended by something else, or one from a stopped session, stays as it is. An arm that commits while hidden starts suspended. Cell 1 does the same in `acoustic-controller.js:setHiddenMuted`.
+- **Last-Consumer Release (`shared-bus.js:SharedAcousticBus.subscribeAudio`)**: The unsubscribe returned by `subscribeAudio` is idempotent; when it removes the last audio subscriber while armed, the bus calls `stopAll({ immediate: true, dispatchClose: false })`. Consumers that only register a TX generator do not hold the bus armed.
+- **Ended Track (`shared-bus.js:SharedAcousticBus._runArm` `onTrackEnded`)**: An unplugged or revoked mic ends the track; the bus releases everything and emits `idle` then `error` (`Microphone disconnected …`) instead of staying `listening` on silence. A stale session's track ending is ignored. Device re-pick on `devicechange` is not implemented.
+- **Bounded Resume (`shared-bus.js:resumeWithin`)**: `AudioContext.resume()` never settles while autoplay policy blocks audio (no user activation). The arm waits at most `2 s`, then fails with `error` and stops the mic; every concurrent `requestArm()` waiter resolves `false`.
+- **Sample Rate**: The context is requested at `48 kHz`; the browser may grant another rate (for example `44.1 kHz`), and snapshots, packets, `timeSec` and TX generators all use the granted rate. TX stays allowed at any rate `>= 40 kHz`.
+- **Secondary Page Navigation (`ui.js:runPortalTransition`, `requestCloseSecondaryView`)**: Every `ViewTransition` promise (`ready`, `updateCallbackDone`, `finished`) is handled and no transition starts in a hidden tab. Open saves the main-grid scroll and scrolls to top; close restores it and focuses the tile. Close never unhides `main.grid` while another cell's `*-secondary-page` is shown. Back uses `history.back()` when the current entry is ours (`history.state.lgSecondary`), and a pending back blocks a second close for up to `1 s`.
 
 ---
 
@@ -46,5 +52,6 @@
 
 - **Syntax check**:
   `node --check cells/left-grille/shared-bus.js && node --check cells/left-grille/ui.js && node --check cells/left-grille/shared-bus.test.js`
-- **Unit & integration test suites (`shared-bus` + Cell `01` regression)**:
+- **Unit & integration test suites (`shared-bus` 20 tests + Cell `01` regression 12 tests)**:
   `timeout 60 node --test cells/left-grille/shared-bus.test.js cells/left-grille/acoustic-engine.test.js`
+- **Browser without a mic prompt**: stub `navigator.mediaDevices.getUserMedia` to reject with `NotAllowedError` (bus shows `SIM ONLY`, Cell 1 shows its overlay), or to resolve with `new AudioContext().createMediaStreamDestination().stream` (without user activation the arm fails after `2 s` with the "Audio is blocked" error and the stub track ends).

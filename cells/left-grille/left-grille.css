@@ -25,7 +25,11 @@
   --lg-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
-main.grid[hidden],
+/* `index.html` gives `.grid` an author `display: grid`, which beats the UA `[hidden]` rule, so this
+   page hides the main grid itself, but only while it is the page being shown (the hand-gesture
+   Studio carries its own equivalent rule). The fixed `.mg-hud` belongs to Cell 03 and scales the
+   hidden main grid, so it is hidden whenever that grid is hidden. */
+body:has(> .lg-secondary-page:not([hidden])) > main.grid[hidden],
 .lg-secondary-page[hidden],
 body:has(main.grid[hidden]) .mg-hud {
   display: none !important;
@@ -938,5 +942,10 @@ body:has(main.grid[hidden]) .mg-hud {
   .lg-telemetry {
     grid-template-rows: auto auto;
     align-content: center;
+  }
+  /* Sim ↑/↓ wrap under the TOP/BTM pair instead of overlapping it (~120 px column at 390 px) */
+  .lg-tier-dist {
+    flex-wrap: wrap;
+    row-gap: 3px;
   }
 }
