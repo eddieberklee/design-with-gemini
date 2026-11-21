@@ -950,9 +950,9 @@ test('Bridge rejects malformed URI (%ZZ), blocks foreign Origin, ignores ingest 
   }
 });
 
-test('CSS specificity & StickS3-matched hero swatch card: .cell.cell--stick-s3 beats .cell and .s3-stage paints live color', () => {
+test('Hero colour card: tokens scoped on .cell.cell--stick-s3 and .s3-stage paints the live colour', () => {
   const css = fs.readFileSync(path.join(__dirname, 'stick-s3.css'), 'utf8');
-  assert.match(css, /\.cell\.cell--stick-s3\b/, 'Must use .cell.cell--stick-s3 (0,2,0) to beat index.html .cell { background: #ffffff }');
+  assert.match(css, /\.cell\.cell--stick-s3\b/, 'The card tokens (--s3-live-hex, --s3-reticle-ink) live on .cell.cell--stick-s3');
 
   const h = createUiVmHarness({ reducedMotion: true });
   const cellEl = h.document.createElement('section');
@@ -1084,6 +1084,83 @@ test('axis sign contract: device +X (tilt right) / +Y (tilt up) render right/up 
     const m2 = /rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)/.exec(rig.style.transform);
     assert.ok(Number(puck.getAttribute('cx')) > 50 && Number(puck.getAttribute('cy')) < 50);
     assert.ok(Number(m2[1]) > 0 && Number(m2[2]) > 0, 'tilt pad +X/+Y tilts the twin like the device');
+  } finally {
+    handle.destroy();
+  }
+});
+
+test('card stamps sit on the live colour: adaptive ink is >= 4.5:1 across the sRGB gamut in both hysteresis states', () => {
+  // The mode / L / hex / C·H stamps and the dome on .s3-stage use --s3-reticle-ink = pickAdaptiveTheme().ink.
+  let worst = Infinity;
+  const check = (r, g, b) => {
+    for (const prev of [undefined, true, false]) {
+      const theme = ColorEngine.pickAdaptiveTheme(r, g, b, prev);
+      const inkLum = theme.ink === '#000000' ? 0 : 1;
+      const cr = ColorEngine.contrastRatio(ColorEngine.relativeLuminance(r, g, b), inkLum);
+      assert.ok(cr >= 4.5, `ink ${theme.ink} on rgb(${r},${g},${b}) prev=${prev} is ${cr.toFixed(3)}:1`);
+      if (cr < worst) worst = cr;
+    }
+  };
+  for (let r = 0; r <= 255; r += 5) for (let g = 0; g <= 255; g += 5) for (let b = 0; b <= 255; b += 5) check(r, g, b);
+  // Dense pass through the black/white crossover band (relative luminance ~0.175..0.184).
+  for (let v = 100; v <= 125; v++) for (let b = 0; b <= 255; b += 3) { check(v, v, b); check(b, v, v); check(v, b, v); }
+  assert.ok(worst >= 4.5);
+});
+
+test('shared UI contract: ui-tile anatomy, pill button + green rule, Studio Close, a tip on every button, no native title', () => {
+  const h = createUiVmHarness({ reducedMotion: true });
+  const cellEl = h.document.createElement('section');
+  cellEl.id = 'cell-stick-s3';
+  cellEl.className = 'cell cell--stick-s3';
+  h.document.body.appendChild(cellEl);
+  const handle = h.sandbox.StickS3Color.UI.mount(cellEl);
+  try {
+    assert.ok(cellEl.classList.contains('ui-tile'), 'mount() adds ui-tile (index.html is not edited)');
+    assert.ok(cellEl.querySelector('.ui-tile-head'));
+    assert.ok(cellEl.querySelector('.ui-tile-foot'));
+    assert.equal(cellEl.querySelector('.ui-tile-index').textContent, '07');
+    assert.equal(cellEl.querySelector('.ui-tile-title').textContent, 'StickS3');
+
+    const pill = cellEl.querySelector('.s3-status-pill');
+    assert.equal(pill.tagName, 'BUTTON');
+    assert.ok(pill.classList.contains('ui-pill'));
+    assert.equal(pill.getAttribute('data-tone'), 'idle');
+    assert.match(pill.getAttribute('data-tip'), /Click to open the Studio\.$/);
+    assert.match(pill.getAttribute('aria-label'), /^TILT PAD/);
+
+    const dialog = h.document.body.querySelector('dialog.s3-dialog');
+    pill.click();
+    assert.equal(dialog.open, true, 'the status pill opens the Studio');
+    const close = dialog.querySelector('.s3-dlg-close');
+    assert.equal(close.textContent, 'Close');
+    assert.equal(close.getAttribute('data-tip-key'), 'Escape');
+    assert.ok(dialog.querySelector('.ui-studio-bar'));
+    close.click();
+    assert.equal(dialog.open, false);
+
+    // Green only while telemetry is fresh; HELD is attention.
+    const ws = h.wsInstances[0];
+    ws.openNow();
+    ws.receiveJson({ t: 's3', seq: 1, ax: 0.1, ay: 0.1, az: 0.95, tx: 0.1, ty: 0.1, kin: 0, m: 0, h: 0, hex: '#C0B0A0', bat: 64, ev: '' });
+    assert.equal(pill.getAttribute('data-tone'), 'ok');
+    assert.match(pill.getAttribute('data-tip'), /64% is its battery/);
+    const holdBtn = cellEl.querySelectorAll('.s3-chip-btn')[0];
+    holdBtn.click();
+    assert.equal(pill.getAttribute('data-tone'), 'attention');
+    assert.match(holdBtn.getAttribute('data-tip'), /follow the tilt again/);
+    holdBtn.click();
+    h.advanceTime(4000);
+    ws.receiveJson({ t: 'bridge_status', serialConnected: false, port: '' });
+    assert.equal(pill.getAttribute('data-tone'), 'idle');
+
+    // Every button in the tile and the Studio carries a tooltip, and nothing keeps a native title.
+    const buttons = cellEl.querySelectorAll('button').concat(dialog.querySelectorAll('button'));
+    assert.ok(buttons.length >= 25);
+    for (const b of buttons) {
+      assert.ok((b.getAttribute('data-tip') || '').trim(), 'button without data-tip: ' + b.className + ' ' + b.textContent);
+    }
+    const all = cellEl.querySelectorAll('*').concat(dialog.querySelectorAll('*'));
+    assert.equal(all.filter((n) => n.attributes && n.attributes.has('title')).length, 0);
   } finally {
     handle.destroy();
   }

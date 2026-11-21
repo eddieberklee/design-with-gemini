@@ -10,6 +10,23 @@
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const COMMAND_LEASE_MS = 450;
 
+  // Tooltips (ui/tooltip.js reads data-tip). Each one was written from the handler or the
+  // colour maths it describes (color-engine.js:mapImuToColor, sampleDemoMotion).
+  const MODE_TIPS = [
+    'Tilt direction sets the hue, tilt amount the strength; facing down darkens it.',
+    'Tilt right adds red, tilt up adds green, facing up adds blue.',
+    'Tilt, shaking and facing down heat the colour from indigo to red to gold.',
+    'Small tilts sweep the hue around the whole rainbow.'
+  ];
+  const PRESET_TIPS = {
+    idle: 'Stop the demo motion; drag the tilt dome to steer the colour.',
+    orbit: 'Circle the tilt around the dome, turning face down now and then.',
+    flip: 'Rock the stick end over end, face up to face down and back.',
+    shake: 'Shake in bursts to show how shake energy changes the colour.'
+  };
+  const PRESET_NAMES = { orbit: 'Auto Orbit', flip: 'Flip Z', shake: 'Shake Kinetic' };
+  const PILL_CLICK = ' Click to open the Studio.';
+
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
     if (attrs) {
@@ -236,7 +253,7 @@
 
     // ---------- Polite Screen Reader Live Region ----------
     const srLive = el('div', {
-      className: 's3-sr-only',
+      className: 'ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
@@ -251,7 +268,7 @@
     }
 
     // ---------- Toast Overlay ----------
-    const toastEl = el('div', { className: 's3-toast s3-mono', 'aria-hidden': 'true' });
+    const toastEl = el('div', { className: 's3-toast', 'aria-hidden': 'true' });
     function showToast(text) {
       toastEl.textContent = text;
       toastEl.classList.add('is-visible');
@@ -261,54 +278,73 @@
       }, 1050);
     }
 
-    // ---------- 1. Top Obsidian Instrument Header ----------
+    // ---------- 1. Shared tile header (ui-tile-head): 07 · StickS3 · pill · modes · Studio ----------
+    rootEl.classList.add('ui-tile');
+
     const modeBtns = ColorEngine.MODES.map(function (m) {
       return el('button', {
         type: 'button',
-        className: 's3-mode-btn s3-mono',
+        className: 's3-mode-btn',
         'aria-pressed': m.id === state.mode ? 'true' : 'false',
-        title: m.label + ' — ' + m.axisHint,
+        'data-tip': MODE_TIPS[m.id],
         onClick: function () { setMode(m.id, true); }
       }, m.shortLabel);
     });
 
+    // Shown instead of the four-way segment when the tile is too narrow for it (stick-s3.css).
     const modeCycleBtn = el('button', {
       type: 'button',
-      className: 's3-mode-cycle s3-mono',
-      title: 'Cycle accelerometer color mode [M]',
+      className: 's3-mode-cycle ui-btn ui-btn--sm ui-hide-tiny',
+      'data-tip': 'Switch to the next colour mapping.',
+      'data-tip-key': 'M',
       onClick: function () { setMode((state.mode + 1) % ColorEngine.MODES.length, true); }
-    }, 'OKLCH ↻');
+    }, 'OKLCH');
 
-    const statusDot = el('span', { className: 's3-status-dot', 'aria-hidden': 'true' });
-    const statusText = el('span', { textContent: 'TILT PAD' });
-    const statusPill = el('span', { className: 's3-status-pill s3-mono' }, [statusDot, statusText]);
+    // Status pill is a button: every state opens the Studio, where the link controls live.
+    const statusText = el('span', { className: 'ui-pill-label', textContent: 'TILT PAD' });
+    const statusPill = el('button', {
+      type: 'button',
+      className: 's3-status-pill ui-pill',
+      'data-tone': 'idle',
+      onClick: function () { openDialog(); }
+    }, [statusText]);
 
     const openBtn = el('button', {
       type: 'button',
-      className: 's3-open-btn',
+      // Hidden under 320 px: the status pill (also a Studio button) keeps the title readable.
+      className: 's3-open-btn ui-btn ui-btn--sm ui-hide-compact',
       'aria-label': 'Open M5StickS3 Color Studio and Hardware Twin',
+      'data-tip': 'Open the Studio: device link, demo motions, colour modes and saved swatches.',
       onClick: function () { openDialog(); }
     }, [
       el('span', { className: 's3-open-label', textContent: 'Studio' }),
       el('span', { 'aria-hidden': 'true', textContent: '↗' })
     ]);
 
-    const hudTop = el('header', { className: 's3-hud-top' }, [
-      el('div', { className: 's3-brand' }, [
-        el('span', { className: 's3-index s3-mono', textContent: '07' }),
-        el('span', { className: 's3-title s3-mono', textContent: 'STICK S3' })
-      ]),
-      el('div', { className: 's3-top-right' }, [
-        el('div', { className: 's3-mode-group', role: 'group', 'aria-label': 'Accelerometer color mapping mode' }, modeBtns),
-        modeCycleBtn,
+    const hudTop = el('header', { className: 's3-hud-top ui-tile-head' }, [
+      el('span', { className: 'ui-tile-index', textContent: '07' }),
+      el('span', { className: 'ui-tile-title', textContent: 'StickS3' }),
+      el('div', { className: 'ui-tile-actions' }, [
         statusPill,
+        el('div', { className: 's3-mode-group ui-seg ui-seg--mono', role: 'group', 'aria-label': 'Colour mapping' }, modeBtns),
+        modeCycleBtn,
         openBtn
       ])
     ]);
 
-    // ---------- 2. Dominant Hero Color Swatch Card (mirrors StickS3 LCD) ----------
-    const swatchModeEl = el('span', { className: 's3-swatch-mode s3-mono', textContent: 'OKLCH' });
-    const swatchLightnessEl = el('span', { className: 's3-swatch-lightness s3-mono', textContent: 'L84' });
+    // ---------- 2. Hero: live colour card (mirrors the StickS3 LCD card) ----------
+    // Stamps on the card use --s3-reticle-ink from ColorEngine.pickAdaptiveTheme, which is
+    // >= 4.5:1 on every sRGB colour in both hysteresis states (stick-s3.test.mjs gamut sweep).
+    const swatchModeEl = el('span', {
+      className: 's3-swatch-mode',
+      'data-tip': 'Colour mapping in use; M or the mode buttons switch it.',
+      textContent: 'OKLCH'
+    });
+    const swatchLightnessEl = el('span', {
+      className: 's3-swatch-lightness',
+      'data-tip': 'Lightness of this colour, from 0 (black) to 100 (white).',
+      textContent: 'L84'
+    });
 
     const domeRingHalo = svgEl('circle', { class: 's3-dome-halo', cx: '50', cy: '50', r: '42' });
     const domeRing = svgEl('circle', { class: 's3-dome-ring', cx: '50', cy: '50', r: '42' });
@@ -349,14 +385,15 @@
       className: 's3-dome-pad',
       tabIndex: 0,
       role: 'application',
+      'data-tip-key': ' ',
       'aria-label': 'M5StickS3 3-axis accelerometer tilt dome. Tilt physical StickS3 or drag/arrow-keys to steer cell color. Double-click to zero tare.'
     }, [domeSvg]);
 
     const hexTextEl = el('span', { textContent: '#D5C6CA' });
     const hexCopyBtn = el('button', {
       type: 'button',
-      className: 's3-hex-copy s3-mono',
-      title: 'Click to copy live hex color',
+      className: 's3-hex-copy',
+      'data-tip': "Copy this colour's hex code.",
       onClick: function () {
         const hex = state.displayColor.hex;
         copyToClipboard(hex).then(function (res) {
@@ -366,7 +403,11 @@
       }
     }, [hexTextEl]);
 
-    const oklchSpecEl = el('span', { className: 's3-oklch-spec s3-mono', textContent: 'C.02 · H000°' });
+    const oklchSpecEl = el('span', {
+      className: 's3-oklch-spec',
+      'data-tip': 'Chroma (colour strength) and hue angle of this colour in OKLCH.',
+      textContent: 'C.02 · H000°'
+    });
 
     const centerStage = el('div', { className: 's3-stage' }, [
       el('div', { className: 's3-swatch-top' }, [swatchModeEl, swatchLightnessEl]),
@@ -375,39 +416,47 @@
       toastEl
     ]);
 
-    // ---------- 3. Bottom Obsidian Telemetry & Key Strip (mirrors StickS3 X/Y/Z bars) ----------
+    // ---------- 3. Footer (ui-tile-foot): X/Y/Z bars + readout, Hold · 0° · Z · swatches ----------
     const axisBarX = el('span', { className: 's3-axis-fill s3-axis-fill--x' });
     const axisBarY = el('span', { className: 's3-axis-fill s3-axis-fill--y' });
     const axisBarZ = el('span', { className: 's3-axis-fill s3-axis-fill--z' });
 
-    const xyzBarsEl = el('div', { className: 's3-xyz-bars s3-mono', 'aria-hidden': 'true' }, [
+    const xyzBarsEl = el('div', {
+      className: 's3-xyz-bars',
+      'aria-hidden': 'true',
+      'data-tip': 'Accelerometer per axis: bars grow from the centre line, full at 1.25 g.'
+    }, [
       el('span', { className: 's3-axis-mini' }, ['X', el('span', { className: 's3-axis-track' }, [axisBarX])]),
       el('span', { className: 's3-axis-mini' }, ['Y', el('span', { className: 's3-axis-track' }, [axisBarY])]),
       el('span', { className: 's3-axis-mini' }, ['Z', el('span', { className: 's3-axis-track' }, [axisBarZ])])
     ]);
 
-    const axesInlineEl = el('span', { className: 's3-axes-inline s3-mono', textContent: 'X+0.00 Y+0.00 Z+1.00g' });
+    const axesInlineEl = el('span', {
+      className: 's3-axes-inline',
+      'data-tip': 'Accelerometer reading per axis, in g (1 g is gravity).',
+      textContent: 'X+0.00 Y+0.00 Z+1.00g'
+    });
 
     const holdBtn = el('button', {
       type: 'button',
-      className: 's3-chip-btn s3-mono',
+      className: 's3-chip-btn ui-btn ui-btn--sm',
       'aria-pressed': 'false',
-      title: 'Freeze / Hold live color & capture swatch [Space or StickS3 BtnA]',
       onClick: function () { toggleHold(true, true); }
     }, 'Hold');
 
     const tareBtn = el('button', {
       type: 'button',
-      className: 's3-chip-btn s3-tare-btn s3-mono',
-      title: 'Zero / Tare current tilt angle [T or long-press StickS3 BtnA]',
+      className: 's3-chip-btn s3-tare-btn ui-btn ui-btn--sm',
+      'aria-label': '0°: level the tilt',
+      'data-tip': 'Treat the current tilt as level; a connected StickS3 levels too.',
+      'data-tip-key': 'T',
       onClick: function () { triggerTare(true); }
     }, '0°');
 
     const zFlipBtn = el('button', {
       type: 'button',
-      className: 's3-chip-btn s3-mono',
+      className: 's3-chip-btn ui-btn ui-btn--sm',
       'aria-pressed': 'false',
-      title: 'Flip virtual Z hemisphere (Face-Up bright vs Face-Down deep pigment)',
       onClick: function () {
         if (state.hwConnected) {
           showToast('FLIP PHYSICAL STICK Z');
@@ -425,7 +474,7 @@
       'aria-label': 'Captured color swatches'
     });
 
-    const hudBottom = el('footer', { className: 's3-hud-bottom' }, [
+    const hudBottom = el('footer', { className: 's3-hud-bottom ui-tile-foot' }, [
       el('div', { className: 's3-readout-cluster' }, [
         xyzBarsEl,
         axesInlineEl
@@ -438,19 +487,19 @@
       ])
     ]);
 
-    // Micro badge when Cell 03 shrinks grid <= 235px
-    const microHexEl = el('span', { className: 's3-micro-pill s3-mono', textContent: '#D5C6CA' });
+    // Tiny tile (< 240 px, phone grid): the card collapses to this colour + hex button.
+    const microHexEl = el('span', { className: 's3-micro-pill', textContent: '#D5C6CA' });
     const microWrap = el('button', {
       type: 'button',
       className: 's3-micro',
       'aria-label': 'Open M5StickS3 Color Studio',
+      'data-tip': 'Open the Studio for this colour, the device link and saved swatches.',
       onClick: function () { openDialog(); }
     }, [microHexEl]);
 
     clearNode(rootEl);
     rootEl.appendChild(hudTop);
-    rootEl.appendChild(centerStage);
-    rootEl.appendChild(microWrap);
+    rootEl.appendChild(el('div', { className: 's3-body ui-tile-body ui-tile-body--flush' }, [centerStage, microWrap]));
     rootEl.appendChild(hudBottom);
     rootEl.appendChild(srLive);
 
@@ -458,8 +507,8 @@
     const twinLcdCanvas = el('canvas', { className: 's3-twin-lcd', width: 135, height: 240 });
     const twinBtnA = el('button', {
       type: 'button',
-      className: 's3-twin-btna s3-mono',
-      title: 'M5StickS3 KEY1 (GPIO 11): Click to Hold/+Swatch, Shift+Click to Tare',
+      className: 's3-twin-btna',
+      'data-tip': 'Front key: freeze the colour and save a swatch, or resume. Shift-click levels.',
       onClick: function (ev) {
         if (ev.shiftKey) triggerTare(true);
         else toggleHold(true, true);
@@ -469,7 +518,7 @@
     const twinBtnB = el('button', {
       type: 'button',
       className: 's3-twin-btnb',
-      title: 'M5StickS3 KEY2 (GPIO 12): Cycle Color Mode',
+      'data-tip': 'Side key: switch to the next colour mapping.',
       'aria-label': 'M5StickS3 Side Button KEY2: Cycle Color Mode',
       onClick: function () { setMode((state.mode + 1) % ColorEngine.MODES.length, true); }
     });
@@ -480,7 +529,7 @@
         twinBtnA,
         twinBtnB
       ]),
-      el('div', { className: 's3-twin-back s3-mono' }, [
+      el('div', { className: 's3-twin-back' }, [
         el('strong', { textContent: 'M5StickS3' }),
         el('span', { textContent: 'ESP32-S3-PICO-1' }),
         el('span', { textContent: 'BMI270 6-Axis IMU' }),
@@ -488,17 +537,29 @@
       ])
     ]);
 
-    const scopeRateEl = el('span', { className: 's3-mono', textContent: '0 Hz' });
+    const scopeRateEl = el('span', {
+      className: 's3-scope-rate ui-readout ui-readout--quiet',
+      'data-tip': 'Readings per second in the trace; Simulated means the tilt pad, not a device.',
+      textContent: '0 Hz'
+    });
     const scopeCanvas = el('canvas', { className: 's3-scope-canvas', width: 268, height: 76 });
 
-    const heroHexEl = el('span', { className: 's3-hero-hex s3-mono', textContent: '#D5C6CA' });
-    const heroMetricsEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'oklch(0.84 0.020 000deg)' });
-    const heroContrastEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'Contrast 15.9:1 AAA' });
+    const heroHexEl = el('span', { className: 's3-hero-hex', textContent: '#D5C6CA' });
+    const heroMetricsEl = el('span', {
+      className: 's3-hero-metrics',
+      'data-tip': 'This colour in CSS oklch(): lightness, chroma and hue angle.',
+      textContent: 'oklch(0.84 0.020 000deg)'
+    });
+    const heroContrastEl = el('span', {
+      className: 's3-hero-metrics',
+      'data-tip': 'Contrast of the dome and card labels on this colour; 4.5:1 passes WCAG AA.',
+      textContent: 'Contrast 15.9:1 AAA'
+    });
     const heroSwatch = el('div', { className: 's3-hero-swatch' }, [
       el('div', { className: 's3-hero-pill' }, [heroHexEl, heroMetricsEl, heroContrastEl])
     ]);
 
-    const connSummaryEl = el('span', { className: 's3-mono', style: { fontSize: '10.5px', color: '#525250' }, textContent: 'Probing ws://127.0.0.1:8791/ws…' });
+    const connSummaryEl = el('p', { className: 's3-conn-summary', textContent: 'Probing ws://127.0.0.1:8791/ws…' });
 
     // Shared Web Serial / BLE button flow. The outcome is kept in state.linkPhase / state.linkNote
     // so renderStaticControls() shows it instead of overwriting it on the next status event.
@@ -548,22 +609,25 @@
       renderStaticControls();
     }
 
+    // While a chooser is open these are aria-disabled (still focusable, so the tip says why);
+    // runLinkAction already ignores clicks in the 'connecting' phase.
     const webSerialBtn = el('button', {
       type: 'button',
-      className: 's3-btn s3-btn--primary',
+      className: 's3-btn s3-btn--primary ui-btn ui-btn--primary',
       onClick: function () { return runLinkAction('serial'); }
     }, 'Connect USB Web Serial');
 
     const webBleBtn = el('button', {
       type: 'button',
-      className: 's3-btn',
+      className: 's3-btn ui-btn',
       onClick: function () { return runLinkAction('ble'); }
     }, 'Pair Wireless BLE');
 
     const retryBridgeBtn = el('button', {
       type: 'button',
-      className: 's3-btn',
+      className: 's3-btn ui-btn',
       hidden: true,
+      'data-tip': 'Look again for the local USB bridge (bridge.mjs) on 127.0.0.1:8791.',
       onClick: function () {
         state.linkNote = '';
         if (state.linkPhase === 'failed') state.linkPhase = '';
@@ -584,6 +648,7 @@
         className: 's3-btn',
         dataset: { preset: p.id },
         'aria-pressed': p.id === state.simPreset ? 'true' : 'false',
+        'data-tip': PRESET_TIPS[p.id],
         onClick: function () {
           state.simPreset = p.id;
           state.hold = false;
@@ -600,22 +665,25 @@
         type: 'button',
         className: 's3-btn',
         'aria-pressed': m.id === state.mode ? 'true' : 'false',
+        'data-tip': MODE_TIPS[m.id],
         onClick: function () { setMode(m.id, true); }
-      }, m.shortLabel + ' · ' + m.label);
+      }, m.shortLabel);
     });
-    const modeHintEl = el('div', { style: { fontSize: '11px', color: '#525250' }, textContent: ColorEngine.MODES[0].axisHint });
+    const modeHintEl = el('p', { className: 's3-mode-hint', textContent: ColorEngine.MODES[0].label + ' · ' + ColorEngine.MODES[0].axisHint });
 
     const deckGridEl = el('div', { className: 's3-deck-grid' });
 
     const exportPngBtn = el('button', {
       type: 'button',
-      className: 's3-btn',
+      className: 's3-btn ui-btn ui-btn--sm',
+      'data-tip': 'Download a PNG of the saved swatches with hex, mode and lightness.',
       onClick: function () { downloadSwatchTearSheet(); }
     }, 'Download PNG Tear-Sheet');
 
     const copyCssBtn = el('button', {
       type: 'button',
-      className: 's3-btn',
+      className: 's3-btn ui-btn ui-btn--sm',
+      'data-tip': 'Copy every saved swatch as a CSS variable (--stick-s3-swatch-1 and on).',
       onClick: function () {
         const cssVars = state.swatches.map(function (s, idx) {
           return '  --stick-s3-swatch-' + (idx + 1) + ': ' + s.hex + ';';
@@ -628,32 +696,46 @@
 
     const dlgCloseBtn = el('button', {
       type: 'button',
-      className: 's3-dlg-close',
+      className: 's3-dlg-close ui-btn',
+      'data-tip': 'Back to the grid.',
+      'data-tip-key': 'Escape',
       onClick: function () { closeDialog(); }
-    }, 'Done ✕');
+    }, 'Close');
+
+    function studioSection(label, aside, children) {
+      return el('section', { className: 's3-section' }, [
+        el('div', { className: 's3-section-head' }, [el('h3', { className: 'ui-label', textContent: label })].concat(aside || []))
+      ].concat(children));
+    }
 
     const dialog = el('dialog', {
-      className: 's3-dialog',
+      className: 's3-dialog ui-dialog',
       'aria-label': 'M5StickS3 Accelerometer Color Studio Workbench',
       onClick: function (ev) {
         if (ev.target === dialog) closeDialog();
       }
     }, [
-      el('div', { className: 's3-dlg-header' }, [
-        el('div', { className: 's3-dlg-title-wrap' }, [
-          el('span', { className: 's3-index s3-mono', textContent: 'CELL 07' }),
-          el('h2', { className: 's3-dlg-title', textContent: 'M5StickS3 Accelerometer Color Studio' }),
-          el('span', { className: 's3-dlg-sub s3-mono', textContent: 'ESP32-S3-PICO-1 · BMI270 6-Axis IMU · 135×240 ST7789P3' })
-        ]),
-        dlgCloseBtn
+      el('header', { className: 's3-dlg-header ui-studio-bar' }, [
+        el('span', { className: 'ui-tile-index', textContent: '07' }),
+        el('h2', { className: 's3-dlg-title ui-studio-title', textContent: 'StickS3 Color Studio' }),
+        el('span', {
+          className: 's3-dlg-sub ui-label',
+          'data-tip': 'The device: ESP32-S3 chip, BMI270 motion sensor, 135×240 pixel screen.',
+          textContent: 'ESP32-S3 · BMI270 · 135×240'
+        }),
+        el('div', { className: 'ui-studio-actions' }, [dlgCloseBtn])
       ]),
       el('div', { className: 's3-dlg-body' }, [
         el('div', { className: 's3-dlg-left' }, [
           el('div', { className: 's3-twin-stage' }, [twinRig]),
-          el('div', { className: 's3-twin-caption' }, 'Live 3D M5StickS3 orientation twin. Click orange KEY1 to freeze/capture swatch; side KEY2 cycles color engine.'),
-          el('div', { className: 's3-scope-card' }, [
-            el('div', { className: 's3-scope-head' }, [
-              el('span', { textContent: 'BMI270 X / Y / Z + Kinetic' }),
+          el('p', { className: 's3-twin-caption' }, 'Live twin of the stick. The orange key holds the colour; the side key switches mapping.'),
+          el('div', { className: 's3-scope' }, [
+            el('div', { className: 's3-section-head' }, [
+              el('span', {
+                className: 'ui-label',
+                'data-tip': 'Recent accelerometer X (red), Y (green) and Z (blue); newest on the right.',
+                textContent: 'X · Y · Z trace'
+              }),
               scopeRateEl
             ]),
             scopeCanvas
@@ -661,26 +743,22 @@
         ]),
         el('div', { className: 's3-dlg-right' }, [
           heroSwatch,
-          el('div', { className: 's3-section-box' }, [
-            el('div', { className: 's3-section-title' }, [
-              el('span', { textContent: 'Hardware Transport & Simulator' }),
-              connSummaryEl
-            ]),
-            el('div', { className: 's3-btn-row' }, [webSerialBtn, webBleBtn, retryBridgeBtn].concat(simPresetBtns)),
-            el('pre', { className: 's3-cmd-pre s3-mono' }, 'node cells/stick-s3/bridge.mjs   # Auto-streams /dev/cu.usbmodem* to file:// & localhost:8791')
+          studioSection('Device link', [], [
+            connSummaryEl,
+            el('div', { className: 's3-btn-row' }, [webSerialBtn, webBleBtn, retryBridgeBtn]),
+            el('pre', {
+              className: 's3-cmd-pre',
+              'data-tip': 'Run this in the repo to stream a USB-connected StickS3 to this page.'
+            }, 'node cells/stick-s3/bridge.mjs')
           ]),
-          el('div', { className: 's3-section-box' }, [
-            el('div', { className: 's3-section-title' }, [
-              el('span', { textContent: 'Synchronized Firmware Color Engine' })
-            ]),
-            el('div', { className: 's3-btn-row' }, dlgModeBtns),
+          studioSection('Demo motion', [], [
+            el('div', { className: 's3-seg ui-seg', role: 'group', 'aria-label': 'Demo motion' }, simPresetBtns)
+          ]),
+          studioSection('Colour mapping', [], [
+            el('div', { className: 's3-seg ui-seg ui-seg--mono', role: 'group', 'aria-label': 'Colour mapping' }, dlgModeBtns),
             modeHintEl
           ]),
-          el('div', { className: 's3-section-box' }, [
-            el('div', { className: 's3-section-title' }, [
-              el('span', { textContent: 'Captured Pantone Swatches (BtnA / Hold)' }),
-              el('div', { className: 's3-btn-row' }, [copyCssBtn, exportPngBtn])
-            ]),
+          studioSection('Saved swatches', [el('div', { className: 's3-btn-row' }, [copyCssBtn, exportPngBtn])], [
             deckGridEl
           ])
         ])
@@ -952,7 +1030,7 @@
           type: 'button',
           className: 's3-swatch-dot',
           style: { backgroundColor: sw.hex },
-          title: sw.hex + ' (' + sw.mode + ') — Click to preview & copy',
+          'data-tip': 'Freeze the card on ' + sw.hex + ' (' + sw.mode + ') and copy its hex.',
           'aria-label': 'Swatch ' + sw.hex,
           onClick: function () {
             const spec = ColorEngine.parseHexToSpec(sw.hex);
@@ -979,7 +1057,7 @@
         const card = el('button', {
           type: 'button',
           className: 's3-deck-card',
-          title: 'Click to copy ' + sw.hex,
+          'data-tip': 'Copy ' + sw.hex + '.',
           onClick: function () {
             copyToClipboard(sw.hex).then(function (res) {
               showToast((res && res.ok ? 'COPIED ' : 'HEX ') + sw.hex);
@@ -987,7 +1065,7 @@
           }
         }, [
           el('div', { className: 's3-deck-color', style: { backgroundColor: sw.hex } }),
-          el('div', { className: 's3-deck-meta s3-mono' }, [
+          el('div', { className: 's3-deck-meta' }, [
             el('strong', { textContent: sw.hex }),
             el('span', { textContent: sw.mode })
           ])
@@ -1044,57 +1122,98 @@
       dlgModeBtns.forEach(function (btn, idx) {
         btn.setAttribute('aria-pressed', idx === nowMode ? 'true' : 'false');
       });
-      modeCycleBtn.textContent = modeInfo.shortLabel + ' ↻';
+      modeCycleBtn.textContent = modeInfo.shortLabel; // the ↻ glyph is CSS (.s3-mode-cycle::before)
+      modeCycleBtn.setAttribute('aria-label', 'Colour mapping ' + modeInfo.shortLabel + ', switch to next');
       swatchModeEl.textContent = modeInfo.shortLabel;
-      modeHintEl.textContent = modeInfo.axisHint;
+      modeHintEl.textContent = modeInfo.label + ' · ' + modeInfo.axisHint;
 
       holdBtn.setAttribute('aria-pressed', state.hold ? 'true' : 'false');
       holdBtn.textContent = state.hold ? 'Held' : 'Hold';
+      holdBtn.setAttribute('data-tip', state.hold
+        ? 'The colour is frozen. Click to follow the tilt again.'
+        : 'Freeze the colour and save it as a swatch.');
 
-      zFlipBtn.textContent = state.az >= 0 ? 'Z+' : 'Z−';
-      zFlipBtn.setAttribute('aria-pressed', state.az < 0 ? 'true' : 'false');
+      const faceUp = state.az >= 0;
+      zFlipBtn.textContent = faceUp ? 'Z+' : 'Z−';
+      zFlipBtn.setAttribute('aria-pressed', faceUp ? 'false' : 'true');
+      zFlipBtn.setAttribute('aria-label', faceUp ? 'Z+: facing up' : 'Z−: facing down');
+      zFlipBtn.setAttribute('data-tip', state.hwConnected
+        ? 'Shows which way the StickS3 faces; turn the real stick over to flip it.'
+        : (faceUp
+          ? 'Facing up. Click to simulate turning the stick face down.'
+          : 'Facing down. Click to simulate turning the stick face up.'));
+
+      // Space is bound only while the dome has focus (onKeyDown), so its keycap lives here.
+      domePad.setAttribute('data-tip', state.hwConnected
+        ? 'Shows the StickS3 tilt; double-click levels it, Space holds the colour.'
+        : 'Drag or use the arrow keys to tilt; double-click levels, Space holds.');
 
       simPresetBtns.forEach(function (btn) {
         btn.setAttribute('aria-pressed', btn.dataset.preset === state.simPreset && !state.hwConnected ? 'true' : 'false');
+        btn.setAttribute('data-tip', state.hwConnected
+          ? 'A StickS3 is connected; demo motion runs only with the tilt pad.'
+          : PRESET_TIPS[btn.dataset.preset]);
       });
 
       // Status Pill
       statusPill.classList.toggle('is-live', state.hwConnected && !state.hold);
       statusPill.classList.toggle('is-hold', state.hold);
 
-      // Pill states (data-link for styling): held, connecting, live, demo, failed, waiting, manual.
-      // Only `live` (fresh StickS3 telemetry) gets the green .is-live treatment.
+      // Pill states (data-link): held, connecting, live, demo, failed, waiting, manual.
+      // Only `live` (fresh StickS3 telemetry) is green (data-tone="ok"); held and failed are
+      // attention (rust); the rest idle grey (ui/NOTES.md section 0, green rule).
       const directLinkOpen = state.linkSource === 'serial' || state.linkSource === 'ble';
+      const linkWord = state.linkFailTag === 'BLE' ? 'Bluetooth' : 'USB';
       let pillState;
+      let pillTip;
       if (state.hold) {
         pillState = 'held';
         statusText.textContent = 'HELD';
+        pillTip = 'The colour is frozen; Hold resumes it.';
       } else if (state.linkPhase === 'connecting') {
         pillState = 'connecting';
         statusText.textContent = 'CONNECTING';
+        pillTip = 'Waiting for you to pick a device in the browser chooser.';
       } else if (state.hwConnected) {
         pillState = 'live';
         const srcBadge = state.linkSource === 'ble' ? 'S3 BLE' : (state.linkSource === 'serial' ? 'S3 USB' : 'STICK S3');
         statusText.textContent = state.battery >= 0 ? (srcBadge + ' · ' + state.battery + '%') : srcBadge;
+        const via = state.linkSource === 'ble' ? 'over Bluetooth' : (state.linkSource === 'serial' ? 'over USB' : 'through the USB bridge');
+        pillTip = 'A StickS3 is streaming ' + via + (state.battery >= 0 ? '; ' + state.battery + '% is its battery.' : '.');
       } else if (state.simPreset !== 'idle') {
         pillState = 'demo';
         statusText.textContent = 'DEMO ' + state.simPreset.toUpperCase();
+        pillTip = 'Demo motion (' + (PRESET_NAMES[state.simPreset] || state.simPreset) + ') steers the colour, not a device.';
       } else if (state.linkPhase === 'failed') {
         pillState = 'failed';
         statusText.textContent = (state.linkFailTag || 'LINK') + ' FAILED';
+        pillTip = 'The ' + linkWord + ' connection failed; the Studio shows why.';
       } else if (directLinkOpen) {
         pillState = 'waiting';
         statusText.textContent = (state.linkSource === 'ble' ? 'BLE' : 'USB') + ' · NO DATA';
+        pillTip = (state.linkSource === 'ble' ? 'Bluetooth link' : 'USB port') + ' is open, but no StickS3 data has arrived.';
       } else {
         pillState = 'manual';
         statusText.textContent = 'TILT PAD';
+        pillTip = 'No StickS3 connected; the tilt dome steers the colour.';
       }
       statusPill.setAttribute('data-link', pillState);
+      statusPill.setAttribute('data-tone', pillState === 'live' ? 'ok' : (pillState === 'held' || pillState === 'failed' ? 'attention' : 'idle'));
+      statusPill.setAttribute('data-tip', pillTip + PILL_CLICK);
+      statusPill.setAttribute('aria-label', statusText.textContent + ': open the Studio');
 
+      const connecting = state.linkPhase === 'connecting';
+      const busyTip = 'Waiting for the browser device chooser to close.';
       webSerialBtn.textContent = state.linkSource === 'serial' ? 'Disconnect Web Serial' : 'Connect USB Web Serial';
       webBleBtn.textContent = state.linkSource === 'ble' ? 'Disconnect BLE' : 'Pair Wireless BLE';
-      webSerialBtn.disabled = state.linkPhase === 'connecting';
-      webBleBtn.disabled = state.linkPhase === 'connecting';
+      webSerialBtn.setAttribute('aria-disabled', connecting ? 'true' : 'false');
+      webBleBtn.setAttribute('aria-disabled', connecting ? 'true' : 'false');
+      webSerialBtn.setAttribute('data-tip', connecting ? busyTip : (state.linkSource === 'serial'
+        ? 'Close the browser USB link and hand the port back to the local bridge.'
+        : 'Connect a StickS3 by USB cable straight from the browser (Chrome or Edge).'));
+      webBleBtn.setAttribute('data-tip', connecting ? busyTip : (state.linkSource === 'ble'
+        ? 'Close the Bluetooth link to the StickS3.'
+        : 'Pair a StickS3 over Bluetooth, no cable needed (Chrome or Edge).'));
       retryBridgeBtn.hidden = directLinkOpen || state.bridgeReachable || state.bridgeProbe === 'probing';
 
       let summary;
@@ -1118,7 +1237,6 @@
         summary = 'Interactive Tilt Pad active (run bridge.mjs or connect Web Serial / BLE)';
       }
       connSummaryEl.textContent = summary;
-      statusPill.title = summary;
     }
 
     // ---------- Hardware Twin Canvas & Scope Renderers (Dialog Open Only) ----------

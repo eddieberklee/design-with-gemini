@@ -1,272 +1,71 @@
 /* ==========================================================================
-   M5StickS3 Accelerometer Color Studio — Cell #07 & Hardware Twin Workbench
-   Strictly scoped to .cell--stick-s3, .s3-*, and .s3-dialog.
-   #101010 obsidian instrument bezel + dominant .s3-stage hero color swatch card
-   mirroring the physical M5StickS3 135x240 LCD layout.
+   Cell 07 — StickS3 colour card + Studio dialog.
+   Shared anatomy and controls come from ui/base.css (ui-tile, ui-tile-head,
+   ui-tile-foot, ui-btn, ui-seg, ui-pill, ui-dialog, ui-studio-bar). This file
+   keeps only the hero (the live colour card mirroring the StickS3 LCD), the
+   footer axis bars and swatch dots, and the Studio's device twin and scope.
+   Scoped to .cell--stick-s3 and .s3-dialog.
    ========================================================================== */
 
-.cell--stick-s3,
-.s3-dialog {
-  --s3-paper: rgba(255, 255, 255, 0.93);
-  --s3-paper-solid: #ffffff;
-  --s3-canvas: #fafafa;
-  --s3-recess: #f6f6f4;
-  --s3-border: #e5e5e5;
-  --s3-hairline: #efefef;
-  --s3-capsule-border: rgba(20, 20, 19, 0.14);
-
-  --s3-ink: #141413;
-  --s3-ink-2: #525250;
-  --s3-ink-3: #63635f;
-
-  --s3-focus: #2563eb;
-  --s3-focus-dark: #60a5fa;
-  --s3-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
-  --s3-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --s3-ease: 180ms cubic-bezier(0.16, 1, 0.3, 1);
-
-  font-family: var(--s3-sans);
-  color: var(--s3-ink);
-  -webkit-font-smoothing: antialiased;
-}
-
-.cell--stick-s3 button,
-.s3-dialog button,
-.s3-dialog input {
-  font-family: inherit;
-}
-
-.s3-mono,
-.cell--stick-s3 .s3-mono,
-.s3-dialog .s3-mono {
-  font-family: var(--s3-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-.s3-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* ==========================================================================
-   1. STICKS3-MATCHED OBSIDIAN INSTRUMENT CELL + HERO COLOR SWATCH CARD (4:3)
-   Uses .cell.cell--stick-s3 (0,2,0) so index.html <style> .cell { background:#fff }
-   never overrides the cell frame or live color field.
-   ========================================================================== */
-
-.cell.cell--stick-s3,
-.cell--stick-s3 {
+/* Hero-only tokens: written per frame by ui.js:applyColorToDom from
+   ColorEngine.pickAdaptiveTheme (ink >= 4.5:1 on every sRGB colour). */
+.cell.cell--stick-s3 {
   --s3-live-hex: #D5C6CA;
   --s3-reticle-ink: #000000;
   --s3-reticle-halo: rgba(255, 255, 255, 0.42);
   --s3-dome-well: rgba(255, 255, 255, 0.10);
-
-  position: relative;
-  overflow: hidden;
-  container-type: inline-size;
-  container-name: s3-card;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: clamp(6px, 2cqi, 8px);
-  gap: clamp(4px, 1.5cqi, 6px);
-  background: #101010;
-  border-color: #282826;
-  color: #f5f5f3;
   user-select: none;
 }
 
-.cell--stick-s3 button:focus-visible {
-  outline: 2px solid var(--s3-focus-dark);
+/* Focus on the live colour: blue ring on a surface halo, visible on any colour. */
+.s3-hex-copy:focus-visible,
+.s3-dome-pad:focus-visible {
+  outline: var(--ui-ring);
   outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--ui-surface);
 }
 
-.s3-dialog button:focus-visible,
-.s3-dialog input:focus-visible {
-  outline: 2px solid var(--s3-focus);
-  outline-offset: 2px;
+/* ---------- Header ---------- */
+
+.s3-mode-group > button {
+  padding: 0 6px;
 }
 
-.s3-dome-pad:focus-visible,
-.s3-micro:focus-visible {
-  outline: 2px solid var(--s3-focus);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px var(--s3-paper-solid);
-}
-
-/* ---------- Top Obsidian Instrument Header (matches StickS3 LCD top bar) ---------- */
-
-.s3-hud-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-height: 22px;
-  padding: 0 2px;
-  z-index: 2;
-}
-
-.s3-brand {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.s3-index {
-  font-size: 10px;
-  font-weight: 600;
-  color: #9e9e98;
-}
-
-.s3-title {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #f5f5f3;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.s3-top-right {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
-/* 4-Mode Segmented Selector in Obsidian Header */
-.s3-mode-group {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border-radius: 5px;
-  background: #1e1e1c;
-  border: 1px solid #30302d;
-  gap: 1px;
-}
-
-.s3-mode-btn {
-  border: 0;
-  background: transparent;
-  color: #b8b8b2;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 3.5px;
-  cursor: pointer;
-  transition: background var(--s3-ease), color var(--s3-ease);
-}
-
-.s3-mode-btn:hover {
-  color: #ffffff;
-}
-
-.s3-mode-btn[aria-pressed="true"] {
-  background: #f5f5f3;
-  color: #101010;
-}
-
-/* Compact Mode Cycle Button (shown on medium/narrow containers) */
 .s3-mode-cycle {
   display: none;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 4px;
-  border: 1px solid #383835;
-  background: #1e1e1c;
-  color: #f5f5f3;
-  font-size: 9.5px;
-  font-weight: 600;
-  cursor: pointer;
+  min-width: 65px;                /* OKLCH / THERM / PRISM + ↻: RGB keeps the same width, no header shift */
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.04em;
 }
 
-/* Link Status Pill (matches StickS3 LCD solid emerald / signal / amber badges, >= 5.0:1 WCAG AA) */
+.s3-mode-cycle::before {
+  content: "↻";
+  order: 2;
+  font-family: var(--ui-sans);
+}
+
 .s3-status-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 4px;
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: #b45309;
-  color: #ffffff;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.s3-status-pill.is-live {
-  background: #047857;
-  color: #ffffff;
-}
+/* ---------- Hero: live colour card ---------- */
 
-.s3-status-pill.is-hold {
-  background: #b43a10;
-  color: #ffffff;
+/* Stay flush at every size: ui/base.css's compact step re-pads .ui-tile-body (incl. --flush). */
+.s3-body.ui-tile-body--flush {
+  padding: 0;
 }
-
-.s3-status-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #ffffff;
-  flex-shrink: 0;
-}
-
-.s3-status-pill.is-hold .s3-status-dot {
-  border-radius: 1px;
-}
-
-.s3-open-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 20px;
-  padding: 0 7px;
-  border-radius: 4px;
-  border: 1px solid #383835;
-  background: #1e1e1c;
-  color: #f5f5f3;
-  font-size: 10.5px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.s3-open-btn:hover {
-  border-color: #575752;
-  background: #292926;
-}
-
-/* ---------- Dominant Hero Color Swatch Card (mirrors StickS3 LCD swatch565 card) ---------- */
 
 .s3-stage {
   position: relative;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
-  border-radius: 7px;
-  background-color: var(--s3-live-hex);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  padding: 7px 10px;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  padding: var(--ui-2) var(--ui-3);
   overflow: hidden;
+  background-color: var(--s3-live-hex);
+  color: var(--s3-reticle-ink);
 }
 
 .s3-swatch-top,
@@ -274,21 +73,22 @@
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ui-2);
   z-index: 2;
-  color: var(--s3-reticle-ink);
+  min-width: 0;
 }
 
 .s3-swatch-mode,
-.s3-swatch-lightness {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--s3-reticle-ink);
+.s3-swatch-lightness,
+.s3-oklch-spec {
+  font: 600 var(--ui-fs-2) / 1.2 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ui-caps-track);
+  white-space: nowrap;
 }
 
 .s3-swatch-center {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   align-items: center;
@@ -299,14 +99,11 @@
   position: relative;
   width: clamp(44px, 21cqi, 84px);
   max-width: 100%;
+  max-height: 100%;
   aspect-ratio: 1 / 1;
   border-radius: 50%;
-  background: transparent;
   cursor: grab;
   touch-action: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .s3-dome-pad:active {
@@ -314,10 +111,10 @@
 }
 
 .s3-dome-svg {
+  display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
-  display: block;
 }
 
 .s3-dome-halo {
@@ -369,285 +166,243 @@
   opacity: 0.9;
 }
 
-/* Transient Hardware Action Banner ("COLOR HELD", "ZERO TARED", "MODE OKLCH") */
-.s3-toast {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 3px 10px;
-  border-radius: 5px;
-  background: rgba(16, 16, 16, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  color: #ffffff;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 140ms ease;
-  white-space: nowrap;
-  z-index: 4;
-}
-
-.s3-toast.is-visible {
-  opacity: 1;
-}
-
 .s3-hex-copy {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  flex-shrink: 0;
+  appearance: none;
+  flex: 0 0 auto;
+  margin: 0 0 0 calc(-1 * var(--ui-1));
+  padding: 2px var(--ui-1);
   border: 0;
+  border-radius: var(--ui-radius-sm);
   background: transparent;
-  padding: 1px 3px;
-  margin-left: -3px;
-  border-radius: 4px;
-  color: var(--s3-reticle-ink);
-  font-size: clamp(13px, 4cqi, 18px);
-  font-weight: 700;
-  letter-spacing: 0.01em;
+  color: inherit;
+  font: 600 var(--ui-fs-5) / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
   cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease);
 }
 
 .s3-hex-copy:hover {
   background: var(--s3-dome-well);
 }
 
-.s3-oklch-spec {
-  font-size: 10.5px;
-  font-weight: 700;
-  color: var(--s3-reticle-ink);
+/* Transient action banner ("COLOR HELD", "ZERO TARED", "MODE · OKLCH"). */
+.s3-toast {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 4;
+  transform: translate(-50%, -50%);
+  padding: var(--ui-1) var(--ui-2);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-ink);
+  color: var(--ui-surface);
+  font: 600 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
   white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--ui-dur) var(--ui-ease);
 }
 
-/* ---------- Bottom Obsidian Telemetry & Key Bar (mirrors StickS3 X/Y/Z bars) ---------- */
+.s3-toast.is-visible {
+  opacity: 1;
+}
 
-.s3-hud-bottom {
+/* Tiny tile: the card becomes one colour button with its hex. */
+.s3-micro {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background-color: var(--s3-live-hex);
+  color: var(--s3-reticle-ink);
+  font: 600 var(--ui-fs-2) / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.s3-micro:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: -4px;
+  box-shadow: inset 0 0 0 6px var(--ui-surface);
+}
+
+/* ---------- Footer: axis bars, readout, Hold · 0° · Z · swatches ---------- */
+
+.s3-readout-cluster,
+.s3-controls-cluster {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-height: 22px;
-  padding: 0 2px;
-  z-index: 2;
+  min-width: 0;
 }
 
 .s3-readout-cluster {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
+  gap: var(--ui-3);
   overflow: hidden;
 }
 
-/* StickS3 LCD Center-Zero X/Y/Z Mini Bars */
+.s3-controls-cluster {
+  flex: 0 0 auto;
+  gap: var(--ui-1);
+}
+
 .s3-xyz-bars {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
+  gap: var(--ui-2);
+  flex: 0 0 auto;
 }
 
 .s3-axis-mini {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 9px;
-  font-weight: 700;
-  color: #b8b8b2;
+  gap: var(--ui-1);
 }
 
 .s3-axis-track {
   position: relative;
-  width: 34px;
-  height: 6px;
+  width: 28px;
+  height: 4px;
   border-radius: 2px;
-  background: #242422;
+  background: var(--ui-hairline);
   overflow: hidden;
 }
 
-.s3-axis-track::after {
+.s3-axis-track::after {         /* zero line */
   content: "";
   position: absolute;
   left: 50%;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: #575752;
+  background: var(--ui-ink-3);
 }
 
 .s3-axis-fill {
   position: absolute;
-  top: 1px;
-  bottom: 1px;
+  top: 0;
+  bottom: 0;
   left: 50%;
   width: 0;
+  background: var(--ui-ink-2);
 }
-
-.s3-axis-fill--x { background: #f87171; }
-.s3-axis-fill--y { background: #34d399; }
-.s3-axis-fill--z { background: #60a5fa; }
 
 .s3-axes-inline {
-  font-size: 9.5px;
-  color: #a8a8a2;
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.s3-controls-cluster {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.s3-chip-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 4px;
-  border: 1px solid #383835;
-  background: #1e1e1c;
-  color: #f5f5f3;
-  font-size: 9.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.s3-chip-btn:hover {
-  border-color: #575752;
-  background: #292926;
-}
-
-.s3-chip-btn[aria-pressed="true"] {
-  background: #f5f5f3;
-  border-color: #f5f5f3;
-  color: #101010;
-}
-
-/* Captured Pantone Mini-Swatches inside Bottom Bar */
 .s3-swatch-strip {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: var(--ui-1);
+  margin-left: var(--ui-1);
 }
 
 .s3-swatch-dot {
-  width: 15px;
-  height: 15px;
+  appearance: none;
+  position: relative;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
   padding: 0;
-  border-radius: 3.5px;
-  border: 1.5px solid rgba(255, 255, 255, 0.78);
-  box-shadow: inset 0 0 0 1px rgba(16, 16, 16, 0.45);
+  border: 1px solid rgba(22, 22, 21, 0.18);
+  border-radius: 4px;
   cursor: pointer;
-  flex-shrink: 0;
-  transition: transform 140ms ease;
+  transition: border-color var(--ui-dur) var(--ui-ease);
+}
+
+.s3-swatch-dot::after {          /* 20 x 28 hit area */
+  content: "";
+  position: absolute;
+  inset: -7px -3px;
 }
 
 .s3-swatch-dot:hover {
-  transform: scale(1.14);
+  border-color: var(--ui-ink);
 }
 
-/* Micro Specimen Swatch (visible when Cell 03 shrinks grid <= 235px) */
-.s3-micro {
-  display: none;
-  flex: 1;
-  width: 100%;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 6px;
-  background-color: var(--s3-live-hex);
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
+.s3-swatch-dot:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
-.s3-micro-pill {
-  padding: 3px 7px;
-  border-radius: 4px;
-  background: transparent;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--s3-reticle-ink);
-}
+/* ---------- Tile size steps (shared steps in ui/base.css 3.9) ---------- */
 
-/* ---------- 5-Tier @container Queries (140px .. 960px resilience) ---------- */
-
-@container s3-card (max-width: 520px) {
+@container ui-tile (max-width: 519px) {
   .s3-axes-inline {
     display: none;
   }
 }
 
-@container s3-card (max-width: 440px) {
+/* The four-way mode segment needs ~190 px of header; below this the cycle button replaces it. */
+@container ui-tile (max-width: 479px) {
   .s3-mode-group {
     display: none;
   }
+
   .s3-mode-cycle {
     display: inline-flex;
   }
+
+  .s3-hex-copy {
+    font-size: var(--ui-fs-4);
+  }
 }
 
-@container s3-card (max-width: 375px) {
-  .s3-index,
-  .s3-open-label,
-  .s3-oklch-spec,
-  .s3-tare-btn,
-  .s3-xyz-bars {
+@container ui-tile (max-width: 399px) {
+  .s3-xyz-bars,
+  .s3-open-label {
     display: none;
   }
+}
+
+@container ui-tile (max-width: 319px) {
   .s3-stage {
-    padding: 5px 8px;
+    padding: var(--ui-1) var(--ui-2);
   }
-  .s3-swatch-strip .s3-swatch-dot:nth-child(n+4) {
+}
+
+/* Under 340 px the cycle drops its ↻ so "STICK S3 · 100%" still leaves the title whole. */
+@container ui-tile (max-width: 339px) {
+  .s3-mode-cycle {
+    min-width: 50px;
+  }
+
+  .s3-mode-cycle::before {
     display: none;
   }
 }
 
-@container s3-card (max-width: 280px) {
-  .s3-brand {
-    display: none;
-  }
-  .s3-hud-top {
-    justify-content: flex-end;
-  }
-}
-
-@container s3-card (max-width: 235px) {
-  .s3-stage,
-  .s3-hud-bottom,
+/* 240–279 px: the longest pill labels (STICK S3 · 100%, USB · NO DATA) need the cycle
+   button's room; the mode stays on the card stamp, the M key and the Studio. */
+@container ui-tile (max-width: 279px) {
   .s3-mode-cycle {
     display: none;
   }
+}
+
+@container ui-tile (max-width: 239px) {
+  .s3-stage {
+    display: none;
+  }
+
   .s3-micro {
     display: flex;
   }
 }
 
-@container s3-card (max-width: 195px) {
-  .s3-status-pill {
-    display: none;
-  }
-}
-
 /* ==========================================================================
-   2. EXPANDED HARDWARE TWIN & COLORIMETER WORKBENCH (<dialog>)
+   Studio dialog (.s3-dialog.ui-dialog + .ui-studio-bar)
    ========================================================================== */
 
 .s3-dialog {
-  margin: auto;
-  width: min(94vw, 940px);
-  max-height: min(90dvh, 740px);
-  border: 1px solid var(--s3-border);
-  border-radius: 12px;
-  background: var(--s3-paper-solid);
-  box-shadow: 0 24px 60px rgba(20, 20, 19, 0.18);
-  padding: 0;
+  --s3-device: #1b1b19;           /* twin body and LCD: the real stick is black */
+  --s3-device-edge: #3f3f3c;
+  width: min(940px, calc(100vw - 32px));
   overflow: hidden;
 }
 
@@ -656,58 +411,20 @@
   flex-direction: column;
 }
 
-.s3-dialog::backdrop {
-  background: rgba(244, 244, 242, 0.78);
-  backdrop-filter: blur(5px);
-}
-
-.s3-dlg-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--s3-hairline);
-  background: var(--s3-canvas);
-}
-
-.s3-dlg-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.s3-dlg-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--s3-ink);
-}
-
 .s3-dlg-sub {
-  font-size: 11px;
-  color: var(--s3-ink-3);
-}
-
-.s3-dlg-close {
-  height: 28px;
-  padding: 0 10px;
-  border-radius: 6px;
-  border: 1px solid var(--s3-border);
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .s3-dlg-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr);
-  gap: 0;
 }
 
 @media (max-width: 760px) {
@@ -715,94 +432,95 @@
     /* minmax(0, …): a bare 1fr track grows to min-content and the body scrolled sideways at 390px */
     grid-template-columns: minmax(0, 1fr);
   }
+
+  .s3-dlg-sub {
+    display: none;
+  }
 }
 
-/* Left Column: CSS-3D M5StickS3 Hardware Twin + 60-Sample XYZ Oscilloscope */
 .s3-dlg-left {
-  padding: 16px;
-  background: var(--s3-recess);
-  border-right: 1px solid var(--s3-hairline);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
+  gap: var(--ui-3);
+  padding: var(--ui-4);
+  background: var(--ui-well);
+  border-right: 1px solid var(--ui-hairline);
 }
 
+.s3-dlg-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-4);
+  padding: var(--ui-4);
+  min-width: 0;
+}
+
+/* Device twin */
 .s3-twin-stage {
-  width: 100%;
-  height: 256px;
-  perspective: 720px;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.9), rgba(234,234,230,0.65));
-  border: 1px solid var(--s3-border);
-  border-radius: 10px;
-  position: relative;
+  height: 240px;
+  perspective: 720px;
   overflow: hidden;
 }
 
 .s3-twin-rig {
+  position: relative;
   width: 96px;
   height: 196px;
-  position: relative;
   transform-style: preserve-3d;
   transition: transform 65ms linear;
 }
 
-.s3-twin-body {
-  position: absolute;
-  inset: 0;
-  border-radius: 12px;
-  background: linear-gradient(160deg, #2a2a28 0%, #161615 100%);
-  border: 1.5px solid #3f3f3c;
-  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 10px 8px 10px;
-  gap: 8px;
-  backface-visibility: hidden;
-}
-
+.s3-twin-body,
 .s3-twin-back {
   position: absolute;
   inset: 0;
   border-radius: 12px;
-  background: #1b1b19;
-  border: 1.5px solid #3f3f3c;
-  color: #d4d4ce;
-  transform: rotateY(180deg);
+  border: 1.5px solid var(--s3-device-edge);
+  background: var(--s3-device);
   backface-visibility: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.s3-twin-body {
+  gap: var(--ui-2);
+  padding: 10px var(--ui-2);
+  box-shadow: var(--ui-shadow-pop);
+}
+
+.s3-twin-back {
   justify-content: center;
   gap: 6px;
   padding: 10px;
+  transform: rotateY(180deg);
+  color: var(--ui-hairline);
+  font: 500 var(--ui-fs-1) / 1.3 var(--ui-mono);
   text-align: center;
-  font-size: 9.5px;
 }
 
 .s3-twin-lcd {
+  display: block;
   width: 78px;
   height: 138px;
-  border-radius: 5px;
-  background: #101010;
-  border: 1px solid #3c3c39;
-  display: block;
+  border-radius: var(--ui-radius-sm);
+  border: 1px solid var(--s3-device-edge);
+  background: var(--s3-device);
 }
 
 .s3-twin-btna {
   width: 44px;
-  height: 24px;
-  border-radius: 5px;
-  border: 1px solid #b43a10;
-  background: linear-gradient(180deg, #ef6432 0%, #d94f1e 100%);
-  color: #ffffff;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+  height: var(--ui-ctl-h-sm);
+  border-radius: var(--ui-radius-sm);
+  border: 1px solid var(--ui-accent);
+  background: var(--ui-accent);       /* the stick's orange front key; 5.6:1 under white text */
+  color: var(--ui-surface);
+  font: 700 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
   cursor: pointer;
 }
 
@@ -812,195 +530,173 @@
   top: 62px;
   width: 7px;
   height: 28px;
-  border-radius: 0 4px 4px 0;
-  border: 1px solid #52524e;
-  background: #3a3a37;
-  cursor: pointer;
   padding: 0;
+  border-radius: 0 4px 4px 0;
+  border: 1px solid var(--s3-device-edge);
+  background: var(--s3-device-edge);
+  cursor: pointer;
+}
+
+.s3-twin-btna:focus-visible,
+.s3-twin-btnb:focus-visible,
+.s3-deck-card:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .s3-twin-caption {
-  font-size: 10.5px;
-  color: var(--s3-ink-2);
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
   text-align: center;
-  line-height: 1.35;
 }
 
-.s3-scope-card {
-  width: 100%;
-  background: var(--s3-paper-solid);
-  border: 1px solid var(--s3-border);
-  border-radius: 8px;
-  padding: 8px 10px;
+.s3-scope {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-}
-
-.s3-scope-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: var(--s3-ink-2);
+  gap: var(--ui-2);
 }
 
 .s3-scope-canvas {
+  display: block;
   width: 100%;
   height: 76px;
-  display: block;
-  border-radius: 4px;
-  background: #141413;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-ink);
 }
 
-/* Right Column: Live Colorimeter, Link Bar, Modes, and Swatch Tear-Sheet */
-.s3-dlg-right {
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
+/* Right column */
 .s3-hero-swatch {
-  border-radius: 10px;
-  min-height: 112px;
-  padding: 12px 14px;
   display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  border: 1px solid rgba(20, 20, 19, 0.12);
-  transition: background-color 60ms linear;
+  align-items: flex-start;
+  min-height: 112px;
+  padding: var(--ui-3);
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--ui-hairline);
 }
 
 .s3-hero-pill {
-  align-self: flex-start;
-  background: var(--s3-paper);
-  border: 1px solid var(--s3-capsule-border);
-  border-radius: 6px;
-  padding: 5px 10px;
   display: flex;
-  align-items: baseline;
-  gap: 10px;
   flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ui-1) var(--ui-3);
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-hairline);
 }
 
 .s3-hero-hex {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--s3-ink);
+  font: 600 var(--ui-fs-4) / 1.2 var(--ui-mono);
+  color: var(--ui-ink);
 }
 
 .s3-hero-metrics {
-  font-size: 11px;
-  color: var(--s3-ink-2);
+  font: 400 var(--ui-fs-2) / 1.3 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-ink-2);
 }
 
-.s3-section-box {
-  border: 1px solid var(--s3-border);
-  border-radius: 8px;
-  padding: 10px 12px;
-  background: var(--s3-canvas);
+.s3-section {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ui-2);
+  min-width: 0;
 }
 
-.s3-section-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--s3-ink);
+.s3-section + .s3-section {
+  padding-top: var(--ui-4);
+  border-top: 1px solid var(--ui-hairline);
+}
+
+.s3-section-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ui-2);
+  min-height: var(--ui-ctl-h-sm);
+}
+
+.s3-conn-summary,
+.s3-mode-hint {
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
+  overflow-wrap: anywhere;
 }
 
 .s3-btn-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
+  gap: var(--ui-2);
 }
 
-.s3-btn {
-  height: 28px;
-  padding: 0 10px;
-  border-radius: 5px;
-  border: 1px solid var(--s3-border);
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.s3-btn:hover {
-  border-color: #b8b8b2;
-  background: var(--s3-recess);
-}
-
-.s3-btn--primary {
-  background: var(--s3-ink);
-  border-color: var(--s3-ink);
-  color: #ffffff;
-}
-
-.s3-btn--primary:hover {
-  background: #2b2b29;
-}
-
-.s3-btn[aria-pressed="true"] {
-  background: var(--s3-ink);
-  border-color: var(--s3-ink);
-  color: #ffffff;
+.s3-seg {
+  align-self: flex-start;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .s3-cmd-pre {
-  background: #141413;
-  color: #f4f4f1;
-  padding: 7px 10px;
-  border-radius: 6px;
-  font-size: 10.5px;
+  padding: var(--ui-2) var(--ui-3);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
+  border: 1px solid var(--ui-hairline);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-mono);
   overflow-x: auto;
 }
 
 .s3-deck-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-  gap: 6px;
+  gap: var(--ui-2);
 }
 
 .s3-deck-card {
-  border: 1px solid var(--s3-border);
-  border-radius: 6px;
-  background: var(--s3-paper-solid);
-  overflow: hidden;
-  padding: 0;
-  cursor: pointer;
-  text-align: left;
+  appearance: none;
   display: flex;
   flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease);
+}
+
+.s3-deck-card:hover {
+  border-color: var(--ui-ink-3);
 }
 
 .s3-deck-color {
-  height: 36px;
   width: 100%;
-  border-bottom: 1px solid rgba(20, 20, 19, 0.08);
+  height: 36px;
+  border-bottom: 1px solid var(--ui-hairline);
 }
 
 .s3-deck-meta {
-  padding: 4px 6px;
-  font-size: 9.5px;
-  color: var(--s3-ink);
   display: flex;
   justify-content: space-between;
+  gap: var(--ui-1);
+  padding: var(--ui-1) 6px;
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  color: var(--ui-ink);
+}
+
+.s3-deck-meta span {
+  color: var(--ui-ink-3);
 }
 
 @media (prefers-reduced-motion: reduce) {
   .s3-twin-rig,
   .s3-swatch-dot,
-  .s3-hero-swatch,
-  .s3-toast {
-    transition: none !important;
+  .s3-toast,
+  .s3-hex-copy,
+  .s3-deck-card {
+    transition: none;
   }
 }
