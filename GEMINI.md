@@ -56,7 +56,7 @@ Immediately **after** an initial Stage 1 `<landed-sha>` is pushed — starting i
    - Re-verify `<repair-sha>` via **incremental delta review on the existing Stage 2 verifiers** — **never** spawn a brand-new full Stage 2 swarm for a Stage 2 follow-up commit. Cap subjective craft polish to `1` follow-up round and total Stage 2 repair cycles to `≤ 2` rounds before escalating diagnosis, while ensuring `0` known objective bugs or red checks remain.
 5. **Clean Closeout & Status Honesty**:
    - Report `"landed <sha>, post-land teamwork/boost follow-up running"` whenever Stage 2 workers are still in flight.
-   - Once Stage 2 finishes green, post `[done] <summary>` (with no `@`) to quiet any swarm `monitor`, `kill` finished non-monitor swarm workers after all isolated work is merged/landed, and report `"verified <final-sha>"`.
+   - Once Stage 2 finishes green, post `[done] <summary>` (with no `@`) to quiet any swarm `monitor`, `kill` finished task workers (never `monitor` or `narrator`) after all isolated work is merged/landed, and report `"verified <final-sha>"`.
 
 ---
 
