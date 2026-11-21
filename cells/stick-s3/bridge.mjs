@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Zero-dependency Local USB Serial <-> WebSocket + SSE + HTTP Bridge for Cell 05 (M5StickS3).
+ * Zero-dependency Local USB Serial <-> WebSocket + SSE + HTTP Bridge for Cell 07 (M5StickS3).
  *
  * Automatically opens `/dev/cu.usbmodem*` (ESP32-S3 USB-Serial/JTAG at 115200 8N1) using a
  * tiny Python 3 stdlib `termios` helper (no npm `serialport` addon required) and fans out
@@ -827,6 +827,10 @@ export function createStickBridgeServer(options = {}) {
         }
         if (frame.opcode === 0x1 || frame.opcode === 0x2) {
           if (fragOpcode) {
+            socket.destroy();
+            return;
+          }
+          if (frame.payload.length > 65536) {
             socket.destroy();
             return;
           }
