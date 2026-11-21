@@ -58,10 +58,58 @@
     return Number.isFinite(n) ? n.toFixed(2) : '0.00';
   }
 
+  function fmtPct(p) {
+    const n = Number(p);
+    return Number.isFinite(n) ? Math.round(n * 100) + '%' : '0%';
+  }
+
   function fmtSignedDelta(d) {
     const n = Number(d);
     if (!Number.isFinite(n) || Math.abs(n) < 0.005) return null;
     return (n > 0 ? '+' : '−') + Math.abs(n).toFixed(2);
+  }
+
+  function fmtSignedPts(d) {
+    const n = Number(d);
+    if (!Number.isFinite(n) || Math.abs(n) < 0.01) return null;
+    const pts = Math.round(Math.abs(n) * 100);
+    return (n > 0 ? '+' : '−') + pts + ' pts';
+  }
+
+  function humanizeKey(key) {
+    return String(key || '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, function (c) {
+        return c.toUpperCase();
+      });
+  }
+
+  function certaintyLabel(stdDev) {
+    if (!Number.isFinite(stdDev)) return '';
+    if (stdDev < 0.52) return 'High certainty';
+    if (stdDev < 0.85) return 'Moderate spread';
+    return 'Mixed signals';
+  }
+
+  function shortLevelLabel(q, lvl, idx) {
+    if (q && Array.isArray(q.levelLabels) && q.levelLabels[idx]) {
+      return q.levelLabels[idx];
+    }
+    const raw = String((lvl && lvl.description) || '');
+    const colon = raw.indexOf(':');
+    if (colon > 0 && colon <= 18) return raw.slice(0, colon).trim();
+    const firstWord = raw.split(/\s+/)[0];
+    return firstWord ? firstWord.replace(/[^A-Za-z0-9-]/g, '') : String(lvl.index);
+  }
+
+  function optionHumanLabel(q, key) {
+    if (q && Array.isArray(q.options)) {
+      const match = q.options.find(function (o) {
+        return o && (o.key || '').trim() === key;
+      });
+      if (match && match.label) return match.label;
+    }
+    return humanizeKey(key);
   }
 
   function computeScorePointerPct(score, min, max, cols) {
@@ -107,17 +155,19 @@
           type: q.type,
           options: Array.isArray(q.options)
             ? q.options.map(function (o) {
-                return { key: o.key, description: o.description };
+                return { key: o.key, label: o.label, description: o.description };
               })
             : undefined,
-          levels: Array.isArray(q.levels) ? q.levels.slice() : undefined
+          levels: Array.isArray(q.levels) ? q.levels.slice() : undefined,
+          levelLabels: Array.isArray(q.levelLabels) ? q.levelLabels.slice() : undefined
         };
       })
     };
   }
 
-  function mountDecisionsCell(rootEl) {
-    if (!rootEl) return;
+  function mountDecisionsTriptych(inputEl, verdictEl, scoreEl) {
+    const cells = [inputEl, verdictEl, scoreEl].filter(Boolean);
+    if (!cells.length) return;
 
     const initialPreset = Presets.createPresetState('receipt', 0);
     const savedKey = Client.KeyStore.get();
@@ -136,7 +186,7 @@
       runSeq: 0,
       uploadSeq: 0,
       abortController: null,
-      result: null, // { mode, httpStatus, latencyMs, normalized, raw, evaluatedAt }
+      result: null,
       prevResult: null,
       error: null,
       uploadNotice: '',
@@ -149,7 +199,7 @@
       'aria-live': 'polite',
       'aria-atomic': 'true'
     });
-    rootEl.appendChild(liveRegion);
+    cells[0].appendChild(liveRegion);
 
     function announce(msg) {
       liveRegion.textContent = '';
@@ -166,17 +216,32 @@
 
     const wbRefs = {};
 
+    function setPeerHighlight(active) {
+      [verdictEl, scoreEl].forEach(function (c) {
+        if (c) c.classList.toggle('is-peer-highlight', active);
+      });
+    }
+
     function triggerScanPulse() {
-      rootEl.classList.remove('is-scanning');
+      cells.forEach(function (c, idx) {
+        c.classList.remove('is-scanning');
+        c.style.setProperty('--dc-scan-delay', idx * 70 + 'ms');
+        void c.offsetWidth;
+        c.classList.add('is-scanning');
+      });
       dialog.classList.remove('is-scanning');
-      void rootEl.offsetWidth;
-      rootEl.classList.add('is-scanning');
+      void dialog.offsetWidth;
       if (dialog.open) dialog.classList.add('is-scanning');
     }
 
     function setLoadingState(loading) {
       app.isRunning = loading;
-      rootEl.classList.toggle('is-loading', loading);
+      cells.forEach(function (c) {
+        c.classList.toggle('is-loading', loading);
+      });
+      [verdictEl, scoreEl].forEach(function (c) {
+        if (c) c.classList.toggle('is-dimmed', loading);
+      });
       dialog.classList.toggle('is-loading', loading);
       if (wbRefs.runBtn) {
         updateRunButton();
@@ -187,13 +252,19 @@
       return Schema.validateState(app.state);
     }
 
+    function renderAllCells() {
+      if (inputEl) renderInputCell();
+      if (verdictEl) renderVerdictCell();
+      if (scoreEl) renderScoreCell();
+    }
+
     function runEvaluation(opts) {
       const validation = getValidation();
       if (!validation.valid) {
         renderWorkbenchValidation(validation);
         updateRunButton(validation);
         if (wbRefs.rightPane) renderWorkbenchWirePreview();
-        renderCard();
+        renderAllCells();
         return;
       }
 
@@ -224,16 +295,15 @@
           evaluatedAt: simRes.evaluatedAt
         };
         triggerScanPulse();
-        renderCard();
+        renderAllCells();
         if (dialog.open) {
           renderWorkbenchRight();
           renderWorkbenchHeaderControls();
         }
-        announce('Simulated preview updated: ' + validation.activeCount + ' decisions, 0 output tokens.');
+        announce('Demo preview updated: ' + validation.activeCount + ' answers, 0 output tokens.');
         return;
       }
 
-      // Live mode — never silently fall back to simulated!
       const apiKey = Client.KeyStore.get();
       if (!apiKey) {
         setLoadingState(false);
@@ -242,9 +312,9 @@
           httpStatus: 0,
           headline: 'No Gemini API key configured',
           detail: 'Paste your standard Gemini API key (same key as Google AI Studio) to run live gemini-decision-1 requests.',
-          remediation: 'Add your key in the API Key popover or switch explicitly to Simulated mode.'
+          remediation: 'Add your key in the API Key popover or switch explicitly to Demo Data.'
         };
-        renderCard();
+        renderAllCells();
         if (dialog.open) {
           app.showKeyPopover = true;
           renderWorkbenchHeaderControls();
@@ -258,7 +328,7 @@
       app.abortController = ac;
       app.error = null;
       setLoadingState(true);
-      renderCard();
+      renderAllCells();
       if (dialog.open) renderWorkbenchRight();
 
       Client.runLive(body, apiKey, ac.signal)
@@ -281,15 +351,15 @@
           };
           app.error = null;
           triggerScanPulse();
-          renderCard();
+          renderAllCells();
           if (dialog.open) {
             renderWorkbenchRight();
             renderWorkbenchHeaderControls();
           }
           announce(
-            'Live Decisions API evaluation complete: ' +
+            'Live Decisions API complete: ' +
               validation.activeCount +
-              ' decisions, 0 output tokens, ' +
+              ' answers, 0 output tokens, ' +
               liveRes.latencyMs +
               ' milliseconds.'
           );
@@ -304,9 +374,9 @@
             httpStatus: 0,
             headline: 'Live request failed',
             detail: 'Unexpected error calling Gemini Decisions API.',
-            remediation: 'Retry or switch explicitly to Simulated mode.'
+            remediation: 'Retry or switch explicitly to Demo Data.'
           };
-          renderCard();
+          renderAllCells();
           if (dialog.open) {
             renderWorkbenchRight();
             renderWorkbenchHeaderControls();
@@ -347,7 +417,7 @@
       runEvaluation({ resetGhost: false });
     }
 
-    // In-place threshold drag & keyboard slider: never detaches the active track/pin
+    // In-place threshold drag & keyboard slider: never detaches active track/pin
     function bindThresholdDrag(surface, controls) {
       const trackEl = controls.trackEl;
       const pinEl = controls.pinEl;
@@ -362,26 +432,29 @@
         pinEl.style.left = pct;
         pinEl.setAttribute('aria-valuenow', fmtProb(nextThreshold));
         fillEl.classList.toggle('is-below', !isYes);
-        trackEl.title = 'Drag to adjust YES/NO threshold (τ = ' + fmtProb(nextThreshold) + ')';
+        trackEl.title = 'Drag to move Yes/No cutoff (' + pct + ')';
 
-        if (controls.subEl) {
-          controls.subEl.textContent = (isYes ? 'YES' : 'NO') + ' · τ ' + fmtProb(nextThreshold);
+        if (controls.cutoffEl) {
+          controls.cutoffEl.textContent = 'Cutoff: ' + pct + ' (drag)';
+        }
+        if (controls.pillEl) {
+          controls.pillEl.textContent = (isYes ? 'YES' : 'NO') + ' · ' + fmtPct(prob);
+          controls.pillEl.classList.toggle('is-no', !isYes);
         }
         if (controls.tickEl) {
-          controls.tickEl.textContent = 'τ = ' + fmtProb(nextThreshold) + ' (drag)';
+          controls.tickEl.textContent = 'Cutoff ' + pct + ' (drag)';
         }
         if (controls.verdictEl) {
           controls.verdictEl.textContent = noulBand(prob, nextThreshold);
           controls.verdictEl.classList.toggle('is-no', !isYes);
         }
 
-        // Sync only the passive surface without touching the actively dragged/focused DOM node
         if (surface === 'card') {
           if (dialog.open && app.activeTab === 'results') {
             renderWorkbenchResultsOnly();
           }
         } else {
-          renderCard();
+          if (verdictEl) renderVerdictCell();
         }
       }
 
@@ -437,19 +510,17 @@
     }
 
     // =========================================================================
-    // 1. IN-GRID 4:3 INSTRUMENT CARD RENDERER
+    // CELL 1 (01A) — INPUT & A/B FLIPPER
     // =========================================================================
-    function renderCard() {
-      const scanline = el('div', { className: 'dc-scanline', 'aria-hidden': 'true' });
-
+    function renderInputCell() {
       const effectiveLive = app.mode === 'live' && Boolean(Client.KeyStore.get());
       const modeKey = app.error ? 'error' : effectiveLive ? 'live' : 'simulated';
-      const modeLabel = app.error ? 'LIVE ERR' : effectiveLive ? 'LIVE' : 'SIM';
+      const modeLabel = app.error ? 'API Error' : effectiveLive ? 'Live API' : 'Demo Data';
 
       const header = el('header', { className: 'dc-card-header' }, [
         el('div', { className: 'dc-card-brand' }, [
-          el('span', { className: 'dc-index', textContent: '01' }),
-          el('span', { className: 'dc-card-title', textContent: 'Decisions API' })
+          el('span', { className: 'dc-step-pill dc-step-pill--lead', textContent: '1 · INPUT' }),
+          el('span', { className: 'dc-card-title', textContent: 'Gemini Decisions' })
         ]),
         el('div', { className: 'dc-card-actions' }, [
           el(
@@ -458,25 +529,12 @@
               type: 'button',
               className: 'dc-mode-pill',
               dataset: { mode: modeKey, focusRole: 'mode-pill' },
-              title: effectiveLive ? 'Live Gemini Decisions API — click to manage key' : 'Simulated preview — click to add Gemini API key',
+              title: effectiveLive ? 'Using your Gemini API key — click to manage' : 'Local preview — click to add your Gemini API key',
               onClick: function () {
                 openWorkbench('mode-pill', { openKeyPopover: true });
               }
             },
             [el('span', { className: 'dc-dot', 'aria-hidden': 'true' }), modeLabel]
-          ),
-          el(
-            'button',
-            {
-              type: 'button',
-              className: 'dc-icon-btn',
-              dataset: { focusRole: 'expand-btn' },
-              'aria-label': 'Open Decisions API Workbench',
-              onClick: function () {
-                openWorkbench('expand-btn', { openKeyPopover: false });
-              }
-            },
-            [el('span', { className: 'dc-expand-label', textContent: 'Lab' }), '↗']
           )
         ])
       ]);
@@ -484,66 +542,146 @@
       const activePreset = Presets.getPreset(app.state.presetId);
       const activeVariant = activePreset.variants[app.state.variantIndex] || activePreset.variants[0];
 
-      const presetButtons = Presets.LIST.map(function (p) {
-        return el('button', {
-          type: 'button',
-          className: 'dc-preset-btn',
-          'aria-pressed': String(p.id === app.state.presetId),
-          textContent: p.shortLabel,
-          onClick: function () {
-            switchPreset(p.id, 0);
-          }
-        });
-      });
-
-      const perturbButtons = activePreset.variants.map(function (v, idx) {
-        return el('button', {
-          type: 'button',
-          className: 'dc-perturb-btn',
-          'aria-pressed': String(idx === app.state.variantIndex),
-          textContent: v.label,
-          title: 'Perturb input: ' + v.summary,
-          onClick: function () {
-            switchVariant(idx);
-          }
-        });
-      });
-
-      const specimenChildren = [];
+      // Readable Specimen Stage
+      const specimenStage = el('div', { className: 'dc-specimen-stage' });
       if (app.state.image && app.state.image.dataUrl) {
-        specimenChildren.push(
-          el('div', { className: 'dc-thumb-wrap' }, [
-            el('img', { src: app.state.image.dataUrl, alt: app.state.image.name }),
-            el('span', { className: 'dc-thumb-tag', textContent: app.state.resolution.slice(0, 3) })
+        specimenStage.appendChild(
+          el(
+            'button',
+            {
+              type: 'button',
+              className: 'dc-specimen-img-btn',
+              dataset: { focusRole: 'specimen-img' },
+              'aria-label': 'Inspect or replace specimen image in Workbench',
+              onClick: function () {
+                app.mediaExpanded = true;
+                openWorkbench('specimen-img', { openKeyPopover: false });
+              }
+            },
+            [el('img', { src: app.state.image.dataUrl, alt: app.state.image.name })]
+          )
+        );
+        const copyCol = el('div', { className: 'dc-specimen-copy' }, [
+          el('div', {
+            className: 'dc-specimen-heading',
+            textContent: app.customTextEdited ? app.state.image.name : (activeVariant.title || activePreset.title)
+          })
+        ]);
+        if (!app.customTextEdited && Array.isArray(activeVariant.bullets)) {
+          copyCol.appendChild(
+            el(
+              'ul',
+              { className: 'dc-specimen-bullets' },
+              activeVariant.bullets.map(function (b) {
+                return el('li', { textContent: b });
+              })
+            )
+          );
+        } else {
+          copyCol.appendChild(el('div', { className: 'dc-specimen-quote', textContent: app.state.inputText }));
+        }
+        specimenStage.appendChild(copyCol);
+      } else {
+        specimenStage.appendChild(
+          el('div', { className: 'dc-specimen-copy' }, [
+            el('div', {
+              className: 'dc-specimen-heading',
+              textContent: app.customTextEdited ? 'Custom Text Input' : (activeVariant.title || activePreset.title)
+            }),
+            el('div', {
+              className: 'dc-specimen-quote',
+              textContent: app.state.inputText,
+              title: app.state.inputText
+            })
           ])
         );
       }
-      const specimenSummary = app.customTextEdited
-        ? (app.state.inputText.trim() || (app.state.image ? app.state.image.name : ''))
-        : (activeVariant ? activeVariant.summary : app.state.inputText);
-      specimenChildren.push(
-        el('div', {
-          className: 'dc-specimen-text',
-          textContent: specimenSummary,
-          title: app.state.inputText
+
+      // Giant A/B Flip Switch
+      const flipRow = el(
+        'div',
+        {
+          className: 'dc-flip-row',
+          role: 'group',
+          'aria-label': 'Compare example inputs',
+          onMouseenter: function () {
+            setPeerHighlight(true);
+          },
+          onMouseleave: function () {
+            setPeerHighlight(false);
+          }
+        },
+        activePreset.variants.map(function (v, idx) {
+          return el('button', {
+            type: 'button',
+            className: 'dc-flip-btn',
+            'aria-pressed': String(idx === app.state.variantIndex),
+            textContent: v.buttonLabel || v.label,
+            title: 'Test: ' + v.summary,
+            onClick: function () {
+              switchVariant(idx);
+            }
+          });
         })
       );
 
-      const dock = el('div', { className: 'dc-dock' }, [
-        el('div', { className: 'dc-dock-top' }, [
-          el('div', { className: 'dc-preset-tabs', role: 'group', 'aria-label': 'Scenarios' }, presetButtons),
-          el('div', { className: 'dc-perturb-group', role: 'group', 'aria-label': 'Input variant' }, perturbButtons)
-        ]),
-        el('div', { className: 'dc-specimen-row' }, specimenChildren)
+      const body = el('div', { className: 'dc-cell-body dc-input-body' }, [
+        el('div', {
+          className: 'dc-explainer',
+          textContent: 'Pick an input below — Gemini answers all 3 rules to the right in 1 call.'
+        }),
+        specimenStage,
+        flipRow
       ]);
 
-      const rack = el('div', { className: 'dc-rack' });
+      const footer = el('footer', { className: 'dc-card-footer' }, [
+        el(
+          'div',
+          { className: 'dc-preset-tabs', role: 'group', 'aria-label': 'Example scenarios' },
+          Presets.LIST.map(function (p) {
+            return el('button', {
+              type: 'button',
+              className: 'dc-preset-btn',
+              'aria-pressed': String(p.id === app.state.presetId),
+              textContent: p.shortLabel,
+              onClick: function () {
+                switchPreset(p.id, 0);
+              }
+            });
+          })
+        ),
+        el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: 'Outputs →' })
+      ]);
+
+      clearNode(inputEl);
+      inputEl.appendChild(liveRegion);
+      inputEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      inputEl.appendChild(header);
+      inputEl.appendChild(body);
+      inputEl.appendChild(footer);
+    }
+
+    // =========================================================================
+    // CELL 2 (01B) — YES/NO CHECK (noul) + PICK A CATEGORY (choice)
+    // =========================================================================
+    function renderVerdictCell() {
+      const header = el('header', { className: 'dc-card-header' }, [
+        el('div', { className: 'dc-card-brand' }, [
+          el('span', { className: 'dc-step-pill', textContent: '2 · CHECK & ROUTE' }),
+          el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: '→' })
+        ]),
+        el('div', { className: 'dc-card-actions' }, [
+          el('span', { className: 'dc-api-whisper', textContent: 'noul · choice', title: 'Gemini Decisions API primitives: noul (Yes/No) and choice (Category)' })
+        ])
+      ]);
+
+      const body = el('div', { className: 'dc-cell-body dc-verdict-body' });
 
       if (app.error) {
-        rack.appendChild(
+        body.appendChild(
           el('div', { className: 'dc-card-error', role: 'alert' }, [
             el('div', { className: 'dc-card-error-title', textContent: app.error.headline }),
-            el('div', { className: 'dc-card-error-detail', textContent: app.error.remediation }),
+            el('div', { textContent: app.error.remediation }),
             el('div', { className: 'dc-card-error-actions' }, [
               el('button', {
                 type: 'button',
@@ -556,7 +694,7 @@
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
-                textContent: 'Switch to Simulated',
+                textContent: 'Switch to Demo',
                 onClick: function () {
                   app.mode = 'simulated';
                   app.error = null;
@@ -573,200 +711,346 @@
           return q.enabled !== false;
         });
 
-        const picks = [];
-        ['noul', 'choice', 'score'].forEach(function (t) {
-          const found = activeQuestions.find(function (q) {
-            const qk = (q.key || '').trim();
-            return q.type === t && Boolean(answers[qk]);
-          });
-          if (found) picks.push(found);
-        });
-        activeQuestions.forEach(function (q) {
+        const noulQ = activeQuestions.find(function (q) {
           const qk = (q.key || '').trim();
-          if (picks.length < 3 && picks.indexOf(q) < 0 && answers[qk]) {
-            picks.push(q);
-          }
+          return q.type === 'noul' && Boolean(answers[qk]);
+        });
+        const choiceQ = activeQuestions.find(function (q) {
+          const qk = (q.key || '').trim();
+          return q.type === 'choice' && Boolean(answers[qk]);
         });
 
-        picks.forEach(function (q) {
-          const qk = (q.key || '').trim();
+        // Top Half: Yes/No Check (noul)
+        if (noulQ) {
+          const qk = (noulQ.key || '').trim();
           const ans = answers[qk];
           const prev = prevAnswers[qk];
-          if (!ans) return;
+          const thresh = Number.isFinite(noulQ.threshold) ? noulQ.threshold : 0.5;
+          const isYes = ans.noul >= thresh;
+          const deltaPts = prev && prev.type === 'noul' ? fmtSignedPts(ans.noul - prev.noul) : null;
 
-          if (ans.type === 'noul') {
-            const thresh = Number.isFinite(q.threshold) ? q.threshold : 0.5;
-            const isYes = ans.noul >= thresh;
-            const fillEl = el('div', {
-              className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
-              style: { width: Math.round(ans.noul * 100) + '%' }
-            });
-            const track = el('div', {
-              className: 'dc-noul-track',
-              title: 'Drag to adjust YES/NO threshold (τ = ' + fmtProb(thresh) + ')'
-            });
-            track.appendChild(fillEl);
-            if (prev && prev.type === 'noul') {
-              track.appendChild(
-                el('div', {
-                  className: 'dc-noul-ghost',
-                  style: { left: Math.round(prev.noul * 100) + '%' }
-                })
-              );
-            }
-            const pin = el('button', {
-              type: 'button',
-              className: 'dc-noul-pin',
-              role: 'slider',
-              'aria-label': 'Threshold for ' + qk,
-              'aria-valuemin': '0.05',
-              'aria-valuemax': '0.95',
-              'aria-valuenow': fmtProb(thresh),
-              style: { left: Math.round(thresh * 100) + '%' }
-            });
-            track.appendChild(pin);
+          const fillEl = el('div', {
+            className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
+            style: { width: Math.round(ans.noul * 100) + '%' }
+          });
+          const track = el('div', {
+            className: 'dc-noul-track',
+            title: 'Drag to move Yes/No cutoff (' + fmtPct(thresh) + ')'
+          });
+          track.appendChild(fillEl);
+          if (prev && prev.type === 'noul') {
             track.appendChild(
               el('div', {
-                className: 'dc-noul-needle',
-                style: { left: Math.round(ans.noul * 100) + '%' }
+                className: 'dc-noul-ghost',
+                title: 'Previous: ' + fmtPct(prev.noul),
+                style: { left: Math.round(prev.noul * 100) + '%' }
               })
-            );
-            const subEl = el('span', {
-              className: 'dc-gauge-sub',
-              textContent: (isYes ? 'YES' : 'NO') + ' · τ ' + fmtProb(thresh)
-            });
-
-            bindThresholdDrag('card', {
-              trackEl: track,
-              pinEl: pin,
-              fillEl: fillEl,
-              subEl: subEl,
-              questionObj: q,
-              prob: ans.noul
-            });
-
-            rack.appendChild(
-              el('div', { className: 'dc-gauge-row' }, [
-                el('span', { className: 'dc-type-tag', textContent: 'NOUL' }),
-                el('div', { className: 'dc-gauge-mid' }, [
-                  el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: qk }),
-                    subEl
-                  ]),
-                  track
-                ]),
-                el('span', { className: 'dc-gauge-val', textContent: fmtProb(ans.noul) })
-              ])
-            );
-          } else if (ans.type === 'choice') {
-            const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
-            const winnerKey = ans.choice || top.key;
-            const ribbon = el('div', {
-              className: 'dc-choice-ribbon',
-              title: ans.ranked
-                .map(function (r) {
-                  return r.key + ': ' + fmtProb(r.prob);
-                })
-                .join(' · ')
-            });
-            ans.ranked.forEach(function (r, idx) {
-              ribbon.appendChild(
-                el('div', {
-                  className: 'dc-choice-seg',
-                  title: r.key + ': ' + Math.round(r.prob * 100) + '%',
-                  style: {
-                    width: Math.max(2, r.prob * 100) + '%',
-                    background: CHOICE_SWATCHES[idx % CHOICE_SWATCHES.length]
-                  }
-                })
-              );
-            });
-
-            rack.appendChild(
-              el('div', { className: 'dc-gauge-row' }, [
-                el('span', { className: 'dc-type-tag', textContent: 'CHOICE' }),
-                el('div', { className: 'dc-gauge-mid' }, [
-                  el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: winnerKey }),
-                    el('span', { className: 'dc-gauge-sub', textContent: 'Σ ' + ans.sum.toFixed(2) })
-                  ]),
-                  ribbon
-                ]),
-                el('span', { className: 'dc-gauge-val', textContent: fmtProb(top.prob) })
-              ])
-            );
-          } else if (ans.type === 'score') {
-            const cols = Math.max(2, ans.levels.length);
-            const evPct = computeScorePointerPct(ans.score, ans.min, ans.max, cols);
-            const mini = el('div', {
-              className: 'dc-score-mini',
-              style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' },
-              title: 'Expected score ' + ans.score.toFixed(2) + ' / ' + ans.max + ' (σ = ' + ans.stdDev.toFixed(2) + ')'
-            });
-            ans.levels.forEach(function (lvl) {
-              mini.appendChild(
-                el('div', {
-                  className: 'dc-score-mini-bar' + (lvl.index === ans.peakIndex ? ' is-peak' : ''),
-                  style: { height: Math.max(14, Math.round(lvl.prob * 100)) + '%' }
-                })
-              );
-            });
-            mini.appendChild(
-              el('div', {
-                className: 'dc-score-ev-dot',
-                style: { left: evPct + '%' }
-              })
-            );
-
-            rack.appendChild(
-              el('div', { className: 'dc-gauge-row' }, [
-                el('span', { className: 'dc-type-tag', textContent: 'SCORE' }),
-                el('div', { className: 'dc-gauge-mid' }, [
-                  el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: qk }),
-                    el('span', { className: 'dc-gauge-sub', textContent: 'σ ' + ans.stdDev.toFixed(2) })
-                  ]),
-                  mini
-                ]),
-                el('span', { className: 'dc-gauge-val', textContent: ans.score.toFixed(2) + '/' + ans.max })
-              ])
             );
           }
-        });
+          const pin = el('button', {
+            type: 'button',
+            className: 'dc-noul-pin',
+            role: 'slider',
+            'aria-label': 'Yes/No cutoff for ' + (noulQ.cardQuestion || qk),
+            'aria-valuemin': '0.05',
+            'aria-valuemax': '0.95',
+            'aria-valuenow': fmtProb(thresh),
+            style: { left: Math.round(thresh * 100) + '%' }
+          });
+          track.appendChild(pin);
+          track.appendChild(
+            el('div', {
+              className: 'dc-noul-needle',
+              style: { left: Math.round(ans.noul * 100) + '%' }
+            })
+          );
+
+          const pillEl = el('span', {
+            className: 'dc-verdict-pill' + (isYes ? '' : ' is-no'),
+            textContent: (isYes ? 'YES' : 'NO') + ' · ' + fmtPct(ans.noul)
+          });
+          const cutoffEl = el('span', { textContent: 'Cutoff: ' + fmtPct(thresh) + ' (drag)' });
+
+          bindThresholdDrag('card', {
+            trackEl: track,
+            pinEl: pin,
+            fillEl: fillEl,
+            pillEl: pillEl,
+            cutoffEl: cutoffEl,
+            questionObj: noulQ,
+            prob: ans.noul
+          });
+
+          body.appendChild(
+            el('div', { className: 'dc-half' }, [
+              el('div', { className: 'dc-eyebrow-row' }, [
+                el('span', { className: 'dc-eyebrow', textContent: 'Yes / No Check' }),
+                deltaPts ? el('span', { className: 'dc-delta-chip', textContent: deltaPts }) : null
+              ]),
+              el('div', { className: 'dc-q-headline' }, [
+                el('span', {
+                  className: 'dc-plain-q',
+                  textContent: noulQ.cardQuestion || noulQ.instructions || qk,
+                  title: noulQ.instructions
+                }),
+                pillEl
+              ]),
+              track,
+              el('div', { className: 'dc-verdict-subrow' }, [
+                cutoffEl,
+                el('span', { className: 'dc-mono', textContent: '1%–99% calibrated' })
+              ])
+            ])
+          );
+        } else {
+          body.appendChild(
+            el('div', { className: 'dc-half' }, [
+              el('div', { className: 'dc-empty-state', textContent: 'No Yes/No question active — enable in Customize ↗' })
+            ])
+          );
+        }
+
+        // Bottom Half: Pick a Category (choice)
+        if (choiceQ) {
+          const qk = (choiceQ.key || '').trim();
+          const ans = answers[qk];
+          const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
+          const winnerKey = ans.choice || top.key;
+          const winnerLabel = optionHumanLabel(choiceQ, winnerKey);
+
+          const bars = el('div', { className: 'dc-cat-bars' });
+          ans.ranked.slice(0, 3).forEach(function (r) {
+            const isWin = r.key === winnerKey;
+            bars.appendChild(
+              el('div', { className: 'dc-cat-row' + (isWin ? ' is-winner' : ''), title: r.description || r.key }, [
+                el('span', { className: 'dc-cat-name', textContent: optionHumanLabel(choiceQ, r.key) }),
+                el('div', { className: 'dc-cat-track' }, [
+                  el('div', {
+                    className: 'dc-cat-fill',
+                    style: { width: Math.max(2, Math.round(r.prob * 100)) + '%' }
+                  })
+                ]),
+                el('span', { className: 'dc-cat-pct', textContent: fmtPct(r.prob) })
+              ])
+            );
+          });
+
+          body.appendChild(
+            el('div', { className: 'dc-half' }, [
+              el('div', { className: 'dc-eyebrow-row' }, [
+                el('span', { className: 'dc-eyebrow', textContent: 'Pick One Category' }),
+                el('span', { className: 'dc-mono', style: { fontSize: '9.5px', color: 'var(--dc-ink-3)' }, textContent: winnerLabel + ' ' + fmtPct(top.prob) })
+              ]),
+              el('div', { className: 'dc-q-headline' }, [
+                el('span', {
+                  className: 'dc-plain-q',
+                  textContent: choiceQ.cardQuestion || choiceQ.instructions || qk,
+                  title: choiceQ.instructions
+                })
+              ]),
+              bars
+            ])
+          );
+        } else {
+          body.appendChild(
+            el('div', { className: 'dc-half' }, [
+              el('div', { className: 'dc-empty-state', textContent: 'No Category question active — enable in Customize ↗' })
+            ])
+          );
+        }
       }
 
+      clearNode(verdictEl);
+      verdictEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      verdictEl.appendChild(header);
+      verdictEl.appendChild(body);
+    }
+
+    // =========================================================================
+    // CELL 3 (01C) — RUBRIC SCORE (score) + ZERO-OUTPUT-TOKEN PROOF
+    // =========================================================================
+    function renderScoreCell() {
+      const header = el('header', { className: 'dc-card-header' }, [
+        el('div', { className: 'dc-card-brand' }, [
+          el('span', { className: 'dc-step-pill', textContent: '3 · RUBRIC & PROOF' })
+        ]),
+        el('div', { className: 'dc-card-actions' }, [
+          el('span', { className: 'dc-api-whisper', textContent: 'score', title: 'Gemini Decisions API primitive: ordered rubric score' }),
+          el(
+            'button',
+            {
+              type: 'button',
+              className: 'dc-icon-btn',
+              dataset: { focusRole: 'expand-btn' },
+              'aria-label': 'Open Decisions API Workbench to customize questions, upload images, or view JSON',
+              onClick: function () {
+                openWorkbench('expand-btn', { openKeyPopover: false });
+              }
+            },
+            'Customize ↗'
+          )
+        ])
+      ]);
+
+      const body = el('div', { className: 'dc-cell-body dc-score-body' });
+      const mainArea = el('div', { className: 'dc-score-main' });
+
+      if (app.error) {
+        mainArea.appendChild(
+          el('div', { className: 'dc-empty-state' }, [
+            el('div', { textContent: 'Waiting on Live Gemini Decisions API…' }),
+            el('button', {
+              type: 'button',
+              className: 'dc-btn dc-btn--sm',
+              textContent: 'Open Workbench',
+              onClick: function () {
+                openWorkbench('expand-btn', { openKeyPopover: false });
+              }
+            })
+          ])
+        );
+      } else if (app.result && app.result.normalized) {
+        const answers = app.result.normalized.answers;
+        const prevAnswers = app.prevResult && app.prevResult.normalized ? app.prevResult.normalized.answers : {};
+        const activeQuestions = app.state.questions.filter(function (q) {
+          return q.enabled !== false;
+        });
+
+        const scoreQ = activeQuestions.find(function (q) {
+          const qk = (q.key || '').trim();
+          return q.type === 'score' && Boolean(answers[qk]);
+        });
+
+        if (scoreQ) {
+          const qk = (scoreQ.key || '').trim();
+          const ans = answers[qk];
+          const prev = prevAnswers[qk];
+          const cols = Math.max(2, ans.levels.length);
+          const evPct = computeScorePointerPct(ans.score, ans.min, ans.max, cols);
+          const deltaStr = prev && prev.type === 'score' ? fmtSignedDelta(ans.score - prev.score) : null;
+          const peakLvl = ans.levels.find(function (l) {
+            return l.index === ans.peakIndex;
+          }) || ans.levels[0];
+          const peakIdx = Math.max(0, ans.levels.indexOf(peakLvl));
+          const peakName = peakLvl ? shortLevelLabel(scoreQ, peakLvl, peakIdx) : '';
+
+          mainArea.appendChild(
+            el('div', { className: 'dc-eyebrow-row' }, [
+              el('span', { className: 'dc-eyebrow', textContent: 'Rubric Score (' + ans.min + '–' + ans.max + ')' }),
+              el('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } }, [
+                deltaStr ? el('span', { className: 'dc-delta-chip', textContent: deltaStr }) : null,
+                el('span', {
+                  className: 'dc-certainty-tag',
+                  textContent: certaintyLabel(ans.stdDev),
+                  title: 'Distribution spread σ = ' + ans.stdDev.toFixed(2)
+                })
+              ])
+            ])
+          );
+
+          mainArea.appendChild(
+            el('div', { className: 'dc-plain-q', textContent: scoreQ.cardQuestion || scoreQ.instructions || qk, title: scoreQ.instructions })
+          );
+
+          mainArea.appendChild(
+            el('div', { className: 'dc-score-hero-row' }, [
+              el('div', { className: 'dc-score-hero-left' }, [
+                el('span', { className: 'dc-score-big', textContent: ans.score.toFixed(1) }),
+                el('span', { className: 'dc-score-denom', textContent: '/ ' + ans.max }),
+                el('span', { className: 'dc-score-tier', textContent: '· ' + peakName })
+              ])
+            ])
+          );
+
+          const barsGrid = el('div', {
+            className: 'dc-card-bars',
+            style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' }
+          });
+          ans.levels.forEach(function (lvl) {
+            const isPeak = lvl.index === ans.peakIndex;
+            barsGrid.appendChild(
+              el('div', { className: 'dc-card-bar-col', title: lvl.index + ': ' + lvl.description + ' (' + fmtPct(lvl.prob) + ')' }, [
+                el('span', { className: 'dc-card-bar-pct', textContent: fmtPct(lvl.prob) }),
+                el('div', {
+                  className: 'dc-card-bar' + (isPeak ? ' is-peak' : ''),
+                  style: { height: Math.max(3, Math.round(lvl.prob * 42)) + 'px' }
+                })
+              ])
+            );
+          });
+          barsGrid.appendChild(
+            el('div', {
+              className: 'dc-card-ev-pointer',
+              title: 'Weighted average: ' + ans.score.toFixed(2) + ' / ' + ans.max,
+              style: { left: evPct + '%' }
+            })
+          );
+
+          const labelsGrid = el('div', {
+            className: 'dc-card-bar-labels',
+            style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' }
+          });
+          ans.levels.forEach(function (lvl, idx) {
+            const isPeak = lvl.index === ans.peakIndex;
+            labelsGrid.appendChild(
+              el('span', {
+                className: 'dc-card-bar-lbl' + (isPeak ? ' is-peak' : ''),
+                textContent: shortLevelLabel(scoreQ, lvl, idx),
+                title: lvl.description
+              })
+            );
+          });
+
+          mainArea.appendChild(el('div', { className: 'dc-card-chart' }, [barsGrid, labelsGrid]));
+        } else {
+          mainArea.appendChild(
+            el('div', { className: 'dc-empty-state', textContent: 'No Rubric question active — enable in Customize ↗' })
+          );
+        }
+      }
+
+      // Signature Zero-Output-Token Proof Strip
       const usage = app.result && app.result.normalized ? app.result.normalized.usage : null;
       const outTok = usage ? usage.total_output_tokens : 0;
-      const inTok = usage ? usage.total_input_tokens : 0;
       const qCount = app.state.questions.filter(function (q) {
         return q.enabled !== false;
       }).length;
       const resultIsLive = Boolean(app.result && app.result.mode === 'live');
-      const latencyLabel = app.isRunning
+      const timingText = app.isRunning
         ? 'running…'
         : resultIsLive
-          ? app.result.latencyMs + 'ms'
-          : 'sim';
+          ? app.result.latencyMs + 'ms · Live'
+          : '1 call · ' + qCount + ' answers';
 
-      const footer = el('footer', { className: 'dc-card-footer' }, [
-        el('div', { className: 'dc-footer-left' }, [
-          el('span', { className: 'dc-model-stamp', textContent: Schema.MODEL }),
-          el('span', { className: 'dc-footer-meta', textContent: '1 pass · ' + qCount + ' Qs' })
+      const proofStrip = el('footer', { className: 'dc-proof-strip' }, [
+        el('div', { className: 'dc-proof-left' }, [
+          el('span', {
+            className: 'dc-zero-badge',
+            textContent: outTok + ' words generated',
+            title: 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text'
+          }),
+          el('span', { className: 'dc-proof-meta', textContent: timingText })
         ]),
-        el('div', { className: 'dc-footer-right' }, [
-          el('span', { className: 'dc-zero-chip', textContent: outTok + ' out tok' }),
-          el('span', { className: 'dc-footer-meta', textContent: (resultIsLive ? '' : '~') + inTok + ' in' }),
-          el('span', { textContent: latencyLabel })
-        ])
+        el('button', {
+          type: 'button',
+          className: 'dc-link-btn',
+          dataset: { focusRole: 'json-btn' },
+          textContent: 'JSON ↗',
+          title: 'Inspect exact v1beta/decisions Request JSON and cURL',
+          onClick: function () {
+            app.activeTab = 'request';
+            openWorkbench('json-btn', { openKeyPopover: false });
+          }
+        })
       ]);
 
-      while (rootEl.firstChild) rootEl.removeChild(rootEl.firstChild);
-      rootEl.appendChild(liveRegion);
-      rootEl.appendChild(scanline);
-      rootEl.appendChild(header);
-      rootEl.appendChild(dock);
-      rootEl.appendChild(rack);
-      rootEl.appendChild(footer);
+      body.appendChild(mainArea);
+      body.appendChild(proofStrip);
+
+      clearNode(scoreEl);
+      scoreEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      scoreEl.appendChild(header);
+      scoreEl.appendChild(body);
     }
 
     // =========================================================================
@@ -880,7 +1164,7 @@
           ? validation.errors.length + ' Schema Issue' + (validation.errors.length === 1 ? '' : 's')
           : app.mode === 'live'
             ? 'Run Live'
-            : 'Run Simulated';
+            : 'Run Demo';
       wbRefs.runBtn.appendChild(document.createTextNode(label));
       if (!app.isRunning && validation.valid) {
         wbRefs.runBtn.appendChild(el('span', { className: 'dc-kbd', textContent: '⌘↵' }));
@@ -1063,11 +1347,10 @@
             type: 'button',
             className: 'dc-seg-btn',
             'aria-pressed': String(app.mode === m),
-            textContent: m === 'live' ? 'Live API' : 'Simulated',
+            textContent: m === 'live' ? 'Live API' : 'Demo Data',
             onClick: function (e) {
               if (m === 'live' && !Client.KeyStore.get()) {
                 e.stopPropagation();
-                // Keep app.mode honest ('simulated') until the user saves a key
                 app.showKeyPopover = true;
                 renderWorkbenchHeaderControls();
                 if (wbRefs.keyInput) wbRefs.keyInput.focus();
@@ -1277,7 +1560,7 @@
               : null
           ]),
           el('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
-            el('span', { className: 'dc-section-label', textContent: 'Res' }),
+            el('span', { className: 'dc-section-label', textContent: 'Detail' }),
             resSeg
           ])
         ])
@@ -1364,7 +1647,7 @@
         card.appendChild(
           el('div', { className: 'dc-q-head' }, [
             enabledCheck,
-            el('span', { className: 'dc-type-tag', textContent: q.type.toUpperCase() }),
+            el('span', { className: 'dc-type-tag', textContent: q.type }),
             keyInput,
             removeQBtn
           ])
@@ -1374,10 +1657,11 @@
           type: 'text',
           className: 'dc-input',
           value: q.instructions || '',
-          placeholder: 'Instructions / question prompt',
+          placeholder: 'Question instructions',
           'aria-label': 'Instructions for ' + q.key,
           onInput: function (e) {
             q.instructions = e.target.value;
+            q.cardQuestion = e.target.value;
             const v = getValidation();
             renderWorkbenchValidation(v);
             updateRunButton(v);
@@ -1391,7 +1675,7 @@
             type: 'text',
             className: 'dc-input',
             value: q.trueDescription || '',
-            placeholder: 'Optional true_description',
+            placeholder: 'Optional: when to answer Yes',
             onInput: function (e) {
               q.trueDescription = e.target.value;
               renderWorkbenchWirePreview();
@@ -1401,7 +1685,7 @@
             type: 'text',
             className: 'dc-input',
             value: q.falseDescription || '',
-            placeholder: 'Optional false_description',
+            placeholder: 'Optional: when to answer No',
             onInput: function (e) {
               q.falseDescription = e.target.value;
               renderWorkbenchWirePreview();
@@ -1409,8 +1693,8 @@
           });
           card.appendChild(
             el('div', { className: 'dc-q-subgrid' }, [
-              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'true_description (opt)' }), tdInput]),
-              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'false_description (opt)' }), fdInput])
+              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'When Yes (true_description)' }), tdInput]),
+              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'When No (false_description)' }), fdInput])
             ])
           );
         } else if (q.type === 'choice') {
@@ -1425,6 +1709,7 @@
                   placeholder: 'option_key',
                   onInput: function (e) {
                     opt.key = e.target.value;
+                    opt.label = humanizeKey(e.target.value);
                     const v = getValidation();
                     renderWorkbenchValidation(v);
                     updateRunButton(v);
@@ -1467,7 +1752,8 @@
                 className: 'dc-btn dc-btn--sm',
                 textContent: '+ Add Option',
                 onClick: function () {
-                  q.options.push({ key: 'option_' + (q.options.length + 1), description: 'Describe when to choose this option.' });
+                  const n = q.options.length + 1;
+                  q.options.push({ key: 'option_' + n, label: 'Option ' + n, description: 'Describe when to choose this option.' });
                   renderWorkbenchLeft();
                   renderWorkbenchWirePreview();
                   updateRunButton();
@@ -1489,6 +1775,7 @@
                   placeholder: 'Level ' + lIdx + ' rubric criterion',
                   onInput: function (e) {
                     q.levels[lIdx] = e.target.value;
+                    if (Array.isArray(q.levelLabels)) q.levelLabels[lIdx] = '';
                     const v = getValidation();
                     renderWorkbenchValidation(v);
                     updateRunButton(v);
@@ -1503,6 +1790,7 @@
                   'aria-label': 'Remove level ' + lIdx,
                   onClick: function () {
                     q.levels.splice(lIdx, 1);
+                    if (Array.isArray(q.levelLabels)) q.levelLabels.splice(lIdx, 1);
                     renderWorkbenchLeft();
                     renderWorkbenchWirePreview();
                     updateRunButton();
@@ -1519,6 +1807,7 @@
                 textContent: '+ Add Rubric Level',
                 onClick: function () {
                   q.levels.push('Level ' + q.levels.length + ': higher quality criteria.');
+                  if (Array.isArray(q.levelLabels)) q.levelLabels.push('Level ' + (q.levels.length - 1));
                   renderWorkbenchLeft();
                   renderWorkbenchWirePreview();
                   updateRunButton();
@@ -1539,6 +1828,7 @@
             id: 'q-custom-' + suffix,
             enabled: true,
             key: 'check_' + suffix,
+            cardQuestion: 'Satisfies custom condition?',
             type: 'noul',
             instructions: 'Does the input satisfy this custom condition?',
             trueDescription: '',
@@ -1550,11 +1840,12 @@
             id: 'q-custom-' + suffix,
             enabled: true,
             key: 'route_' + suffix,
+            cardQuestion: 'Best matching category?',
             type: 'choice',
             instructions: 'Which category best matches this input?',
             options: [
-              { key: 'category_a', description: 'Primary category A.' },
-              { key: 'category_b', description: 'Alternative category B.' }
+              { key: 'category_a', label: 'Category A', description: 'Primary category A.' },
+              { key: 'category_b', label: 'Category B', description: 'Alternative category B.' }
             ]
           });
         } else {
@@ -1562,8 +1853,10 @@
             id: 'q-custom-' + suffix,
             enabled: true,
             key: 'rubric_' + suffix,
+            cardQuestion: 'Custom rubric rating?',
             type: 'score',
             instructions: 'Rate this input on an ordered rubric.',
+            levelLabels: ['Low', 'Medium', 'High'],
             levels: [
               'Low: does not meet expectations.',
               'Medium: partially meets expectations.',
@@ -1589,9 +1882,9 @@
         el('div', { className: 'dc-section-head' }, [
           questionsCountLabel,
           el('div', { style: { display: 'flex', gap: '5px' } }, [
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ noul', onClick: function () { addQuestion('noul'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ choice', onClick: function () { addQuestion('choice'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ score', onClick: function () { addQuestion('score'); } })
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Yes/No (noul)', onClick: function () { addQuestion('noul'); } }),
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Category (choice)', onClick: function () { addQuestion('choice'); } }),
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Rubric (score)', onClick: function () { addQuestion('score'); } })
           ])
         ]),
         validationBox,
@@ -1637,7 +1930,7 @@
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
-                textContent: 'Switch to Simulated Preview',
+                textContent: 'Switch to Demo Data',
                 onClick: function () {
                   app.mode = 'simulated';
                   app.error = null;
@@ -1671,7 +1964,7 @@
         if (ans.type === 'noul') {
           const thresh = Number.isFinite(q.threshold) ? q.threshold : 0.5;
           const isYes = ans.noul >= thresh;
-          const deltaStr = prev && prev.type === 'noul' ? fmtSignedDelta(ans.noul - prev.noul) : null;
+          const deltaStr = prev && prev.type === 'noul' ? fmtSignedPts(ans.noul - prev.noul) : null;
 
           const fillEl = el('div', {
             className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
@@ -1683,7 +1976,7 @@
             track.appendChild(
               el('div', {
                 className: 'dc-noul-ghost',
-                title: 'Previous run: ' + fmtProb(prev.noul),
+                title: 'Previous run: ' + fmtPct(prev.noul),
                 style: { left: Math.round(prev.noul * 100) + '%' }
               })
             );
@@ -1692,7 +1985,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
-            'aria-label': 'Decision threshold for ' + qk,
+            'aria-label': 'Decision cutoff for ' + qk,
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
             'aria-valuenow': fmtProb(thresh),
@@ -1705,7 +1998,7 @@
               style: { left: Math.round(ans.noul * 100) + '%' }
             })
           );
-          const tickEl = el('span', { textContent: 'τ = ' + fmtProb(thresh) + ' (drag)' });
+          const tickEl = el('span', { textContent: 'Cutoff ' + fmtPct(thresh) + ' (drag)' });
           const verdictEl = el('span', {
             className: 'dc-verdict-badge' + (isYes ? '' : ' is-no'),
             textContent: noulBand(ans.noul, thresh)
@@ -1726,26 +2019,26 @@
               el('div', { className: 'dc-res-head' }, [
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
-                    el('span', { className: 'dc-type-tag', textContent: 'NOUL' }),
+                    el('span', { className: 'dc-type-tag', textContent: 'noul · Yes/No' }),
                     el('span', { className: 'dc-res-key', textContent: qk }),
-                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'Δ ' + deltaStr }) : null
+                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: deltaStr }) : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
                 el('div', { className: 'dc-res-hero' }, [
-                  el('span', { className: 'dc-hero-num', textContent: fmtProb(ans.noul) }),
-                  el('span', { className: 'dc-hero-sub', textContent: '1−p = ' + fmtProb(1 - ans.noul) })
+                  el('span', { className: 'dc-hero-num', textContent: fmtPct(ans.noul) }),
+                  el('span', { className: 'dc-hero-sub', textContent: fmtPct(1 - ans.noul) + ' No' })
                 ])
               ]),
               track,
               el('div', { className: 'dc-axis-ticks' }, [
-                el('span', { textContent: '0.01' }),
+                el('span', { textContent: '1% No' }),
                 tickEl,
-                el('span', { textContent: '0.99' })
+                el('span', { textContent: '99% Yes' })
               ]),
               el('div', { className: 'dc-verdict-row' }, [
                 verdictEl,
-                el('span', { className: 'dc-mono', textContent: 'confidence ' + fmtProb(ans.confidence) })
+                el('span', { className: 'dc-mono', textContent: 'confidence ' + fmtPct(ans.confidence) })
               ])
             ])
           );
@@ -1757,7 +2050,7 @@
             ribbon.appendChild(
               el('div', {
                 className: 'dc-choice-seg',
-                title: r.key + ': ' + fmtProb(r.prob),
+                title: optionHumanLabel(q, r.key) + ': ' + fmtPct(r.prob),
                 style: {
                   width: Math.max(2, r.prob * 100) + '%',
                   background: CHOICE_SWATCHES[idx % CHOICE_SWATCHES.length]
@@ -1777,7 +2070,7 @@
               Number.isFinite(prevP)
                 ? el('div', {
                     className: 'dc-bar-ghost',
-                    title: 'Previous: ' + fmtProb(prevP),
+                    title: 'Previous: ' + fmtPct(prevP),
                     style: { left: Math.round(Schema.clamp(prevP, 0, 1) * 100) + '%' }
                   })
                 : null
@@ -1786,7 +2079,7 @@
             rows.appendChild(
               el('div', { className: 'dc-choice-item' }, [
                 el('div', { className: 'dc-choice-label' }, [
-                  el('span', { className: 'dc-choice-opt-key', textContent: r.key, title: r.key }),
+                  el('span', { className: 'dc-choice-opt-key', textContent: optionHumanLabel(q, r.key), title: r.key }),
                   r.description ? el('span', { className: 'dc-choice-opt-desc', textContent: r.description, title: r.description }) : null
                 ]),
                 barTrack,
@@ -1800,16 +2093,16 @@
               el('div', { className: 'dc-res-head' }, [
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
-                    el('span', { className: 'dc-type-tag', textContent: 'CHOICE' }),
+                    el('span', { className: 'dc-type-tag', textContent: 'choice · Category' }),
                     el('span', { className: 'dc-res-key', textContent: qk })
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
                 el('div', { className: 'dc-res-hero' }, [
-                  el('span', { className: 'dc-hero-num', style: { fontSize: '16px' }, textContent: winnerKey }),
+                  el('span', { className: 'dc-hero-num', style: { fontSize: '16px' }, textContent: optionHumanLabel(q, winnerKey) }),
                   el('span', {
                     className: 'dc-hero-sub',
-                    textContent: 'Σp ' + ans.sum.toFixed(3) + ' · margin +' + ans.margin.toFixed(2)
+                    textContent: 'Σp ' + ans.sum.toFixed(3) + ' · lead +' + Math.round(ans.margin * 100) + ' pts'
                   })
                 ])
               ]),
@@ -1828,8 +2121,8 @@
           });
           ans.levels.forEach(function (lvl) {
             hist.appendChild(
-              el('div', { className: 'dc-hist-col', title: 'Level ' + lvl.index + ': ' + Math.round(lvl.prob * 100) + '%' }, [
-                el('span', { className: 'dc-hist-pct', textContent: Math.round(lvl.prob * 100) + '%' }),
+              el('div', { className: 'dc-hist-col', title: 'Level ' + lvl.index + ': ' + fmtPct(lvl.prob) }, [
+                el('span', { className: 'dc-hist-pct', textContent: fmtPct(lvl.prob) }),
                 el('div', {
                   className: 'dc-hist-bar' + (lvl.index === ans.peakIndex ? ' is-peak' : ''),
                   style: { height: Math.max(3, Math.round(lvl.prob * 72)) + 'px' }
@@ -1842,13 +2135,13 @@
             className: 'dc-ev-ruler',
             style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' }
           });
-          ans.levels.forEach(function (lvl) {
-            ruler.appendChild(el('span', { className: 'dc-ev-tick', textContent: String(lvl.index) }));
+          ans.levels.forEach(function (lvl, idx) {
+            ruler.appendChild(el('span', { className: 'dc-ev-tick', textContent: lvl.index + ' ' + shortLevelLabel(q, lvl, idx) }));
           });
           ruler.appendChild(
             el('div', {
               className: 'dc-ev-pointer',
-              title: 'Expected score E[s] = ' + ans.score.toFixed(2),
+              title: 'Expected score = ' + ans.score.toFixed(2),
               style: { left: evPct + '%' }
             })
           );
@@ -1859,7 +2152,7 @@
               el('div', { className: 'dc-rubric-row' + (lvl.index === ans.peakIndex ? ' is-peak' : '') }, [
                 el('span', { className: 'dc-mono', textContent: String(lvl.index) }),
                 el('span', { textContent: lvl.description }),
-                el('span', { className: 'dc-mono', style: { textAlign: 'right' }, textContent: fmtProb(lvl.prob) })
+                el('span', { className: 'dc-mono', style: { textAlign: 'right' }, textContent: fmtPct(lvl.prob) })
               ])
             );
           });
@@ -1869,9 +2162,9 @@
               el('div', { className: 'dc-res-head' }, [
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
-                    el('span', { className: 'dc-type-tag', textContent: 'SCORE' }),
+                    el('span', { className: 'dc-type-tag', textContent: 'score · Rubric' }),
                     el('span', { className: 'dc-res-key', textContent: qk }),
-                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'ΔE ' + deltaStr }) : null
+                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'Δ ' + deltaStr }) : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
@@ -1879,7 +2172,7 @@
                   el('span', { className: 'dc-hero-num', textContent: ans.score.toFixed(2) }),
                   el('span', {
                     className: 'dc-hero-sub',
-                    textContent: '/ ' + ans.max + ' · peak ' + ans.peakIndex + ' · σ ' + ans.stdDev.toFixed(2)
+                    textContent: '/ ' + ans.max + ' · ' + certaintyLabel(ans.stdDev) + ' (σ ' + ans.stdDev.toFixed(2) + ')'
                   })
                 ])
               ]),
@@ -1927,7 +2220,7 @@
           ? 'LIVE · HTTP ' + app.result.httpStatus + ' · ' + app.result.latencyMs + ' ms'
           : provMode === 'error'
             ? 'LIVE ERROR · ' + (app.error.httpStatus ? 'HTTP ' + app.error.httpStatus : app.error.code)
-            : 'SIMULATED PREVIEW · Add a Gemini API key to call gemini-decision-1';
+            : 'DEMO DATA · Add a Gemini API key to call gemini-decision-1 live';
 
       const provBanner = el('div', { className: 'dc-provenance', dataset: { mode: provMode } }, [
         el('div', { className: 'dc-provenance-left' }, [
@@ -2102,7 +2395,7 @@
               className: 'dc-key-note',
               textContent: app.result && app.result.mode === 'live'
                 ? 'Verbatim JSON returned by POST /v1beta/decisions'
-                : 'Simulated preview payload matching the v1beta/decisions response contract'
+                : 'Demo preview payload matching the v1beta/decisions response contract'
             }),
             copyRespBtn
           ])
@@ -2116,10 +2409,19 @@
     }
 
     function restoreCardTriggerFocus() {
-      const target = rootEl.querySelector('[data-focus-role="' + app.returnFocusRole + '"]') ||
-        rootEl.querySelector('[data-focus-role="expand-btn"]');
-      if (target && typeof target.focus === 'function') {
-        target.focus();
+      for (let i = 0; i < cells.length; i++) {
+        const target = cells[i].querySelector('[data-focus-role="' + app.returnFocusRole + '"]');
+        if (target && typeof target.focus === 'function') {
+          target.focus();
+          return;
+        }
+      }
+      for (let j = 0; j < cells.length; j++) {
+        const fallback = cells[j].querySelector('[data-focus-role="expand-btn"]') || cells[j].querySelector('[data-focus-role="mode-pill"]');
+        if (fallback && typeof fallback.focus === 'function') {
+          fallback.focus();
+          return;
+        }
       }
     }
 
@@ -2146,7 +2448,7 @@
       app.showKeyPopover = false;
       app.keyVisible = false;
       if (dialog.open) dialog.close();
-      renderCard();
+      renderAllCells();
       restoreCardTriggerFocus();
     }
 
@@ -2157,7 +2459,7 @@
         return;
       }
       setTimeout(function () {
-        renderCard();
+        renderAllCells();
         restoreCardTriggerFocus();
       }, 0);
     });
@@ -2198,9 +2500,16 @@
   }
 
   function bootstrap() {
-    const mount = document.getElementById('cell-decisions');
-    if (mount) {
-      mountDecisionsCell(mount);
+    const inputEl = document.getElementById('cell-decisions-input');
+    const verdictEl = document.getElementById('cell-decisions-verdict');
+    const scoreEl = document.getElementById('cell-decisions-score');
+    if (inputEl || verdictEl || scoreEl) {
+      mountDecisionsTriptych(inputEl, verdictEl, scoreEl);
+      return;
+    }
+    const legacy = document.getElementById('cell-decisions');
+    if (legacy) {
+      mountDecisionsTriptych(legacy, null, null);
     }
   }
 
@@ -2211,6 +2520,6 @@
   }
 
   NS.UI = {
-    mount: mountDecisionsCell
+    mount: mountDecisionsTriptych
   };
 })(window);

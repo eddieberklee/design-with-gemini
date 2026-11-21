@@ -1,12 +1,20 @@
-# Decisions API Grid Cell (`cells/decisions/`)
+# Decisions API 3-Cell Triptych (`cells/decisions/`)
 
-Interactive Cell #1 prototype for the **Gemini Decisions API** (`POST https://generativelanguage.googleapis.com/v1beta/decisions`, model `gemini-decision-1`), mounted into `#cell-decisions` in [index.html](../../index.html).
+Interactive 3-cell Row-1 triptych prototype for the **Gemini Decisions API** (`POST https://generativelanguage.googleapis.com/v1beta/decisions`, model `gemini-decision-1`), mounted into `#cell-decisions-input`, `#cell-decisions-verdict`, and `#cell-decisions-score` in [index.html](../../index.html).
 
 ---
 
 ## 1. Intent & Architecture
 
-The Decisions API differs fundamentally from chat/text generation endpoints: in a **single forward pass** with **zero output tokens** (`total_output_tokens: 0`), `gemini-decision-1` evaluates a shared multimodal input (text and/or image) against 1 to 1,000 typed questions and returns calibrated probabilities.
+The Decisions API evaluates a shared multimodal input (text and/or image) against 1 to 1,000 typed questions in **one single forward pass** with **zero output tokens** (`total_output_tokens: 0`), returning calibrated probabilities instead of generating prose.
+
+To make that flow immediately understandable without cramping all controls and visualizations into one 4:3 box, the prototype spans **Row 1 (3 adjacent linked cells)** on desktop (`≥ 768px`, and stacks `1 · INPUT` full-width over side-by-side `2 · CHECK & ROUTE` + `3 · RUBRIC & PROOF` on `< 768px`):
+
+1. **Cell 1 (`#cell-decisions-input`, `1 · INPUT`)**: Readable visual specimen (procedural `<canvas>` thermal receipt / checkout UI or readable text quote), concrete 2-way A/B flip buttons (`Client Lunch ($54)` ↔ `Bar Tab ($192)`, etc.), bottom scenario switcher (`Receipt`, `Ticket`, `UI QA`, `PR Gate`), and `Demo Data` / `Live API` key pill.
+2. **Cell 2 (`#cell-decisions-verdict`, `2 · CHECK & ROUTE`)**: Two spacious halves showing plain-English **Yes / No Check** (`noul`) with an in-place draggable `Cutoff: 50%` handle + ghost previous-run marker, and **Pick One Category** (`choice`) with human-labeled horizontal probability bars.
+3. **Cell 3 (`#cell-decisions-score`, `3 · RUBRIC & PROOF`)**: Plain-English **Rubric Score** (`score`) with labeled 4-column distribution histogram, continuous Braun-orange expected-value pointer (`▲`), certainty label (`High certainty` / `Moderate spread` / `Mixed signals`), signature **`0 words generated`** proof strip, **`Customize ↗`** button, and **`JSON ↗`** deep-link into the Workbench `<dialog>`.
+
+All three cells share a single controller (`ui.js:mountDecisionsTriptych`) and fire **one** API request per evaluation, with a cascading left-to-right scanline pulse (`0ms → 70ms → 140ms`) and hover cross-highlighting demonstrating single-pass causality.
 
 ### Module Graph (`window.GeminiDecisions`)
 
@@ -14,11 +22,11 @@ All scripts load via classic `<script defer>` (never `type="module"`) so the pro
 
 | File | Responsibility |
 | :--- | :--- |
-| [schema.js](schema.js) | Wire contract constants (`ENDPOINT`, `MODEL`, `KEY_REGEX`), real-time state validation, exact `POST /v1beta/decisions` request builder, redacted `cURL` exporter (`$GEMINI_API_KEY`), and defensive response normalizer (`noul`, `choice`, `score` expected value + spread `σ`). |
-| [presets.js](presets.js) | Four curated single-pass multi-question scenarios (`receipt`, `support`, `ui_qa`, `release`) with instant A/B perturbation variants, untainted procedural `<canvas>` PNG specimen synthesis (zero external assets / zero `file://` taint), and client-side image downscaling for drag-drop / paste / file upload. |
-| [client.js](client.js) | Safe API key storage (`sessionStorage` default, opt-in `localStorage`, in-memory fallback if storage is blocked), `fetch()` live client with `AbortController` + 25s timeout + structured HTTP/safety error diagnostics, and an honest deterministic offline simulator (`runSimulated`) that responds to text edits, custom questions, and image resolution. |
-| [ui.js](ui.js) | Mounts the 4:3 in-grid instrument card and native `<dialog>` Workbench studio; handles in-place A/B perturbation, pointer + keyboard draggable `noul` threshold pin (`τ`), Ghost Delta comparison across consecutive runs, full Question Builder (`+ noul`, `+ choice`, `+ score`), clipboard image paste (`⌘V`), and ARIA live announcements. |
-| [decisions.css](decisions.css) | Strictly scoped under `.cell--decisions`, `.dc-*`, and `.dc-dialog` so sibling grid cells remain unaffected. Uses `@container dc-card` breakpoints for generous desktop (`≥ 440px`), standard (`391–439px`), compact (`≤ 390px`), narrow (`≤ 340px`), and single-line micro (`≤ 265px`) 4:3 tiles. |
+| [schema.js](schema.js) | Wire contract constants (`ENDPOINT`, `MODEL`, `KEY_REGEX`), real-time state validation (`RESERVED_KEYS`, `VALID_TYPES`), exact `POST /v1beta/decisions` request builder, redacted `cURL` exporter (`$GEMINI_API_KEY`), and defensive response normalizer (`toFiniteNumber`, choice tie-break, 0-indexed `score` expected value + spread `σ`). |
+| [presets.js](presets.js) | Four curated single-pass multi-question scenarios (`receipt`, `support`, `ui_qa`, `release`) with plain-English card questions (`cardQuestion`), human choice option labels (`opt.label`), short rubric tier labels (`levelLabels`), concrete A/B button labels (`buttonLabel`, `title`, `bullets`), untainted procedural `<canvas>` PNG specimens, and alpha-preserving client-side image downscaling. |
+| [client.js](client.js) | `SecurityError`-safe API key storage (`sessionStorage` default, opt-in `localStorage`, in-memory fallback), `fetch()` live client with `AbortController` + 25s timeout + Google RPC `code`/`status` safety classification, and deterministic offline simulator (`runSimulated`) using argmax-preserving Hamilton largest-remainder rounding. |
+| [ui.js](ui.js) | Mounts the 3-cell Row-1 triptych (`mountDecisionsTriptych`) and native `<dialog>` Workbench studio; handles in-place pointer + keyboard threshold dragging, Ghost Delta comparison, full Question Builder, expandable specimen preview, clipboard image paste (`⌘V`), ARIA tablist/tabpanel navigation, and ARIA live announcements. |
+| [decisions.css](decisions.css) | Strictly scoped under `.cell--decisions*`, `.dc-*`, and `.dc-dialog`. Joined desktop triptych radii (`≥ 768px`), mobile full-width `16:10` Input banner (`< 768px`), `@container dc-card` compact/micro rules (`≤ 340px`, `≤ 255px`), and WCAG 2.1 AA contrast (`--dc-ink-3: #63635f`, `--dc-needle-ink: #b43a10`). |
 
 ---
 
@@ -29,7 +37,7 @@ All scripts load via classic `<script defer>` (never `type="module"`) so the pro
 - **Exact REST request shape** (`schema.js:buildRequestBody`):
   - `model`: `"gemini-decision-1"`
   - `input`: plain `string` (text-only) or array of `{ type: "image", data, mime_type, resolution }` + `{ type: "text", text }` (multimodal)
-  - `questions`: map keyed by `/^[A-Za-z0-9_-]{1,64}$/`:
+  - `questions`: map keyed by `/^[A-Za-z0-9_-]{1,64}$/` (excluding `__proto__`, `constructor`, `prototype`):
     - `noul`: `{ type: "noul", instructions, criteria?: { true_description?, false_description? } }`
     - `choice`: `{ type: "choice", instructions, criteria: { [optionKey]: description } }`
     - `score`: `{ type: "score", instructions, criteria: [level0Desc, level1Desc, ...] }` (0-indexed ordered rubric)
@@ -39,27 +47,22 @@ All scripts load via classic `<script defer>` (never `type="module"`) so the pro
 
 ---
 
-## 3. Design Decisions & Protocol B Synthesis
+## 3. Design Decisions & Protocol B Rationale
 
-Three divergent creative priors were explored before implementation:
-
-1. **Swiss Instrument (Dieter Rams / Braun)** — Won the visual grammar: hairline dividers (`#efefef`), matte neutral surfaces harmonized with `index.html`, tabular numerals, Braun signal orange (`#d94f1e`) calibrated needles, and honest `sim` telemetry (never fabricated network latency).
-2. **Kinetic Probability Lab** — Won the 3-second in-grid "aha" interaction: rendering all 3 primitives (`noul`, `choice`, `score`) simultaneously inside the 4:3 card, 1-click A/B input perturbation (`Clean` ↔ `Flagged`), procedural `<canvas>` multimodal specimens, draggable `noul` threshold pin (`τ`), Ghost Delta comparison markers, and `score` spread (`σ`).
-3. **Developer Workbench** — Won the expanded studio architecture: full Question Builder with real-time schema validation, live-synced Request JSON & redacted `cURL`, zero-silent-fallback Live error diagnostics, and `file://`-safe key storage.
-
-Rejected single-prior trade-offs:
-- *Single-primitive card switcher*: Hid the batched multi-question single-pass superpower inside the grid cell.
-- *ESM `<script type="module">`*: Blocked by browser CORS when opening `index.html` directly from `file://`.
-- *Silent fallback on Live API errors*: Misleading; failed Live calls stay explicitly in `LIVE ERR` with `Retry Live` and `Switch to Simulated` on the card (and `Retry Live`, conditional `Update API Key` on `401`/`MISSING_KEY`, and `Switch to Simulated Preview` in the Workbench).
+After user feedback that the original single-cell prototype felt cramped and unclear, three divergent designs were compared:
+- **3-Cell Row-1 Triptych (Shipped)**: Fits `index.html`'s 3-column desktop grid edge-to-edge on Row 1 (`1 · INPUT → 2 · CHECK & ROUTE → 3 · RUBRIC & PROOF`) with zero row-wrap orphan, gives the visual specimen and rubric chart real room to breathe, replaces internal jargon (`NOUL`, `τ`, `Σ`, `σ`, `policy_violation`, `SIM`) with plain English while keeping quiet mono API whispers (`noul`, `choice`, `score`), and keeps all 9 grid slots balanced.
+- **4-Cell Suite (Rejected)**: Slightly more spacious per primitive, but wraps Cell 4 awkwardly onto Row 2 next to unrelated prototypes on 3-column desktop screens.
+- **Single-Cell Card (Superseded)**: Crushed input + 3 primitives into ~50px rows with unreadable thumbnails and opaque jargon.
 
 ---
 
 ## 4. Hazards & Invariants
 
-- **Never re-render the Workbench Left Pane on keystroke (`ui.js:renderWorkbenchLeft`)**: Input handlers mutate `app.state` in place and refresh only validation, Run button state, and the live wire preview so text inputs never drop cursor focus.
-- **Race safety (`ui.js:runEvaluation`)**: Every live call increments `app.runSeq` and aborts any prior in-flight `AbortController` so rapid preset/variant clicks cannot clobber newer responses.
-- **Zero key leakage**: `schema.js:buildCurl` always emits `-H "x-goog-api-key: $GEMINI_API_KEY"`; `client.js:runLive` never logs or interpolates keys into URLs or DOM error messages.
-- **No untrusted HTML injection**: All DOM nodes in `ui.js` are constructed via `document.createElement` + `textContent` (`el()`), never string-interpolated `innerHTML`.
+- **In-place threshold dragging (`ui.js:bindThresholdDrag`)**: Updates `pinEl`, `fillEl`, `pillEl`, `cutoffEl`, `tickEl`, and `verdictEl` in place without detaching the active track/slider node; only the passive surface (`verdictEl` vs Workbench) re-renders.
+- **Never re-render the Workbench Left Pane on keystroke (`ui.js:renderWorkbenchLeft`)**: Input handlers mutate `app.state` in place so text inputs never drop cursor focus.
+- **Race safety (`ui.js:runEvaluation`, `handleImageFile`)**: Every run increments `app.runSeq`, aborts prior `AbortController`, resets `setLoadingState(false)` on non-live exits, snapshots state for normalization, and stamps `uploadSeq` on async image decodes.
+- **Popover click-outside propagation**: Buttons outside `wbRefs.keyAnchor` that open `#dc-key-popover` (`Live API` with no saved key, `Update API Key` on 401) call `e.stopPropagation()` so `dialog`'s outside-click listener never dismisses the popover on the same click tick.
+- **Zero key leakage & zero XSS**: `schema.js:buildCurl` always redacts to `$GEMINI_API_KEY`; `ui.js:el()` assigns `value`/`checked` via DOM properties rather than HTML attributes and constructs all DOM via `createElement` + `textContent`.
 
 ---
 
@@ -71,7 +74,6 @@ Rejected single-prior trade-offs:
    node --check cells/decisions/schema.js && node --check cells/decisions/presets.js && node --check cells/decisions/client.js && node --check cells/decisions/ui.js
    ```
 3. **Interactive verification**:
-   - In Cell #1, switch scenarios (`Receipt`, `Ticket`, `UI QA`, `PR Gate`) and flip the A/B perturb toggle (`Clean` ↔ `Flagged`, etc.) to verify all 3 primitives update in a single pass with `0 out tok`.
-   - Drag the `noul` threshold pin (`τ`) on the card and inside the Workbench to verify live `YES`/`NO` flipping without re-querying.
-   - Click `Lab ↗`, drop or paste (`⌘V`) an image, toggle `Res` (`low | medium | high`), add/edit questions, and inspect `Request & cURL` + `Raw Response`.
-   - Click `+ Gemini API Key`, paste a standard Gemini API key, and click `Save & Go Live` to test live `gemini-decision-1` responses.
+   - Across Row 1 (`1 · INPUT → 2 · CHECK & ROUTE → 3 · RUBRIC & PROOF`), flip `Clean Lunch ($54)` ↔ `Bar Tab ($192)` and switch scenarios (`Receipt`, `Ticket`, `UI QA`, `PR Gate`) to watch all 3 cells update in one synchronized wave with `0 words generated`.
+   - Drag the `Cutoff: 50%` slider in Cell 2 (`2 · CHECK & ROUTE`) to flip `YES`/`NO` in place without re-querying.
+   - Click `Demo Data` (Cell 1), `Customize ↗` (Cell 3), or `JSON ↗` (Cell 3) to inspect/edit questions, upload/paste images, paste a standard Gemini API key, and inspect `Request & cURL` / `Raw Response`.
