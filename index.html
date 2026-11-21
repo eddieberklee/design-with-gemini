@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="cells/api-matrix/api-matrix.css">
   <link rel="stylesheet" href="cells/left-grille/left-grille.css">
   <link rel="stylesheet" href="cells/grille-swipe/grille-swipe.css">
+  <link rel="stylesheet" href="cells/stick-s3/stick-s3.css">
   <style>
     *, *::before, *::after {
       box-sizing: border-box;
@@ -56,7 +57,7 @@
     <section class="cell cell--api-matrix" id="cell-api-matrix" aria-label="Google Gemini API Matrix"></section>
     <section class="cell cell--left-grille" id="cell-left-grille" aria-label="Left Grille Acoustic Swipe Sonar"></section>
     <section class="cell cell--grille-swipe cell-acoustic" id="cell-grille-swipe" aria-label="16-inch MacBook Pro Right Grille Acoustic Swipe Lab"></section>
-    <div class="cell"></div>
+    <section class="cell cell--stick-s3" id="cell-stick-s3" aria-label="M5StickS3 Accelerometer Color Studio prototype"></section>
   </main>
 
   <script defer src="cells/decisions/schema.js"></script>
@@ -76,5 +77,8 @@
   <script defer src="cells/left-grille/acoustic-controller.js"></script>
   <script defer src="cells/left-grille/ui.js"></script>
   <script defer src="cells/grille-swipe/grille-swipe.js"></script>
+  <script defer src="cells/stick-s3/color-engine.js"></script>
+  <script defer src="cells/stick-s3/transport.js"></script>
+  <script defer src="cells/stick-s3/ui.js"></script>
 </body>
 </html>

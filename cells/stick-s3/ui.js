@@ -1,0 +1,1132 @@
+(function (root) {
+  'use strict';
+
+  const NS = (root.StickS3Color = root.StickS3Color || {});
+  const ColorEngine = NS.ColorEngine;
+  const Transport = NS.Transport;
+
+  const SWATCH_STORAGE_KEY = 's3_captured_swatches_v1';
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const COMMAND_LEASE_MS = 260;
+
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        const v = attrs[k];
+        if (v === undefined || v === null || v === false) return;
+        if (k === 'className') node.className = v;
+        else if (k === 'textContent') node.textContent = String(v);
+        else if (k === 'dataset') {
+          Object.keys(v).forEach(function (dk) {
+            if (v[dk] !== undefined && v[dk] !== null) node.dataset[dk] = String(v[dk]);
+          });
+        } else if (k === 'style' && typeof v === 'object') {
+          Object.assign(node.style, v);
+        } else if (k.startsWith('on') && typeof v === 'function') {
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else if (v === true) {
+          node.setAttribute(k, '');
+        } else {
+          node.setAttribute(k, String(v));
+        }
+      });
+    }
+    if (children !== undefined && children !== null) {
+      const list = Array.isArray(children) ? children : [children];
+      list.forEach(function (c) {
+        if (c === undefined || c === null || c === false) return;
+        if (typeof c === 'string' || typeof c === 'number') {
+          node.appendChild(document.createTextNode(String(c)));
+        } else {
+          node.appendChild(c);
+        }
+      });
+    }
+    return node;
+  }
+
+  function svgEl(tag, attrs, children) {
+    const node = document.createElementNS(SVG_NS, tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        const v = attrs[k];
+        if (v !== undefined && v !== null && v !== false) {
+          node.setAttribute(k, String(v));
+        }
+      });
+    }
+    if (children) {
+      const list = Array.isArray(children) ? children : [children];
+      list.forEach(function (c) {
+        if (c) node.appendChild(c);
+      });
+    }
+    return node;
+  }
+
+  function clearNode(node) {
+    while (node && node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function loadSavedSwatches() {
+    try {
+      const raw = root.localStorage ? root.localStorage.getItem(SWATCH_STORAGE_KEY) : null;
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr)) return null;
+      return arr
+        .filter(function (s) { return s && typeof s.hex === 'string' && /^#[0-9A-F]{6}$/i.test(s.hex); })
+        .slice(0, 12);
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function saveSwatches(list) {
+    try {
+      if (root.localStorage) {
+        root.localStorage.setItem(SWATCH_STORAGE_KEY, JSON.stringify(list.slice(0, 12)));
+      }
+    } catch (_e) {}
+  }
+
+  function copyToClipboard(text) {
+    if (root.navigator && root.navigator.clipboard && typeof root.navigator.clipboard.writeText === 'function') {
+      return root.navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (_e) {}
+      resolve();
+    });
+  }
+
+  function pad3(n) {
+    const v = Math.round(ColorEngine.wrapHue(n));
+    if (v < 10) return '00' + v;
+    if (v < 100) return '0' + v;
+    return String(v);
+  }
+
+  function formatSigned(val) {
+    const n = Number(val) || 0;
+    return (n >= 0 ? '+' : '') + n.toFixed(2);
+  }
+
+  function mountStickS3Cell(rootEl) {
+    if (!rootEl || !ColorEngine || !Transport) return;
+
+    const initialSwatches = loadSavedSwatches() || [
+      { hex: '#D94F1E', mode: 'OKLCH', l: 61, c: 0.19, h: 36 },
+      { hex: '#1F7A6E', mode: 'OKLCH', l: 53, c: 0.11, h: 186 },
+      { hex: '#3B5BDB', mode: 'PRISM', l: 52, c: 0.21, h: 268 }
+    ];
+
+    const state = {
+      // Live or simulated IMU state
+      ax: 0.0,
+      ay: 0.0,
+      az: 1.0,
+      tx: 0.0,
+      ty: 0.0,
+      roll: 0.0,
+      pitch: 0.0,
+      kin: 0.0,
+      battery: -1,
+
+      // Tare reference for manual drag / simulated pad
+      localTareX: 0.0,
+      localTareY: 0.0,
+
+      // Instrument controls
+      mode: 0,
+      hold: false,
+      simPreset: 'idle', // 'idle' | 'orbit' | 'flip' | 'shake'
+      draggingPad: false,
+
+      // Hardware link state
+      hwConnected: false,
+      linkSource: 'none',
+      bridgeReachable: false,
+      portName: '',
+      statusDetail: '',
+      packetHz: 0,
+
+      // Race-immunity leases & dedup
+      pendingModeUntil: 0,
+      pendingHoldUntil: 0,
+      lastHandledEventSeq: -1,
+
+      // Smoothed display color & contrast hysteresis
+      targetColor: ColorEngine.mapImuToColor(0, 0, 1, 0, 0),
+      displayColor: ColorEngine.mapImuToColor(0, 0, 1, 0, 0),
+      heldColor: null,
+      prevIsLightBg: true,
+
+      // Swatches & scope ringbuffer
+      swatches: initialSwatches,
+      scopeHistory: []
+    };
+
+    // FPS / Packet rate counter
+    let pktCounter = 0;
+    let lastRateTickMs = Date.now();
+    let toastTimer = null;
+    let announceTimer = null;
+    let lastFocusBeforeModal = null;
+
+    // ---------- Polite Screen Reader Live Region ----------
+    const srLive = el('div', {
+      className: 's3-sr-only',
+      role: 'status',
+      'aria-live': 'polite',
+      'aria-atomic': 'true'
+    });
+
+    function announce(msg) {
+      if (announceTimer) clearTimeout(announceTimer);
+      srLive.textContent = '';
+      announceTimer = setTimeout(function () {
+        srLive.textContent = msg;
+      }, 25);
+    }
+
+    // ---------- Toast Overlay ----------
+    const toastEl = el('div', { className: 's3-toast s3-mono', 'aria-hidden': 'true' });
+    function showToast(text) {
+      toastEl.textContent = text;
+      toastEl.classList.add('is-visible');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () {
+        toastEl.classList.remove('is-visible');
+      }, 1050);
+    }
+
+    // ---------- 1. Top Floating Swiss Capsule ----------
+    const modeBtns = ColorEngine.MODES.map(function (m) {
+      return el('button', {
+        type: 'button',
+        className: 's3-mode-btn s3-mono',
+        'aria-pressed': m.id === state.mode ? 'true' : 'false',
+        title: m.label + ' — ' + m.axisHint,
+        onClick: function () { setMode(m.id, true); }
+      }, m.shortLabel);
+    });
+
+    const modeCycleBtn = el('button', {
+      type: 'button',
+      className: 's3-mode-cycle s3-mono',
+      title: 'Cycle accelerometer color mode [M]',
+      onClick: function () { setMode((state.mode + 1) % ColorEngine.MODES.length, true); }
+    }, 'OKLCH ↻');
+
+    const statusDot = el('span', { className: 's3-status-dot', 'aria-hidden': 'true' });
+    const statusText = el('span', { textContent: 'TILT PAD' });
+    const statusPill = el('span', { className: 's3-status-pill s3-mono' }, [statusDot, statusText]);
+
+    const openBtn = el('button', {
+      type: 'button',
+      className: 's3-open-btn',
+      'aria-label': 'Open M5StickS3 Color Studio and Hardware Twin',
+      onClick: function () { openDialog(); }
+    }, [
+      el('span', { className: 's3-open-label', textContent: 'Studio' }),
+      el('span', { 'aria-hidden': 'true', textContent: '↗' })
+    ]);
+
+    const hudTop = el('header', { className: 's3-hud-top' }, [
+      el('div', { className: 's3-brand' }, [
+        el('span', { className: 's3-index s3-mono', textContent: '07' }),
+        el('span', { className: 's3-title', textContent: 'StickS3 IMU Color' })
+      ]),
+      el('div', { className: 's3-top-right' }, [
+        el('div', { className: 's3-mode-group', role: 'group', 'aria-label': 'Accelerometer color mapping mode' }, modeBtns),
+        modeCycleBtn,
+        statusPill,
+        openBtn
+      ])
+    ]);
+
+    // ---------- 2. Center Gravity Dome SVG Reticle ----------
+    const domeRingHalo = svgEl('circle', { class: 's3-dome-halo', cx: '50', cy: '50', r: '42' });
+    const domeRing = svgEl('circle', { class: 's3-dome-ring', cx: '50', cy: '50', r: '42' });
+    const domeInnerRing = svgEl('circle', { class: 's3-dome-ring', cx: '50', cy: '50', r: '21', 'stroke-opacity': '0.35' });
+    const crossH = svgEl('line', { class: 's3-dome-cross', x1: '43', y1: '50', x2: '57', y2: '50' });
+    const crossV = svgEl('line', { class: 's3-dome-cross', x1: '50', y1: '43', x2: '50', y2: '57' });
+    const kinArc = svgEl('circle', {
+      class: 's3-dome-kin',
+      cx: '50',
+      cy: '50',
+      r: '46.5',
+      'stroke-dasharray': '0 300',
+      transform: 'rotate(-90 50 50)'
+    });
+    const stemHalo = svgEl('line', { class: 's3-dome-stem-halo', x1: '50', y1: '50', x2: '50', y2: '50' });
+    const stemLine = svgEl('line', { class: 's3-dome-stem', x1: '50', y1: '50', x2: '50', y2: '50' });
+    const puckHalo = svgEl('circle', { class: 's3-dome-puck-halo', cx: '50', cy: '50', r: '7.2' });
+    const puckDot = svgEl('circle', { class: 's3-dome-puck', cx: '50', cy: '50', r: '4.8' });
+
+    const domeSvg = svgEl('svg', {
+      class: 's3-dome-svg',
+      viewBox: '0 0 100 100',
+      'aria-hidden': 'true'
+    }, [
+      domeRingHalo,
+      domeRing,
+      domeInnerRing,
+      crossH,
+      crossV,
+      kinArc,
+      stemHalo,
+      stemLine,
+      puckHalo,
+      puckDot
+    ]);
+
+    const domePad = el('div', {
+      className: 's3-dome-pad',
+      tabIndex: 0,
+      role: 'application',
+      'aria-label': 'M5StickS3 3-axis accelerometer tilt dome. Tilt physical StickS3 or drag/arrow-keys to steer cell color. Double-click to zero tare.'
+    }, [domeSvg]);
+
+    const centerStage = el('div', { className: 's3-stage' }, [domePad, toastEl]);
+
+    // ---------- 3. Bottom Floating Swiss Capsule ----------
+    const hexTextEl = el('span', { textContent: '#D5C8C0' });
+    const hexCopyBtn = el('button', {
+      type: 'button',
+      className: 's3-hex-copy s3-mono',
+      title: 'Click to copy live hex color',
+      onClick: function () {
+        const hex = state.displayColor.hex;
+        copyToClipboard(hex);
+        showToast('COPIED ' + hex);
+        announce('Copied ' + hex);
+      }
+    }, [
+      el('span', { className: 's3-hex-dot', 'aria-hidden': 'true' }),
+      hexTextEl
+    ]);
+
+    const oklchSpecEl = el('span', { className: 's3-oklch-spec s3-mono', textContent: 'L84 C.02 H000°' });
+    const axesInlineEl = el('span', { className: 's3-axes-inline s3-mono', textContent: 'X+0.00 Y+0.00 Z+1.00g' });
+
+    const holdBtn = el('button', {
+      type: 'button',
+      className: 's3-chip-btn s3-mono',
+      'aria-pressed': 'false',
+      title: 'Freeze / Hold live color & capture swatch [Space or StickS3 BtnA]',
+      onClick: function () { toggleHold(true, true); }
+    }, 'Hold');
+
+    const tareBtn = el('button', {
+      type: 'button',
+      className: 's3-chip-btn s3-tare-btn s3-mono',
+      title: 'Zero / Tare current tilt angle [T or long-press StickS3 BtnA]',
+      onClick: function () { triggerTare(true); }
+    }, '0°');
+
+    const zFlipBtn = el('button', {
+      type: 'button',
+      className: 's3-chip-btn s3-mono',
+      'aria-pressed': 'false',
+      title: 'Flip virtual Z hemisphere (Face-Up bright vs Face-Down deep pigment)',
+      onClick: function () {
+        if (state.hwConnected) {
+          showToast('FLIP PHYSICAL STICK Z');
+          return;
+        }
+        state.az = state.az >= 0 ? -0.78 : 0.92;
+        recomputeLocalTarget();
+        renderStaticControls();
+      }
+    }, 'Z+');
+
+    const swatchStripEl = el('div', {
+      className: 's3-swatch-strip',
+      role: 'group',
+      'aria-label': 'Captured color swatches'
+    });
+
+    const hudBottom = el('footer', { className: 's3-hud-bottom' }, [
+      el('div', { className: 's3-readout-cluster' }, [
+        hexCopyBtn,
+        oklchSpecEl,
+        axesInlineEl
+      ]),
+      el('div', { className: 's3-controls-cluster' }, [
+        holdBtn,
+        tareBtn,
+        zFlipBtn,
+        swatchStripEl
+      ])
+    ]);
+
+    // Micro badge when Cell 03 shrinks grid <= 235px
+    const microHexEl = el('span', { className: 's3-micro-pill s3-mono', textContent: '#D5C8C0' });
+    const microWrap = el('div', { className: 's3-micro', onClick: function () { openDialog(); } }, [microHexEl]);
+
+    clearNode(rootEl);
+    rootEl.appendChild(hudTop);
+    rootEl.appendChild(centerStage);
+    rootEl.appendChild(microWrap);
+    rootEl.appendChild(hudBottom);
+    rootEl.appendChild(srLive);
+
+    // ---------- 4. Expanded Studio Workbench (<dialog>) ----------
+    const twinLcdCanvas = el('canvas', { className: 's3-twin-lcd', width: 135, height: 240 });
+    const twinBtnA = el('button', {
+      type: 'button',
+      className: 's3-twin-btna s3-mono',
+      title: 'M5StickS3 KEY1 (GPIO 11): Click to Hold/+Swatch, Shift+Click to Tare',
+      onClick: function (ev) {
+        if (ev.shiftKey) triggerTare(true);
+        else toggleHold(true, true);
+      }
+    }, 'KEY1');
+
+    const twinBtnB = el('button', {
+      type: 'button',
+      className: 's3-twin-btnb',
+      title: 'M5StickS3 KEY2 (GPIO 12): Cycle Color Mode',
+      'aria-label': 'M5StickS3 Side Button KEY2: Cycle Color Mode',
+      onClick: function () { setMode((state.mode + 1) % ColorEngine.MODES.length, true); }
+    });
+
+    const twinRig = el('div', { className: 's3-twin-rig' }, [
+      el('div', { className: 's3-twin-body' }, [
+        twinLcdCanvas,
+        twinBtnA,
+        twinBtnB
+      ]),
+      el('div', { className: 's3-twin-back s3-mono' }, [
+        el('strong', { textContent: 'M5StickS3' }),
+        el('span', { textContent: 'ESP32-S3-PICO-1' }),
+        el('span', { textContent: 'BMI270 6-Axis IMU' }),
+        el('span', { textContent: 'Face-Down (Z < 0)' })
+      ])
+    ]);
+
+    const scopeRateEl = el('span', { className: 's3-mono', textContent: '0 Hz' });
+    const scopeCanvas = el('canvas', { className: 's3-scope-canvas', width: 268, height: 76 });
+
+    const heroHexEl = el('span', { className: 's3-hero-hex s3-mono', textContent: '#D5C8C0' });
+    const heroMetricsEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'oklch(0.84 0.02 0deg)' });
+    const heroContrastEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'Contrast 15.9:1 AAA' });
+    const heroSwatch = el('div', { className: 's3-hero-swatch' }, [
+      el('div', { className: 's3-hero-pill' }, [heroHexEl, heroMetricsEl, heroContrastEl])
+    ]);
+
+    const connSummaryEl = el('span', { className: 's3-mono', style: { fontSize: '10.5px', color: '#525250' }, textContent: 'Probing ws://127.0.0.1:8791/ws…' });
+
+    const webSerialBtn = el('button', {
+      type: 'button',
+      className: 's3-btn s3-btn--primary',
+      onClick: async function () {
+        try {
+          if (state.linkSource === 'serial') {
+            await link.disconnectWebSerial();
+          } else {
+            await link.connectWebSerial();
+            showToast('USB WEB SERIAL LIVE');
+          }
+        } catch (err) {
+          showToast('SERIAL CANCELLED');
+          connSummaryEl.textContent = err && err.message ? err.message : 'Web Serial connection cancelled';
+        }
+      }
+    }, 'Connect USB Web Serial');
+
+    const webBleBtn = el('button', {
+      type: 'button',
+      className: 's3-btn',
+      onClick: async function () {
+        try {
+          if (state.linkSource === 'ble') {
+            await link.disconnectWebBluetooth();
+          } else {
+            await link.connectWebBluetooth();
+            showToast('WIRELESS BLE LIVE');
+          }
+        } catch (err) {
+          connSummaryEl.textContent = err && err.message ? err.message : 'BLE pairing cancelled';
+        }
+      }
+    }, 'Pair Wireless BLE');
+
+    const simPresetBtns = [
+      { id: 'idle', label: 'Manual Pad' },
+      { id: 'orbit', label: 'Auto Orbit' },
+      { id: 'flip', label: 'Flip Z' },
+      { id: 'shake', label: 'Shake Kinetic' }
+    ].map(function (p) {
+      return el('button', {
+        type: 'button',
+        className: 's3-btn',
+        dataset: { preset: p.id },
+        'aria-pressed': p.id === state.simPreset ? 'true' : 'false',
+        onClick: function () {
+          state.simPreset = p.id;
+          state.hold = false;
+          renderStaticControls();
+        }
+      }, p.label);
+    });
+
+    const dlgModeBtns = ColorEngine.MODES.map(function (m) {
+      return el('button', {
+        type: 'button',
+        className: 's3-btn',
+        'aria-pressed': m.id === state.mode ? 'true' : 'false',
+        onClick: function () { setMode(m.id, true); }
+      }, m.shortLabel + ' · ' + m.label);
+    });
+    const modeHintEl = el('div', { style: { fontSize: '11px', color: '#525250' }, textContent: ColorEngine.MODES[0].axisHint });
+
+    const deckGridEl = el('div', { className: 's3-deck-grid' });
+
+    const exportPngBtn = el('button', {
+      type: 'button',
+      className: 's3-btn',
+      onClick: function () { downloadSwatchTearSheet(); }
+    }, 'Download PNG Tear-Sheet');
+
+    const copyCssBtn = el('button', {
+      type: 'button',
+      className: 's3-btn',
+      onClick: function () {
+        const cssVars = state.swatches.map(function (s, idx) {
+          return '  --stick-s3-swatch-' + (idx + 1) + ': ' + s.hex + ';';
+        }).join('\n');
+        copyToClipboard(':root {\n' + cssVars + '\n}');
+        showToast('COPIED CSS PALETTE');
+      }
+    }, 'Copy CSS Tokens');
+
+    const dlgCloseBtn = el('button', {
+      type: 'button',
+      className: 's3-dlg-close',
+      onClick: function () { closeDialog(); }
+    }, 'Done ✕');
+
+    const dialog = el('dialog', {
+      className: 's3-dialog',
+      'aria-label': 'M5StickS3 Accelerometer Color Studio Workbench',
+      onClick: function (ev) {
+        if (ev.target === dialog) closeDialog();
+      }
+    }, [
+      el('div', { className: 's3-dlg-header' }, [
+        el('div', { className: 's3-dlg-title-wrap' }, [
+          el('span', { className: 's3-index s3-mono', textContent: 'CELL 07' }),
+          el('h2', { className: 's3-dlg-title', textContent: 'M5StickS3 Accelerometer Color Studio' }),
+          el('span', { className: 's3-dlg-sub s3-mono', textContent: 'ESP32-S3-PICO-1 · BMI270 6-Axis IMU · 135×240 ST7789P3' })
+        ]),
+        dlgCloseBtn
+      ]),
+      el('div', { className: 's3-dlg-body' }, [
+        el('div', { className: 's3-dlg-left' }, [
+          el('div', { className: 's3-twin-stage' }, [twinRig]),
+          el('div', { className: 's3-twin-caption' }, 'Live 3D M5StickS3 orientation twin. Click orange KEY1 to freeze/capture swatch; side KEY2 cycles color engine.'),
+          el('div', { className: 's3-scope-card' }, [
+            el('div', { className: 's3-scope-head' }, [
+              el('span', { textContent: 'BMI270 X / Y / Z + Kinetic' }),
+              scopeRateEl
+            ]),
+            scopeCanvas
+          ])
+        ]),
+        el('div', { className: 's3-dlg-right' }, [
+          heroSwatch,
+          el('div', { className: 's3-section-box' }, [
+            el('div', { className: 's3-section-title' }, [
+              el('span', { textContent: 'Hardware Transport & Simulator' }),
+              connSummaryEl
+            ]),
+            el('div', { className: 's3-btn-row' }, [webSerialBtn, webBleBtn].concat(simPresetBtns)),
+            el('pre', { className: 's3-cmd-pre s3-mono' }, 'node cells/stick-s3/bridge.mjs   # Auto-streams /dev/cu.usbmodem* to file:// & localhost:8791')
+          ]),
+          el('div', { className: 's3-section-box' }, [
+            el('div', { className: 's3-section-title' }, [
+              el('span', { textContent: 'Synchronized Firmware Color Engine' })
+            ]),
+            el('div', { className: 's3-btn-row' }, dlgModeBtns),
+            modeHintEl
+          ]),
+          el('div', { className: 's3-section-box' }, [
+            el('div', { className: 's3-section-title' }, [
+              el('span', { textContent: 'Captured Pantone Swatches (BtnA / Hold)' }),
+              el('div', { className: 's3-btn-row' }, [copyCssBtn, exportPngBtn])
+            ]),
+            deckGridEl
+          ])
+        ])
+      ])
+    ]);
+
+    document.body.appendChild(dialog);
+    dialog.addEventListener('close', function () {
+      if (lastFocusBeforeModal && typeof lastFocusBeforeModal.focus === 'function') {
+        lastFocusBeforeModal.focus();
+      }
+    });
+
+    function openDialog() {
+      lastFocusBeforeModal = document.activeElement;
+      if (typeof dialog.showModal === 'function' && !dialog.open) {
+        dialog.showModal();
+        renderSwatches();
+      }
+    }
+
+    function closeDialog() {
+      if (dialog.open) dialog.close();
+    }
+
+    // ---------- Core State Mutations & Hardware Sync ----------
+
+    function pushCapturedSwatch(colorSpec) {
+      if (!colorSpec || !colorSpec.hex) return;
+      const modeName = ColorEngine.MODES[state.mode] ? ColorEngine.MODES[state.mode].shortLabel : 'OKLCH';
+      const entry = {
+        hex: colorSpec.hex,
+        mode: modeName,
+        l: Math.round(colorSpec.l * 100),
+        c: Number(colorSpec.c.toFixed(2)),
+        h: Math.round(colorSpec.h)
+      };
+      const deduped = [entry].concat(
+        state.swatches.filter(function (s) { return s.hex.toUpperCase() !== entry.hex.toUpperCase(); })
+      ).slice(0, 8);
+      state.swatches = deduped;
+      saveSwatches(deduped);
+      renderSwatches();
+    }
+
+    function setMode(nextMode, sendToHw) {
+      const m = ((Math.trunc(nextMode) % ColorEngine.MODES.length) + ColorEngine.MODES.length) % ColorEngine.MODES.length;
+      state.mode = m;
+      if (sendToHw) {
+        state.pendingModeUntil = Date.now() + COMMAND_LEASE_MS;
+        link.sendCommand({ cmd: 'mode', m: m });
+      }
+      if (!state.hwConnected) {
+        recomputeLocalTarget();
+      }
+      const meta = ColorEngine.MODES[m];
+      showToast('MODE · ' + meta.shortLabel);
+      announce('Color mode ' + meta.label);
+      renderStaticControls();
+    }
+
+    function toggleHold(sendToHw, captureChip) {
+      state.hold = !state.hold;
+      if (state.hold) {
+        state.heldColor = state.displayColor;
+        if (captureChip) pushCapturedSwatch(state.displayColor);
+        showToast('COLOR HELD · ' + state.displayColor.hex);
+        announce('Held color ' + state.displayColor.hex);
+      } else {
+        state.heldColor = null;
+        showToast('LIVE IMU');
+        announce('Live accelerometer tracking');
+      }
+      if (sendToHw) {
+        state.pendingHoldUntil = Date.now() + COMMAND_LEASE_MS;
+        link.sendCommand({ cmd: 'hold', h: state.hold });
+      }
+      renderStaticControls();
+    }
+
+    function triggerTare(sendToHw) {
+      state.localTareX = state.ax;
+      state.localTareY = state.ay;
+      state.tx = 0;
+      state.ty = 0;
+      if (sendToHw) {
+        link.sendCommand({ cmd: 'tare' });
+      }
+      if (!state.hwConnected) {
+        recomputeLocalTarget();
+      }
+      showToast('ZERO TARED');
+      announce('Zeroed accelerometer tilt reference');
+    }
+
+    function recomputeLocalTarget() {
+      const tx = ColorEngine.clamp(state.ax - state.localTareX, -1.2, 1.2);
+      const ty = ColorEngine.clamp(state.ay - state.localTareY, -1.2, 1.2);
+      state.tx = tx;
+      state.ty = ty;
+      state.roll = Math.atan2(tx, Math.hypot(ty, state.az)) * (180 / Math.PI);
+      state.pitch = Math.atan2(ty, Math.hypot(tx, state.az)) * (180 / Math.PI);
+      const col = ColorEngine.mapImuToColor(tx, ty, state.az, state.kin, state.mode);
+      if (!state.hold) {
+        state.targetColor = col;
+      }
+    }
+
+    // ---------- Pointer & Keyboard Fallback on Gravity Dome ----------
+
+    function applyDomePointer(ev) {
+      const rect = domePad.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const nx = ColorEngine.clamp(((ev.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
+      const ny = ColorEngine.clamp(1 - ((ev.clientY - rect.top) / rect.height) * 2, -1, 1);
+      const magSq = Math.min(0.96, nx * nx + ny * ny);
+      const zSign = state.az >= 0 ? 1 : -1;
+      state.simPreset = 'idle';
+      state.localTareX = 0;
+      state.localTareY = 0;
+      state.ax = nx * 0.92;
+      state.ay = ny * 0.92;
+      state.az = zSign * Math.sqrt(Math.max(0.04, 1 - magSq));
+      state.kin = ColorEngine.clamp(Math.hypot(ev.movementX || 0, ev.movementY || 0) / 36, 0, 0.85);
+      state.hold = false;
+      recomputeLocalTarget();
+      renderStaticControls();
+    }
+
+    domePad.addEventListener('pointerdown', function (ev) {
+      if (state.hwConnected) return;
+      state.draggingPad = true;
+      try { domePad.setPointerCapture(ev.pointerId); } catch (_e) {}
+      applyDomePointer(ev);
+    });
+
+    domePad.addEventListener('pointermove', function (ev) {
+      if (!state.draggingPad || state.hwConnected) return;
+      applyDomePointer(ev);
+    });
+
+    function endDomeDrag() {
+      state.draggingPad = false;
+      state.kin = 0;
+    }
+    domePad.addEventListener('pointerup', endDomeDrag);
+    domePad.addEventListener('pointercancel', endDomeDrag);
+    domePad.addEventListener('dblclick', function () {
+      state.ax = 0;
+      state.ay = 0;
+      state.az = 1;
+      triggerTare(state.hwConnected);
+    });
+
+    rootEl.addEventListener('keydown', function (ev) {
+      if (ev.key === 'm' || ev.key === 'M') {
+        ev.preventDefault();
+        setMode((state.mode + 1) % ColorEngine.MODES.length, true);
+      } else if (ev.key === 't' || ev.key === 'T') {
+        ev.preventDefault();
+        triggerTare(true);
+      } else if (ev.key === ' ' && ev.target === domePad) {
+        ev.preventDefault();
+        toggleHold(true, true);
+      } else if (!state.hwConnected && ev.target === domePad) {
+        const step = 0.12;
+        if (ev.key === 'ArrowLeft') { ev.preventDefault(); state.ax = ColorEngine.clamp(state.ax - step, -1, 1); recomputeLocalTarget(); }
+        else if (ev.key === 'ArrowRight') { ev.preventDefault(); state.ax = ColorEngine.clamp(state.ax + step, -1, 1); recomputeLocalTarget(); }
+        else if (ev.key === 'ArrowUp') { ev.preventDefault(); state.ay = ColorEngine.clamp(state.ay + step, -1, 1); recomputeLocalTarget(); }
+        else if (ev.key === 'ArrowDown') { ev.preventDefault(); state.ay = ColorEngine.clamp(state.ay - step, -1, 1); recomputeLocalTarget(); }
+      }
+    });
+
+    // ---------- Swatch Strip & PNG Tear-Sheet Renderer ----------
+
+    function renderSwatches() {
+      clearNode(swatchStripEl);
+      state.swatches.slice(0, 4).forEach(function (sw) {
+        const dot = el('button', {
+          type: 'button',
+          className: 's3-swatch-dot',
+          style: { backgroundColor: sw.hex },
+          title: sw.hex + ' (' + sw.mode + ') — Click to preview & copy',
+          'aria-label': 'Swatch ' + sw.hex,
+          onClick: function () {
+            const spec = ColorEngine.parseHexToSpec(sw.hex);
+            if (spec) {
+              state.hold = true;
+              state.heldColor = spec;
+              state.targetColor = spec;
+              state.displayColor = spec;
+              copyToClipboard(sw.hex);
+              showToast('PINNED ' + sw.hex);
+              renderStaticControls();
+            }
+          }
+        });
+        swatchStripEl.appendChild(dot);
+      });
+
+      clearNode(deckGridEl);
+      state.swatches.forEach(function (sw) {
+        const card = el('button', {
+          type: 'button',
+          className: 's3-deck-card',
+          title: 'Click to copy ' + sw.hex,
+          onClick: function () {
+            copyToClipboard(sw.hex);
+            showToast('COPIED ' + sw.hex);
+          }
+        }, [
+          el('div', { className: 's3-deck-color', style: { backgroundColor: sw.hex } }),
+          el('div', { className: 's3-deck-meta s3-mono' }, [
+            el('strong', { textContent: sw.hex }),
+            el('span', { textContent: sw.mode })
+          ])
+        ]);
+        deckGridEl.appendChild(card);
+      });
+    }
+
+    function downloadSwatchTearSheet() {
+      const cols = Math.max(1, state.swatches.length);
+      const cardW = 140;
+      const cnv = document.createElement('canvas');
+      cnv.width = cols * cardW + 32;
+      cnv.height = 210;
+      const ctx = cnv.getContext('2d');
+      if (!ctx) return;
+
+      ctx.fillStyle = '#fafafa';
+      ctx.fillRect(0, 0, cnv.width, cnv.height);
+      ctx.fillStyle = '#141413';
+      ctx.font = '600 13px ui-monospace, SFMono-Regular, Menlo, monospace';
+      ctx.fillText('M5StickS3 · Accelerometer Palette Tear-Sheet', 16, 26);
+
+      state.swatches.forEach(function (sw, i) {
+        const x = 16 + i * cardW;
+        const y = 42;
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x, y, cardW - 10, 148);
+        ctx.fillStyle = sw.hex;
+        ctx.fillRect(x + 6, y + 6, cardW - 22, 98);
+        ctx.fillStyle = '#141413';
+        ctx.font = '700 12px ui-monospace, Menlo, monospace';
+        ctx.fillText(sw.hex, x + 8, y + 124);
+        ctx.fillStyle = '#63635f';
+        ctx.font = '500 10px ui-monospace, Menlo, monospace';
+        ctx.fillText(sw.mode + ' · L' + sw.l, x + 8, y + 140);
+      });
+
+      const a = document.createElement('a');
+      a.download = 'stick-s3-palette.png';
+      a.href = cnv.toDataURL('image/png');
+      a.click();
+    }
+
+    // ---------- Static Control Sync ----------
+
+    function renderStaticControls() {
+      const nowMode = state.mode;
+      const modeInfo = ColorEngine.MODES[nowMode] || ColorEngine.MODES[0];
+
+      modeBtns.forEach(function (btn, idx) {
+        btn.setAttribute('aria-pressed', idx === nowMode ? 'true' : 'false');
+      });
+      dlgModeBtns.forEach(function (btn, idx) {
+        btn.setAttribute('aria-pressed', idx === nowMode ? 'true' : 'false');
+      });
+      modeCycleBtn.textContent = modeInfo.shortLabel + ' ↻';
+      modeHintEl.textContent = modeInfo.axisHint;
+
+      holdBtn.setAttribute('aria-pressed', state.hold ? 'true' : 'false');
+      holdBtn.textContent = state.hold ? 'Held' : 'Hold';
+
+      zFlipBtn.textContent = state.az >= 0 ? 'Z+' : 'Z−';
+      zFlipBtn.setAttribute('aria-pressed', state.az < 0 ? 'true' : 'false');
+
+      simPresetBtns.forEach(function (btn) {
+        btn.setAttribute('aria-pressed', btn.dataset.preset === state.simPreset && !state.hwConnected ? 'true' : 'false');
+      });
+
+      // Status Pill
+      statusPill.classList.toggle('is-live', state.hwConnected && !state.hold);
+      statusPill.classList.toggle('is-hold', state.hold);
+
+      if (state.hold) {
+        statusText.textContent = 'HELD';
+      } else if (state.hwConnected) {
+        const srcBadge = state.linkSource === 'ble' ? 'S3 BLE' : (state.linkSource === 'serial' ? 'S3 USB' : 'STICK S3');
+        statusText.textContent = state.battery >= 0 ? (srcBadge + ' · ' + state.battery + '%') : srcBadge;
+      } else if (state.simPreset !== 'idle') {
+        statusText.textContent = 'DEMO ' + state.simPreset.toUpperCase();
+      } else {
+        statusText.textContent = 'TILT PAD';
+      }
+
+      webSerialBtn.textContent = state.linkSource === 'serial' ? 'Disconnect Web Serial' : 'Connect USB Web Serial';
+      webBleBtn.textContent = state.linkSource === 'ble' ? 'Disconnect BLE' : 'Pair Wireless BLE';
+
+      if (state.hwConnected) {
+        connSummaryEl.textContent = 'LIVE (' + state.linkSource.toUpperCase() + (state.portName ? ' · ' + state.portName : '') + ')';
+      } else if (state.bridgeReachable) {
+        connSummaryEl.textContent = 'Local bridge ready — plug in StickS3 USB-C or pair BLE';
+      } else {
+        connSummaryEl.textContent = 'Interactive Tilt Pad active (run bridge.mjs or connect Web Serial / BLE)';
+      }
+    }
+
+    // ---------- Hardware Twin Canvas & Scope Renderers (Dialog Open Only) ----------
+
+    function renderTwinAndScope(col) {
+      const rotX = ColorEngine.clamp(-state.pitch, -78, 78);
+      const rotY = ColorEngine.clamp(state.roll, -78, 78) + (state.az < 0 ? 180 : 0);
+      twinRig.style.transform = 'rotateX(' + rotX.toFixed(1) + 'deg) rotateY(' + rotY.toFixed(1) + 'deg)';
+
+      const ctx = twinLcdCanvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#101010';
+        ctx.fillRect(0, 0, 135, 240);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 10px ui-monospace, Menlo, monospace';
+        ctx.fillText('STICK S3', 8, 15);
+
+        ctx.fillStyle = state.hold ? '#d94f1e' : '#047857';
+        ctx.fillRect(72, 5, 32, 13);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '700 8.5px ui-monospace, Menlo, monospace';
+        ctx.fillText(state.hold ? 'HOLD' : (state.linkSource === 'ble' ? 'BLE' : 'USB'), 76, 14);
+
+        ctx.fillStyle = col.hex;
+        ctx.fillRect(8, 24, 119, 112);
+
+        const twinTheme = ColorEngine.pickAdaptiveTheme(col.r, col.g, col.b);
+        ctx.strokeStyle = twinTheme.ink;
+        ctx.fillStyle = twinTheme.ink;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(67.5, 78, 25, 0, Math.PI * 2);
+        ctx.stroke();
+
+        const dx = 67.5 + ColorEngine.clamp(state.tx, -1, 1) * 20;
+        const dy = 78 - ColorEngine.clamp(state.ty, -1, 1) * 20;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = '700 10px ui-monospace, Menlo, monospace';
+        ctx.fillText(col.hex, 14, 128);
+        ctx.fillText(ColorEngine.MODES[state.mode].shortLabel, 14, 38);
+
+        const bars = [
+          { lbl: 'X', v: state.ax, c: '#f87171', y: 152 },
+          { lbl: 'Y', v: state.ay, c: '#34d399', y: 168 },
+          { lbl: 'Z', v: state.az, c: '#60a5fa', y: 184 }
+        ];
+        bars.forEach(function (b) {
+          ctx.fillStyle = '#a3a3a0';
+          ctx.font = '600 9px ui-monospace, Menlo, monospace';
+          ctx.fillText(b.lbl, 8, b.y + 7);
+          ctx.fillStyle = '#262624';
+          ctx.fillRect(22, b.y, 64, 7);
+          const w = Math.round(Math.min(1, Math.abs(b.v) / 1.2) * 30);
+          ctx.fillStyle = b.c;
+          ctx.fillRect(b.v >= 0 ? 54 : 54 - w, b.y + 1, w, 5);
+          ctx.fillStyle = '#f5f5f3';
+          ctx.fillText(formatSigned(b.v), 91, b.y + 7);
+        });
+
+        ctx.fillStyle = '#a3a3a0';
+        ctx.fillText('[A] HOLD/TARE  [B] MODE', 8, 224);
+      }
+
+      const sctx = scopeCanvas.getContext('2d');
+      if (sctx && state.scopeHistory.length > 1) {
+        const W = scopeCanvas.width;
+        const H = scopeCanvas.height;
+        sctx.fillStyle = '#141413';
+        sctx.fillRect(0, 0, W, H);
+        sctx.strokeStyle = 'rgba(255,255,255,0.12)';
+        sctx.beginPath();
+        sctx.moveTo(0, H / 2);
+        sctx.lineTo(W, H / 2);
+        sctx.stroke();
+
+        const series = [
+          { key: 'ax', stroke: '#f87171' },
+          { key: 'ay', stroke: '#34d399' },
+          { key: 'az', stroke: '#60a5fa' }
+        ];
+        series.forEach(function (tr) {
+          sctx.strokeStyle = tr.stroke;
+          sctx.lineWidth = 1.5;
+          sctx.beginPath();
+          state.scopeHistory.forEach(function (pt, idx) {
+            const x = (idx / 59) * W;
+            const y = H / 2 - ColorEngine.clamp(pt[tr.key], -1.4, 1.4) * (H * 0.34);
+            if (idx === 0) sctx.moveTo(x, y);
+            else sctx.lineTo(x, y);
+          });
+          sctx.stroke();
+        });
+      }
+    }
+
+    // ---------- 60 FPS Animation & Perceptual OKLab Damper Loop ----------
+
+    function renderFrame(nowMs) {
+      if (!state.hwConnected && state.simPreset !== 'idle' && !state.draggingPad && !state.hold) {
+        const sim = ColorEngine.sampleDemoMotion(state.simPreset, nowMs * 0.001);
+        state.ax = sim.ax;
+        state.ay = sim.ay;
+        state.az = sim.az;
+        state.kin = sim.kin;
+        recomputeLocalTarget();
+      }
+
+      const goal = state.hold && state.heldColor ? state.heldColor : state.targetColor;
+      state.displayColor = ColorEngine.lerpColorOklab(state.displayColor, goal, 0.28);
+      const col = state.displayColor;
+
+      const theme = ColorEngine.pickAdaptiveTheme(col.r, col.g, col.b, state.prevIsLightBg);
+      state.prevIsLightBg = theme.isLightBg;
+
+      rootEl.style.setProperty('--s3-live-hex', col.hex);
+      rootEl.style.setProperty('--s3-reticle-ink', theme.ink);
+      rootEl.style.setProperty('--s3-reticle-stroke', theme.reticleStroke);
+      rootEl.style.setProperty('--s3-reticle-halo', theme.reticleHalo);
+      rootEl.style.setProperty('--s3-dome-well', theme.domeWell);
+
+      // Update SVG Gravity Dome coordinates
+      const px = 50 + ColorEngine.clamp(state.tx, -1, 1) * 34;
+      const py = 50 - ColorEngine.clamp(state.ty, -1, 1) * 34;
+      stemHalo.setAttribute('x2', px.toFixed(1));
+      stemHalo.setAttribute('y2', py.toFixed(1));
+      stemLine.setAttribute('x2', px.toFixed(1));
+      stemLine.setAttribute('y2', py.toFixed(1));
+      puckHalo.setAttribute('cx', px.toFixed(1));
+      puckHalo.setAttribute('cy', py.toFixed(1));
+      puckDot.setAttribute('cx', px.toFixed(1));
+      puckDot.setAttribute('cy', py.toFixed(1));
+      domeRing.classList.toggle('is-nadir', state.az < 0);
+
+      const kinCircumference = 2 * Math.PI * 46.5;
+      const kinArcLen = ColorEngine.clamp(state.kin, 0, 1) * kinCircumference;
+      kinArc.setAttribute('stroke-dasharray', kinArcLen.toFixed(1) + ' 320');
+
+      // Update Tabular Readouts
+      hexTextEl.textContent = col.hex;
+      microHexEl.textContent = col.hex;
+      oklchSpecEl.textContent =
+        'L' + String(Math.round(col.l * 100)).padStart(2, '0') +
+        ' C.' + String(Math.round(col.c * 100)).padStart(2, '0') +
+        ' H' + pad3(col.h) + '°';
+      axesInlineEl.textContent =
+        'X' + formatSigned(state.ax) +
+        ' Y' + formatSigned(state.ay) +
+        ' Z' + formatSigned(state.az) + 'g';
+
+      if (dialog.open) {
+        heroSwatch.style.backgroundColor = col.hex;
+        heroHexEl.textContent = col.hex;
+        heroMetricsEl.textContent =
+          'oklch(' + col.l.toFixed(2) + ' ' + col.c.toFixed(3) + ' ' + Math.round(col.h) + 'deg)';
+        heroContrastEl.textContent = 'Reticle ' + theme.contrastRatio.toFixed(1) + ':1 AA · Capsule AAA';
+        scopeRateEl.textContent = state.hwConnected ? (state.packetHz + ' Hz live') : 'Simulated';
+        renderTwinAndScope(col);
+      }
+
+      root.requestAnimationFrame(renderFrame);
+    }
+
+    // ---------- Hardware Link Wiring ----------
+
+    const link = Transport.createStickLink({
+      onTelemetry: function (pkt, src) {
+        const now = Date.now();
+        pktCounter++;
+        if (now - lastRateTickMs >= 1000) {
+          state.packetHz = Math.round((pktCounter * 1000) / (now - lastRateTickMs));
+          pktCounter = 0;
+          lastRateTickMs = now;
+        }
+
+        state.hwConnected = true;
+        state.linkSource = src;
+        state.ax = pkt.ax;
+        state.ay = pkt.ay;
+        state.az = pkt.az;
+        state.tx = pkt.tx;
+        state.ty = pkt.ty;
+        state.roll = pkt.roll;
+        state.pitch = pkt.pitch;
+        state.kin = pkt.kin;
+        state.battery = pkt.battery;
+
+        if (now > state.pendingModeUntil && pkt.mode !== state.mode) {
+          state.mode = pkt.mode;
+          renderStaticControls();
+        }
+        if (now > state.pendingHoldUntil && pkt.hold !== state.hold) {
+          state.hold = pkt.hold;
+          if (state.hold) state.heldColor = pkt.color;
+          renderStaticControls();
+        }
+
+        state.targetColor = pkt.color;
+        if (state.hold) {
+          state.heldColor = pkt.color;
+        }
+
+        if (pkt.event && pkt.seq !== state.lastHandledEventSeq) {
+          state.lastHandledEventSeq = pkt.seq;
+          if (pkt.event === 'swatch') {
+            pushCapturedSwatch(pkt.color);
+            showToast('BTN-A SWATCH · ' + pkt.color.hex);
+          } else if (pkt.event === 'tare') {
+            showToast('STICK S3 TARED');
+          } else if (pkt.event === 'mode') {
+            showToast('MODE · ' + ColorEngine.MODES[pkt.mode].shortLabel);
+          }
+        }
+
+        state.scopeHistory.push({ ax: pkt.ax, ay: pkt.ay, az: pkt.az });
+        if (state.scopeHistory.length > 60) state.scopeHistory.shift();
+      },
+      onStatus: function (st) {
+        const prevConnected = state.hwConnected;
+        state.hwConnected = Boolean(st.connected);
+        state.linkSource = st.source || 'none';
+        state.bridgeReachable = Boolean(st.bridgeReachable);
+        state.portName = st.portName || '';
+        if (prevConnected !== state.hwConnected || st.detail) {
+          renderStaticControls();
+        }
+      }
+    });
+
+    renderSwatches();
+    renderStaticControls();
+    recomputeLocalTarget();
+    link.start();
+    root.requestAnimationFrame(renderFrame);
+  }
+
+  function bootstrap() {
+    const mount = document.getElementById('cell-stick-s3');
+    if (mount) {
+      mountStickS3Cell(mount);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootstrap);
+  } else {
+    bootstrap();
+  }
+
+  NS.UI = {
+    mount: mountStickS3Cell
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : window);

@@ -1,0 +1,905 @@
+/* ==========================================================================
+   M5StickS3 Accelerometer Color Studio — Cell #07 & Hardware Twin Workbench
+   Strictly scoped to .cell--stick-s3, .s3-*, and .s3-dialog.
+   Full-bleed living pigment cell with D65 Matte Swiss Paper HUD capsules
+   (>= 15.8:1 WCAG AAA) and hysteresis-protected Gravity Dome reticle.
+   ========================================================================== */
+
+.cell--stick-s3,
+.s3-dialog {
+  --s3-paper: rgba(255, 255, 255, 0.93);
+  --s3-paper-solid: #ffffff;
+  --s3-canvas: #fafafa;
+  --s3-recess: #f6f6f4;
+  --s3-track: #eaeae6;
+  --s3-border: #e5e5e5;
+  --s3-hairline: #efefef;
+  --s3-capsule-border: rgba(20, 20, 19, 0.14);
+
+  --s3-ink: #141413;
+  --s3-ink-2: #525250;
+  --s3-ink-3: #63635f;
+
+  --s3-signal: #d94f1e;
+  --s3-signal-ink: #b43a10;
+  --s3-signal-bg: #fff1eb;
+
+  --s3-live: #047857;
+  --s3-live-bg: #ecfdf5;
+  --s3-live-border: #a7f3d0;
+
+  --s3-sim: #b45309;
+  --s3-sim-bg: #fffbeb;
+  --s3-sim-border: #fde68a;
+
+  --s3-focus: #2563eb;
+  --s3-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --s3-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --s3-ease: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  font-family: var(--s3-sans);
+  color: var(--s3-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.s3-mono {
+  font-family: var(--s3-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.s3-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   1. FULL-BLEED IN-GRID LIVING PIGMENT CELL (4:3)
+   ========================================================================== */
+
+.cell--stick-s3 {
+  --s3-live-hex: #D5C8C0;
+  --s3-reticle-ink: #080808;
+  --s3-reticle-stroke: rgba(8, 8, 8, 0.62);
+  --s3-reticle-halo: rgba(255, 255, 255, 0.42);
+  --s3-dome-well: rgba(255, 255, 255, 0.16);
+
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: s3-card;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 8px;
+  gap: 6px;
+  background-color: var(--s3-live-hex);
+  box-shadow: inset 0 0 0 1px rgba(20, 20, 19, 0.08);
+  user-select: none;
+}
+
+.cell--stick-s3 button:focus-visible,
+.s3-dialog button:focus-visible,
+.s3-dialog input:focus-visible,
+.s3-dome-pad:focus-visible {
+  outline: 2px solid var(--s3-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- Top Floating Swiss Paper Capsule ---------- */
+
+.s3-hud-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 6px;
+  background: var(--s3-paper);
+  border: 1px solid var(--s3-capsule-border);
+  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.06);
+  z-index: 2;
+}
+
+.s3-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.s3-index {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--s3-ink-3);
+}
+
+.s3-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--s3-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.s3-top-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+/* 4-Mode Segmented Selector inside Top Capsule */
+.s3-mode-group {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 5px;
+  background: var(--s3-track);
+  gap: 1px;
+}
+
+.s3-mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--s3-ink-2);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  height: 19px;
+  padding: 0 5px;
+  border-radius: 3.5px;
+  cursor: pointer;
+  transition: background var(--s3-ease), color var(--s3-ease);
+}
+
+.s3-mode-btn:hover {
+  color: var(--s3-ink);
+}
+
+.s3-mode-btn[aria-pressed="true"] {
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+/* Compact Mode Cycle Button (shown on medium/narrow containers) */
+.s3-mode-cycle {
+  display: none;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--s3-border);
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Link Status Pill */
+.s3-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1px solid var(--s3-sim-border);
+  background: var(--s3-sim-bg);
+  color: var(--s3-sim);
+  white-space: nowrap;
+}
+
+.s3-status-pill.is-live {
+  border-color: var(--s3-live-border);
+  background: var(--s3-live-bg);
+  color: var(--s3-live);
+}
+
+.s3-status-pill.is-hold {
+  border-color: rgba(217, 79, 30, 0.35);
+  background: var(--s3-signal-bg);
+  color: var(--s3-signal-ink);
+}
+
+.s3-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.s3-status-pill.is-hold .s3-status-dot {
+  border-radius: 1.5px;
+}
+
+.s3-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 21px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--s3-border);
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  font-size: 10.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s3-open-btn:hover {
+  border-color: #bcbcb6;
+  background: var(--s3-recess);
+}
+
+/* ---------- Center Open-Pigment Stage & Leica/Braun Gravity Dome ---------- */
+
+.s3-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s3-dome-pad {
+  position: relative;
+  width: clamp(74px, 31cqi, 124px);
+  aspect-ratio: 1 / 1;
+  max-height: 100%;
+  border-radius: 50%;
+  background: var(--s3-dome-well);
+  cursor: grab;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s3-dome-pad:active {
+  cursor: grabbing;
+}
+
+.s3-dome-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  display: block;
+}
+
+.s3-dome-halo {
+  fill: none;
+  stroke: var(--s3-reticle-halo);
+  stroke-width: 3.2;
+}
+
+.s3-dome-ring {
+  fill: none;
+  stroke: var(--s3-reticle-stroke);
+  stroke-width: 1.35;
+}
+
+.s3-dome-ring.is-nadir {
+  stroke-dasharray: 4 3;
+}
+
+.s3-dome-cross {
+  stroke: var(--s3-reticle-stroke);
+  stroke-width: 1.1;
+}
+
+.s3-dome-stem-halo {
+  stroke: var(--s3-reticle-halo);
+  stroke-width: 3.4;
+  stroke-linecap: round;
+}
+
+.s3-dome-stem {
+  stroke: var(--s3-reticle-ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.s3-dome-puck-halo {
+  fill: var(--s3-reticle-halo);
+}
+
+.s3-dome-puck {
+  fill: var(--s3-reticle-ink);
+}
+
+.s3-dome-kin {
+  fill: none;
+  stroke: var(--s3-reticle-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+/* Transient Hardware Action Banner ("COLOR HELD", "ZERO TARED", "MODE OKLCH") */
+.s3-toast {
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(20, 20, 19, 0.88);
+  color: #ffffff;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 140ms ease;
+  white-space: nowrap;
+}
+
+.s3-toast.is-visible {
+  opacity: 1;
+}
+
+/* ---------- Bottom Floating Swiss Paper Capsule ---------- */
+
+.s3-hud-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 6px;
+  background: var(--s3-paper);
+  border: 1px solid var(--s3-capsule-border);
+  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.06);
+  z-index: 2;
+}
+
+.s3-readout-cluster {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.s3-hex-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--s3-ink);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.s3-hex-copy:hover {
+  background: rgba(20, 20, 19, 0.06);
+}
+
+.s3-hex-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--s3-live-hex);
+  box-shadow: inset 0 0 0 1px rgba(20, 20, 19, 0.22);
+  flex-shrink: 0;
+}
+
+.s3-oklch-spec {
+  font-size: 9.5px;
+  color: var(--s3-ink-2);
+  white-space: nowrap;
+}
+
+.s3-axes-inline {
+  font-size: 9.5px;
+  color: var(--s3-ink-3);
+  white-space: nowrap;
+}
+
+.s3-controls-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.s3-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--s3-border);
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.s3-chip-btn:hover {
+  border-color: #bcbcb6;
+  background: var(--s3-recess);
+}
+
+.s3-chip-btn[aria-pressed="true"] {
+  background: var(--s3-ink);
+  border-color: var(--s3-ink);
+  color: #ffffff;
+}
+
+/* Captured Pantone Mini-Swatches inside Bottom Capsule */
+.s3-swatch-strip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.s3-swatch-dot {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 3.5px;
+  border: 1.5px solid var(--s3-ink);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 140ms ease;
+}
+
+.s3-swatch-dot:hover {
+  transform: scale(1.14);
+}
+
+/* Micro Specimen Badge (only visible when Cell 03 shrinks grid <= 229px) */
+.s3-micro {
+  display: none;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+
+.s3-micro-pill {
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--s3-paper);
+  border: 1px solid var(--s3-capsule-border);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--s3-ink);
+}
+
+/* ---------- 4-Tier @container Queries (140px .. 960px resilience) ---------- */
+
+@container s3-card (max-width: 430px) {
+  .s3-axes-inline {
+    display: none;
+  }
+  .s3-mode-group {
+    display: none;
+  }
+  .s3-mode-cycle {
+    display: inline-flex;
+  }
+}
+
+@container s3-card (max-width: 335px) {
+  .s3-index,
+  .s3-open-label,
+  .s3-oklch-spec,
+  .s3-tare-btn {
+    display: none;
+  }
+  .cell--stick-s3 {
+    padding: 6px;
+    gap: 4px;
+  }
+  .s3-swatch-strip .s3-swatch-dot:nth-child(n+4) {
+    display: none;
+  }
+}
+
+@container s3-card (max-width: 235px) {
+  .s3-stage,
+  .s3-hud-bottom,
+  .s3-mode-cycle,
+  .s3-title {
+    display: none;
+  }
+  .s3-micro {
+    display: flex;
+  }
+}
+
+/* ==========================================================================
+   2. EXPANDED HARDWARE TWIN & COLORIMETER WORKBENCH (<dialog>)
+   ========================================================================== */
+
+.s3-dialog {
+  margin: auto;
+  width: min(94vw, 940px);
+  max-height: min(90dvh, 740px);
+  border: 1px solid var(--s3-border);
+  border-radius: 12px;
+  background: var(--s3-paper-solid);
+  box-shadow: 0 24px 60px rgba(20, 20, 19, 0.18);
+  padding: 0;
+  overflow: hidden;
+}
+
+.s3-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.s3-dialog::backdrop {
+  background: rgba(244, 244, 242, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.s3-dlg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--s3-hairline);
+  background: var(--s3-canvas);
+}
+
+.s3-dlg-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.s3-dlg-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--s3-ink);
+}
+
+.s3-dlg-sub {
+  font-size: 11px;
+  color: var(--s3-ink-3);
+}
+
+.s3-dlg-close {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--s3-border);
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s3-dlg-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 0;
+}
+
+@media (max-width: 760px) {
+  .s3-dlg-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Left Column: CSS-3D M5StickS3 Hardware Twin + 60-Sample XYZ Oscilloscope */
+.s3-dlg-left {
+  padding: 16px;
+  background: var(--s3-recess);
+  border-right: 1px solid var(--s3-hairline);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.s3-twin-stage {
+  width: 100%;
+  height: 256px;
+  perspective: 720px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.9), rgba(234,234,230,0.65));
+  border: 1px solid var(--s3-border);
+  border-radius: 10px;
+  position: relative;
+  overflow: hidden;
+}
+
+.s3-twin-rig {
+  width: 96px;
+  height: 196px;
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 65ms linear;
+}
+
+.s3-twin-body {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: linear-gradient(160deg, #2a2a28 0%, #161615 100%);
+  border: 1.5px solid #3f3f3c;
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 8px 10px;
+  gap: 8px;
+  backface-visibility: hidden;
+}
+
+.s3-twin-back {
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  background: #1b1b19;
+  border: 1.5px solid #3f3f3c;
+  color: #d4d4ce;
+  transform: rotateY(180deg);
+  backface-visibility: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px;
+  text-align: center;
+  font-size: 9.5px;
+}
+
+.s3-twin-lcd {
+  width: 78px;
+  height: 138px;
+  border-radius: 5px;
+  background: #101010;
+  border: 1px solid #3c3c39;
+  display: block;
+}
+
+.s3-twin-btna {
+  width: 44px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid #b43a10;
+  background: linear-gradient(180deg, #ef6432 0%, #d94f1e 100%);
+  color: #ffffff;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.s3-twin-btnb {
+  position: absolute;
+  right: -7px;
+  top: 62px;
+  width: 7px;
+  height: 28px;
+  border-radius: 0 4px 4px 0;
+  border: 1px solid #52524e;
+  background: #3a3a37;
+  cursor: pointer;
+  padding: 0;
+}
+
+.s3-twin-caption {
+  font-size: 10.5px;
+  color: var(--s3-ink-2);
+  text-align: center;
+  line-height: 1.35;
+}
+
+.s3-scope-card {
+  width: 100%;
+  background: var(--s3-paper-solid);
+  border: 1px solid var(--s3-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.s3-scope-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--s3-ink-2);
+}
+
+.s3-scope-canvas {
+  width: 100%;
+  height: 76px;
+  display: block;
+  border-radius: 4px;
+  background: #141413;
+}
+
+/* Right Column: Live Colorimeter, Link Bar, Modes, and Swatch Tear-Sheet */
+.s3-dlg-right {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.s3-hero-swatch {
+  border-radius: 10px;
+  min-height: 112px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid rgba(20, 20, 19, 0.12);
+  transition: background-color 60ms linear;
+}
+
+.s3-hero-pill {
+  align-self: flex-start;
+  background: var(--s3-paper);
+  border: 1px solid var(--s3-capsule-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.s3-hero-hex {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--s3-ink);
+}
+
+.s3-hero-metrics {
+  font-size: 11px;
+  color: var(--s3-ink-2);
+}
+
+.s3-section-box {
+  border: 1px solid var(--s3-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--s3-canvas);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.s3-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--s3-ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.s3-btn-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.s3-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border: 1px solid var(--s3-border);
+  background: var(--s3-paper-solid);
+  color: var(--s3-ink);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.s3-btn:hover {
+  border-color: #b8b8b2;
+  background: var(--s3-recess);
+}
+
+.s3-btn--primary {
+  background: var(--s3-ink);
+  border-color: var(--s3-ink);
+  color: #ffffff;
+}
+
+.s3-btn--primary:hover {
+  background: #2b2b29;
+}
+
+.s3-btn[aria-pressed="true"] {
+  background: var(--s3-ink);
+  border-color: var(--s3-ink);
+  color: #ffffff;
+}
+
+.s3-cmd-pre {
+  background: #141413;
+  color: #f4f4f1;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  overflow-x: auto;
+}
+
+.s3-deck-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 6px;
+}
+
+.s3-deck-card {
+  border: 1px solid var(--s3-border);
+  border-radius: 6px;
+  background: var(--s3-paper-solid);
+  overflow: hidden;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+}
+
+.s3-deck-color {
+  height: 36px;
+  width: 100%;
+  border-bottom: 1px solid rgba(20, 20, 19, 0.08);
+}
+
+.s3-deck-meta {
+  padding: 4px 6px;
+  font-size: 9.5px;
+  color: var(--s3-ink);
+  display: flex;
+  justify-content: space-between;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .s3-twin-rig,
+  .s3-swatch-dot,
+  .s3-hero-swatch,
+  .s3-toast {
+    transition: none !important;
+  }
+}
