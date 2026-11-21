@@ -57,3 +57,88 @@ test('buildMeshFromScene tessellates primitives and exportMeshToOBJ outputs vali
   assert.match(obj, /^v /m);
   assert.match(obj, /^f /m);
 });
+
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const FAKE_KEY = 'AIzaFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE00';
+
+function makeStorage(bag, throws) {
+  return {
+    getItem: (k) => { if (throws) throw new Error('SecurityError'); return Object.prototype.hasOwnProperty.call(bag, k) ? bag[k] : null; },
+    setItem: (k, v) => { if (throws) throw new Error('QuotaExceededError'); bag[k] = String(v); },
+    removeItem: (k) => { if (throws) throw new Error('SecurityError'); delete bag[k]; }
+  };
+}
+
+function loadClient(opts) {
+  const o = opts || {};
+  const bags = { session: Object.create(null), local: Object.create(null) };
+  const events = [];
+  const sandbox = {
+    console, Date, JSON, Promise, AbortController,
+    sessionStorage: makeStorage(bags.session, o.throwingStorage),
+    localStorage: makeStorage(bags.local, o.throwingStorage),
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init && init.detail; } },
+    dispatchEvent: (ev) => { events.push(ev.type); return true; },
+    fetch: () => Promise.reject(new Error('unexpected fetch'))
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  const ctx = vm.createContext(sandbox);
+  const files = [];
+  if (o.withMatrix) files.push('../api-matrix/audio.js', '../api-matrix/probes.js');
+  files.push('client.js');
+  files.forEach((f) => vm.runInContext(fs.readFileSync(path.join(__dirname, f), 'utf8'), ctx, { filename: f }));
+  return { client: sandbox.GeminiImageTo3D.Client, matrix: sandbox.GeminiApiMatrix, bags, events };
+}
+
+test('KeyStore: a key cleared in API Matrix is gone here too', () => {
+  const env = loadClient({ withMatrix: true, throwingStorage: true });
+  env.client.KeyStore.set(FAKE_KEY, false);
+  assert.equal(env.client.KeyStore.get(), FAKE_KEY);
+  env.matrix.KeyStore.clear();
+  assert.equal(env.client.KeyStore.get(), '');
+});
+
+test('KeyStore: a key saved in API Matrix is read here; a save here fires gemini-key-changed once', () => {
+  const env = loadClient({ withMatrix: true });
+  env.matrix.KeyStore.set(FAKE_KEY, true);
+  assert.equal(env.client.KeyStore.get(), FAKE_KEY);
+  env.events.length = 0;
+  env.client.KeyStore.set(FAKE_KEY, false);
+  assert.deepEqual(env.events, ['gemini-key-changed']);
+});
+
+test('KeyStore: storage that throws keeps the key in memory and clear empties it', () => {
+  const env = loadClient({ throwingStorage: true });
+  env.client.KeyStore.set(FAKE_KEY, true);
+  assert.equal(env.client.KeyStore.get(), FAKE_KEY);
+  env.client.KeyStore.clear();
+  assert.equal(env.client.KeyStore.get(), '');
+});
+
+test('KeyStore.mask never shows more than 8 key characters', () => {
+  const env = loadClient({});
+  const m = env.client.KeyStore.mask(FAKE_KEY);
+  assert.equal(m.replace(/•/g, '').length, 8);
+  assert.ok(!m.includes(FAKE_KEY.slice(4, 12)));
+});
+
+test('isHeaderSafeKey rejects spaces and non-ASCII', () => {
+  assert.equal(Client.isHeaderSafeKey(FAKE_KEY), true);
+  assert.equal(Client.isHeaderSafeKey('AIza key'), false);
+  assert.equal(Client.isHeaderSafeKey('AIza…'), false);
+});
+
+test('parse3DSceneFromText drops parts with Infinity or absurd coordinates', () => {
+  const scene = Client.parse3DSceneFromText(
+    '{"title":"x","parts":[' +
+    '{"type":"box","pos":[1e999,0,0],"rot":[0,0,0],"scale":[1,1,1]},' +
+    '{"type":"box","pos":[1e9,0,0],"rot":[0,0,0],"scale":[1,1,1]},' +
+    '{"type":"box","pos":[0,0,0],"rot":[0,0,0],"scale":[1,1,1]}]}'
+  );
+  assert.equal(scene.parts.length, 1);
+  assert.throws(() => Client.parse3DSceneFromText('{"parts":[{"pos":[1e999,0,0]}]}'), /No valid 3D parts/);
+});

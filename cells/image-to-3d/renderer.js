@@ -241,6 +241,32 @@
     return lines.join('\n') + '\n';
   }
 
+  // Stage colours from the shared tokens (ui/base.css), read once and cached.
+  let palette = null;
+  function getPalette() {
+    if (palette) return palette;
+    palette = { well: '#f7f7f5', surface: '#ffffff', shadow: 'rgba(22, 22, 21, 0.07)' };
+    try {
+      const cs = global.getComputedStyle(global.document.documentElement);
+      palette.well = cs.getPropertyValue('--ui-well').trim() || palette.well;
+      palette.surface = cs.getPropertyValue('--ui-surface').trim() || palette.surface;
+    } catch (_err) {}
+    return palette;
+  }
+
+  // One visibilitychange listener for every viewer on the page: resuming the tab restarts
+  // only viewers that still have something to spin (frame() stops the rest at once).
+  const liveViewers = new Set();
+  let visibilityHooked = false;
+  function hookVisibility() {
+    if (visibilityHooked || !global.document || typeof global.document.addEventListener !== 'function') return;
+    visibilityHooked = true;
+    global.document.addEventListener('visibilitychange', function () {
+      if (global.document.visibilityState === 'hidden') return;
+      liveViewers.forEach(function (draw) { draw(); });
+    });
+  }
+
   function createViewer(canvas, options) {
     const opts = options || {};
     const ctx = canvas.getContext('2d');
@@ -262,19 +288,22 @@
       const w = Math.max(1, Math.floor(rect.width));
       const h = Math.max(1, Math.floor(rect.height));
       const dpr = Math.min(global.devicePixelRatio || 1, 2);
-      if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-        canvas.width = w * dpr;
-        canvas.height = h * dpr;
+      // Integer backing size: at a fractional DPR (page zoom) `w * dpr` never equals the
+      // integer canvas.width, which reallocated the canvas on every frame.
+      const bw = Math.round(w * dpr);
+      const bh = Math.round(h * dpr);
+      if (canvas.width !== bw || canvas.height !== bh) {
+        canvas.width = bw;
+        canvas.height = bh;
       }
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.fillStyle = '#16171a';
-      ctx.fillRect(0, 0, w, h);
+      const pal = getPalette();
 
-      // Subtle radial studio backdrop
+      // Light well with a soft lit centre, so the stage belongs to the page.
       const grad = ctx.createRadialGradient(w * 0.5, h * 0.45, 4, w * 0.5, h * 0.5, Math.max(w, h) * 0.7);
-      grad.addColorStop(0, '#25272d');
-      grad.addColorStop(1, '#141518');
+      grad.addColorStop(0, pal.surface);
+      grad.addColorStop(1, pal.well);
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
@@ -286,6 +315,13 @@
       const focal = Math.min(w, h) * 1.18;
       const cx = w * 0.5;
       const cyScreen = h * 0.52;
+
+      // Ground shadow under the normalised mesh (its bottom sits near y = -1.05).
+      const unit = focal / camDist;
+      ctx.fillStyle = pal.shadow;
+      ctx.beginPath();
+      ctx.ellipse(cx, cyScreen + unit * 1.05 * Math.cos(pitch), unit * 0.85, unit * 0.16, 0, 0, Math.PI * 2);
+      ctx.fill();
 
       const transformed = new Array(mesh.vertices.length);
       for (let i = 0; i < mesh.vertices.length; i++) {
@@ -349,20 +385,56 @@
       }
     }
 
-    function tick() {
-      if (autoSpin && !dragging && mesh) {
-        yaw += 0.008;
-      }
-      projectAndDraw();
-      rafId = global.requestAnimationFrame(tick);
+    // Draw on demand. The frame loop runs only while a mesh is auto-spinning in a canvas that
+    // is on screen in a visible tab; otherwise one frame is drawn per change (mesh, camera,
+    // resize) and nothing is scheduled. Three tiles x 8 viewers used to loop forever.
+    let onScreen = true;
+    function spinning() {
+      return Boolean(mesh) && autoSpin && !dragging && onScreen &&
+        !(global.document && global.document.visibilityState === 'hidden');
     }
+
+    function frame() {
+      rafId = null;
+      if (spinning()) yaw += 0.008;
+      projectAndDraw();
+      if (spinning()) requestDraw();
+    }
+
+    function requestDraw() {
+      if (rafId || typeof global.requestAnimationFrame !== 'function') return;
+      rafId = global.requestAnimationFrame(frame);
+    }
+
+    const observers = [];
+    if (typeof global.IntersectionObserver === 'function') {
+      const io = new global.IntersectionObserver(function (entries) {
+        const last = entries[entries.length - 1];
+        onScreen = Boolean(last && last.isIntersecting);
+        if (onScreen) requestDraw();
+      });
+      io.observe(canvas);
+      observers.push(io);
+    }
+    if (typeof global.ResizeObserver === 'function') {
+      // Dialog canvases are 0x0 until the dialog opens; redraw at the new size.
+      const ro = new global.ResizeObserver(function () { requestDraw(); });
+      ro.observe(canvas);
+      observers.push(ro);
+    }
+    liveViewers.add(requestDraw);
+    hookVisibility();
+
+    // A lost 2D context comes back blank; repaint once it is restored.
+    canvas.addEventListener('contextrestored', function () { requestDraw(); });
 
     canvas.addEventListener('pointerdown', function (e) {
       dragging = true;
       autoSpin = false;
       lastX = e.clientX;
       lastY = e.clientY;
-      if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId);
+      // Throws NotFoundError when the pointer is no longer active (released, synthetic).
+      try { if (canvas.setPointerCapture) canvas.setPointerCapture(e.pointerId); } catch (_err) {}
     });
 
     canvas.addEventListener('pointermove', function (e) {
@@ -373,6 +445,7 @@
       lastY = e.clientY;
       yaw += dx * 0.012;
       pitch = Math.max(-1.35, Math.min(1.35, pitch + dy * 0.012));
+      requestDraw();
       if (typeof opts.onOrbit === 'function') {
         opts.onOrbit({ yaw: yaw, pitch: pitch, zoom: zoom });
       }
@@ -384,21 +457,27 @@
     canvas.addEventListener('pointerup', endDrag);
     canvas.addEventListener('pointercancel', endDrag);
 
+    // Zoom only on a trackpad pinch or Ctrl/Cmd + wheel, and only with a mesh: twelve
+    // viewports cover most of three tiles, and a plain wheel there must scroll the page.
     canvas.addEventListener('wheel', function (e) {
+      if (!mesh || !(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
       zoom = Math.max(0.5, Math.min(2.2, zoom - e.deltaY * 0.0012));
+      requestDraw();
       if (typeof opts.onOrbit === 'function') {
         opts.onOrbit({ yaw: yaw, pitch: pitch, zoom: zoom });
       }
     }, { passive: false });
 
-    rafId = global.requestAnimationFrame(tick);
+    projectAndDraw();
 
     return {
       setMesh: function (nextMesh) {
         mesh = nextMesh;
         autoSpin = true;
+        // Synchronous draw: rAF / observers may not run in a hidden or background tab.
         projectAndDraw();
+        requestDraw();
       },
       setCamera: function (cam) {
         if (!cam) return;
@@ -406,9 +485,16 @@
         pitch = cam.pitch;
         zoom = cam.zoom;
         autoSpin = false;
+        requestDraw();
+      },
+      isAnimating: function () {
+        return rafId !== null;
       },
       destroy: function () {
-        if (rafId) global.cancelAnimationFrame(rafId);
+        if (rafId && typeof global.cancelAnimationFrame === 'function') global.cancelAnimationFrame(rafId);
+        rafId = null;
+        observers.forEach(function (o) { o.disconnect(); });
+        liveViewers.delete(requestDraw);
       }
     };
   }

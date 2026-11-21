@@ -40,6 +40,13 @@
   ].join('\n');
 
   let memoryKey = '';
+  // True only when the last set() could not reach browser storage (quota, private mode).
+  let memoryOnly = false;
+
+  function matrixKeyStore() {
+    const ks = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
+    return ks && typeof ks.get === 'function' && typeof ks.set === 'function' ? ks : null;
+  }
 
   function safeGet(storeName, key) {
     try {
@@ -68,40 +75,64 @@
     } catch (_err) {}
   }
 
+  // GeminiApiMatrix.KeyStore (cells/api-matrix/probes.js) is the shared contract: when it is
+  // loaded its answer is authoritative, including '' after another cell cleared the key.
+  // The local path below runs only when this file is used without the API Matrix cell.
   const KeyStore = {
     get: function () {
+      const matrixKs = matrixKeyStore();
+      if (matrixKs) {
+        try {
+          memoryKey = String(matrixKs.get() || '');
+          return memoryKey;
+        } catch (_err) {}
+      }
       const s = safeGet('sessionStorage', SESSION_KEY);
       if (s) { memoryKey = s; return s; }
       const l = safeGet('localStorage', LOCAL_KEY);
       if (l) { memoryKey = l; return l; }
-      const matrixKs = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
-      if (matrixKs && typeof matrixKs.get === 'function') {
-        try {
-          const k = matrixKs.get();
-          if (k) { memoryKey = k; return k; }
-        } catch (_err) {}
-      }
-      return memoryKey || '';
+      if (!memoryOnly) memoryKey = '';
+      return memoryKey;
     },
     set: function (rawKey, persistLocal) {
       const cleaned = String(rawKey || '').trim();
       memoryKey = cleaned;
+      const matrixKs = matrixKeyStore();
+      if (matrixKs) {
+        // Writes storage, syncs Decisions/Prosody and fires `gemini-key-changed`.
+        try {
+          matrixKs.set(cleaned, Boolean(persistLocal));
+          return cleaned;
+        } catch (_err) {}
+      }
       safeRemove('sessionStorage', SESSION_KEY);
       safeRemove('localStorage', LOCAL_KEY);
+      let stored = false;
       if (cleaned) {
-        if (persistLocal) safeSet('localStorage', LOCAL_KEY, cleaned);
-        else safeSet('sessionStorage', SESSION_KEY, cleaned);
+        stored = persistLocal
+          ? safeSet('localStorage', LOCAL_KEY, cleaned)
+          : safeSet('sessionStorage', SESSION_KEY, cleaned);
       }
-      const matrixKs = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
-      if (matrixKs && typeof matrixKs.set === 'function') {
-        try { matrixKs.set(cleaned, Boolean(persistLocal)); } catch (_err) {}
-      }
+      memoryOnly = Boolean(cleaned) && !stored;
       return cleaned;
     },
     clear: function () {
       KeyStore.set('', false);
+    },
+    // Display form only; the raw key never goes into the DOM.
+    mask: function (key) {
+      const k = String(key || '').trim();
+      if (!k) return '';
+      if (k.length < 16) return '••••' + k.slice(-2);
+      return k.slice(0, 4) + '••••' + k.slice(-4);
     }
   };
+
+  // fetch() throws a raw TypeError for a header value with non-ISO-8859-1 characters,
+  // once per model; catch it before any request with one message the user can act on.
+  function isHeaderSafeKey(key) {
+    return /^[\x21-\x7e]+$/.test(String(key || ''));
+  }
 
   function stripModelsPrefix(name) {
     return String(name || '').replace(/^models\//, '');
@@ -145,6 +176,13 @@
     return chosen.slice(0, 6);
   }
 
+  // Model coordinates are about 2 units across; anything past this is malformed output.
+  const MAX_COORD = 1000;
+
+  function isSaneNumber(v) {
+    return Number.isFinite(v) && Math.abs(v) <= MAX_COORD;
+  }
+
   function parse3DSceneFromText(rawText) {
     let text = String(rawText || '').trim();
     if (!text) throw new Error('Empty model response');
@@ -164,7 +202,8 @@
       const pos = Array.isArray(p.pos) && p.pos.length === 3 ? p.pos.map(Number) : [0, 0, 0];
       const rot = Array.isArray(p.rot) && p.rot.length === 3 ? p.rot.map(Number) : [0, 0, 0];
       const scale = Array.isArray(p.scale) && p.scale.length === 3 ? p.scale.map(Number) : [0.5, 0.5, 0.5];
-      if (pos.some(Number.isNaN) || rot.some(Number.isNaN) || scale.some(Number.isNaN)) continue;
+      // Infinity / 1e308 used to pass a NaN-only check and collapse the whole mesh to nothing.
+      if (!pos.concat(rot, scale).every(isSaneNumber)) continue;
       parts.push({
         type: String(p.type || 'box').toLowerCase(),
         pos: pos,
@@ -277,6 +316,7 @@
   NS.Client = {
     DEFAULT_MODELS: DEFAULT_SIX_MODELS,
     KeyStore: KeyStore,
+    isHeaderSafeKey: isHeaderSafeKey,
     listEligibleModels: listEligibleModels,
     pickSixModels: pickSixModels,
     parse3DSceneFromText: parse3DSceneFromText,

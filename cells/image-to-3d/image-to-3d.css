@@ -1,184 +1,110 @@
 /* ==========================================================================
-   cells/image-to-3d/image-to-3d.css — Cell 11: Image -> 3D (4-Model Arena)
-   Scoped to .cell--image-to-3d / .i3d-* using ui/base.css --ui-* tokens.
+   cells/image-to-3d/image-to-3d.css — Cells 11–13: Image -> 3D (6-model arena)
+   Scoped to .cell--image-to-3d / .i3d-*. Tile anatomy, buttons, pill and dialog
+   come from ui/base.css; this file holds only the arena, the intake bar and the
+   key drawer. Colours, sizes and radii are --ui-* tokens.
    ========================================================================== */
 
+/* Owner's layout: two grid columns, row height of a 4:3 neighbour. */
 .cell--image-to-3d {
   grid-column: span 2;
   aspect-ratio: 8 / 3;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow: hidden;
-  position: relative;
+}
+
+/* Phone grid (2 columns): 8:3 left the six views about 24 px tall. */
+@media (max-width: 767px) {
+  .cell--image-to-3d {
+    aspect-ratio: 4 / 3;
+  }
+}
+
+.cell--image-to-3d [hidden] {
+  display: none !important;
 }
 
 .cell--image-to-3d.i3d-dragover {
   border-color: var(--ui-accent);
-  box-shadow: inset 0 0 0 2px var(--ui-accent);
 }
 
-/* Inline key drawer */
+.cell--image-to-3d .ui-pill-label {
+  min-width: 7ch;          /* "No key" / "Running" / "Done" without a header shift */
+}
+
+/* Key drawer ------------------------------------------------------------------ */
+
 .i3d-key-bar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px var(--ui-3);
+  gap: var(--ui-2);
+  padding: var(--ui-1) var(--ui-2) var(--ui-1) var(--ui-3);
   border-bottom: 1px solid var(--ui-hairline);
   background: var(--ui-well);
-}
-
-.i3d-key-bar[hidden] {
-  display: none;
 }
 
 .i3d-key-input {
   flex: 1 1 auto;
   min-width: 0;
   height: var(--ui-ctl-h-sm);
-  padding: 0 8px;
+  padding: 0 var(--ui-2);
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
   color: var(--ui-ink);
-  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-mono);
 }
 
 .i3d-key-persist {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  gap: var(--ui-1);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-sans);
   color: var(--ui-ink-2);
   white-space: nowrap;
   cursor: pointer;
 }
 
-/* Body */
+.i3d-key-input:focus-visible,
+.i3d-key-persist input:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 1px;
+}
+
+/* Arena: six light wells, 3 x 2 ------------------------------------------------- */
+
 .i3d-body {
-  gap: 6px;
-  padding: 8px;
+  padding: var(--ui-2);
 }
 
-/* Top drop strip */
-.i3d-dropbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 6px;
-  border: 1px dashed var(--ui-line);
-  border-radius: var(--ui-radius-sm);
-  background: var(--ui-well);
-  min-width: 0;
-  cursor: pointer;
-  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
-}
-
-.i3d-dropbar:hover {
-  border-color: var(--ui-ink-3);
-  background: var(--ui-surface);
-}
-
-.i3d-thumb {
-  width: 24px;
-  height: 24px;
-  border-radius: 3px;
-  object-fit: cover;
-  border: 1px solid var(--ui-hairline);
-  background: var(--ui-surface);
-  flex: 0 0 auto;
-}
-
-.i3d-thumb[hidden] {
-  display: none;
-}
-
-.i3d-drop-text {
-  flex: 1 1 auto;
-  min-width: 0;
-  font: 400 var(--ui-fs-1) / 1.2 var(--ui-sans);
-  color: var(--ui-ink-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.i3d-file-input {
-  display: none;
-}
-
-/* 6 side-by-side 3D viewers (3x2 inside the 2x1 cell) */
-.i3d-arena {
+.i3d-arena,
+.i3d-dialog-arena {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: repeat(2, minmax(0, 1fr));
-  gap: 4px;
+  gap: var(--ui-1);
 }
 
 .i3d-slot {
   position: relative;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--ui-hairline);
   border-radius: var(--ui-radius-sm);
-  background: #16171a;
+  background: var(--ui-well);
   overflow: hidden;
+  container: i3d-slot / inline-size;
+  transition: border-color var(--ui-dur) var(--ui-ease);
 }
 
-.i3d-slot-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 4px 5px;
-  background: rgba(22, 23, 26, 0.92);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  min-width: 0;
-}
-
-.i3d-model-select {
-  appearance: none;
-  flex: 1 1 auto;
-  min-width: 0;
-  border: 0;
-  border-radius: 3px;
-  padding: 2px 14px 2px 3px;
-  background: transparent
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%239c9ca3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
-    no-repeat right 3px center;
-  font: 600 10px / 1.1 var(--ui-mono);
-  color: #f3f3f0;
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-
-.i3d-model-select:hover {
-  background-color: rgba(255, 255, 255, 0.08);
-}
-
-.i3d-model-select option {
-  background: #16171a;
-  color: #f3f3f0;
-}
-
-.i3d-slot-meta {
-  flex: 0 0 auto;
-  font: 400 9px / 1 var(--ui-mono);
-  font-variant-numeric: tabular-nums;
-  color: #9c9ca3;
+.i3d-slot[data-state="running"] {
+  border-color: var(--ui-accent);
 }
 
 .i3d-canvas-wrap {
-  position: relative;
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
+  position: absolute;
+  inset: 0;
   cursor: grab;
   touch-action: none;
 }
@@ -193,138 +119,294 @@
   height: 100%;
 }
 
+/* Model + state laid over the top of the well (zero height cost). */
+.i3d-slot-head {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-1);
+  height: var(--ui-ctl-h-sm);
+  padding: 0 var(--ui-1) 0 2px;
+  pointer-events: none;
+}
+
+.i3d-slot-head > * {
+  pointer-events: auto;
+}
+
+.i3d-model-select {
+  appearance: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 14px 0 var(--ui-1);
+  border: 1px solid transparent;
+  border-radius: var(--ui-radius-sm);
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%2366665f' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 3px center;
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.02em;
+  color: var(--ui-ink-2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  field-sizing: content;   /* as wide as the chosen name, so the chevron sits beside it */
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
+}
+
+.i3d-model-select:hover:not(:disabled) {
+  border-color: var(--ui-line);
+  background-color: var(--ui-surface);
+}
+
+.i3d-model-select:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 0;
+}
+
+.i3d-model-select:disabled {
+  cursor: default;
+  opacity: 1;
+  background-image: none;
+  padding-right: var(--ui-1);
+}
+
+.i3d-slot-meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-ink-3);
+  white-space: nowrap;
+}
+
+.i3d-slot[data-state="running"] .i3d-slot-meta,
+.i3d-slot[data-state="failed"] .i3d-slot-meta {
+  color: var(--ui-accent);
+}
+
+.i3d-slot[data-state="done"] .i3d-slot-meta {
+  color: var(--ui-ink-2);
+}
+
+.i3d-obj-btn.ui-btn--sm {
+  height: 20px;
+  padding: 0 6px;
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+}
+
+/* Messages (failed / stopped) on the well, below the head. */
 .i3d-slot-overlay {
   position: absolute;
-  inset: 0;
+  inset: var(--ui-ctl-h-sm) 0 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 8px;
-  text-align: center;
+  justify-content: flex-start;
+  padding: var(--ui-1) var(--ui-2) var(--ui-2);
   overflow-y: auto;
   pointer-events: none;
 }
 
 .i3d-slot-overlay--err {
-  justify-content: flex-start;
-  text-align: left;
-  background: rgba(22, 23, 26, 0.9);
+  background: var(--ui-well);
   pointer-events: auto;
 }
 
-.i3d-slot-overlay[hidden] {
-  display: none;
-}
-
 .i3d-slot-msg {
-  font: 400 9.5px / 1.3 var(--ui-mono);
-  color: #b4b4bc;
-  word-break: break-word;
+  font: 400 var(--ui-fs-1) / 1.4 var(--ui-mono);
+  color: var(--ui-ink-3);
+  overflow-wrap: anywhere;
 }
 
 .i3d-slot-msg--err {
-  color: #f48c72;
+  color: var(--ui-accent);
 }
 
 .i3d-spinner {
-  width: 14px;
-  height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-top-color: #ffffff;
-  border-radius: 50%;
-  animation: i3d-spin 700ms linear infinite;
+  display: none;           /* running is shown by the rust edge + elapsed readout */
 }
 
-@keyframes i3d-spin {
-  to {
-    transform: rotate(360deg);
-  }
+/* The mesh title is read out in the tile and captioned in the 6-Up dialog. */
+.i3d-slot-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
-.i3d-slot-foot {
+/* Intake bar: image, status, the one primary ------------------------------------ */
+
+.i3d-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  padding: 2px 5px;
-  background: rgba(22, 23, 26, 0.92);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  min-height: 18px;
+  gap: var(--ui-2);
+  height: var(--ui-foot-h);
+  padding: 0 var(--ui-2);
+  border-top: 1px solid var(--ui-hairline);
+  min-width: 0;
 }
 
-.i3d-slot-title {
+.i3d-dropbar {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--ui-ctl-h-sm);
+  max-width: 50%;
   min-width: 0;
-  font: 400 9px / 1.1 var(--ui-sans);
-  color: #a1a1aa;
+  padding: 0 var(--ui-2);
+  border: 1px dashed var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
+  color: var(--ui-ink-2);
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
+}
+
+.i3d-dropbar:hover {
+  border-color: var(--ui-ink-3);
+  background: var(--ui-surface);
+}
+
+.i3d-dropbar:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
+}
+
+.i3d-dropbar--has-image {
+  border-style: solid;
+  border-color: var(--ui-hairline);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+}
+
+.i3d-dragover .i3d-dropbar {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-tint);
+}
+
+.i3d-thumb {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  background: var(--ui-well);
+}
+
+.i3d-drop-text {
+  min-width: 0;
+  font: 400 var(--ui-fs-2) / 1.3 var(--ui-sans);   /* 1.0 clipped descenders */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.i3d-obj-btn {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: #d4d4d8;
-  font: 500 9px / 1 var(--ui-mono);
-  cursor: pointer;
-  padding: 1px 3px;
-  border-radius: 3px;
-}
-
-.i3d-obj-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
-}
-
-.i3d-obj-btn[hidden] {
+.i3d-file-input {
   display: none;
 }
 
-/* Full-width 4-up Studio dialog */
-.i3d-dialog {
-  width: min(1240px, calc(100vw - 24px));
-  height: min(680px, calc(100dvh - 24px));
+.i3d-status {
+  flex: 1 1 auto;
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: 0.02em;
+  color: var(--ui-ink-3);
+}
+
+.i3d-run-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 8ch;          /* "Run 6×" <-> "Stop" without a shift */
+}
+
+/* Primary at rest but no image yet: quiet, still focusable for its tip. */
+.i3d-run-btn.ui-btn--primary[aria-disabled="true"] {
+  background: var(--ui-surface);
+  border-color: var(--ui-hairline);
+  color: var(--ui-ink-3);
+}
+
+/* 6-Up dialog --------------------------------------------------------------------- */
+
+.i3d-dialog[open] {
   display: flex;
   flex-direction: column;
-}
-
-.i3d-dialog:not([open]) {
-  display: none;
+  width: min(1240px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 32px));
 }
 
 .i3d-dialog-arena {
-  flex: 1 1 auto;
-  min-height: 0;
   padding: var(--ui-3);
-  background: var(--ui-paper);
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: var(--ui-2);
 }
 
-.i3d-dialog-arena .i3d-model-name {
-  font-size: 11px;
+.i3d-dialog-arena .i3d-slot-head {
+  height: var(--ui-ctl-h);
+  padding: 0 var(--ui-2) 0 var(--ui-1);
 }
 
-.i3d-dialog-arena .i3d-slot-meta {
-  font-size: 10px;
+.i3d-dialog-arena .i3d-model-select {
+  font-size: var(--ui-fs-2);
+  height: var(--ui-ctl-h-sm);
 }
 
-@container ui-tile (max-width: 319px) {
-  .i3d-arena {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(0, 1fr));
-  }
+.i3d-dialog-arena .i3d-slot-overlay {
+  inset: var(--ui-ctl-h) 0 0;
+}
+
+.i3d-dialog-arena .i3d-slot-title {
+  left: var(--ui-3);
+  bottom: var(--ui-2);
+  width: auto;
+  height: auto;
+  max-width: calc(100% - var(--ui-6));
+  clip: auto;
+  text-overflow: ellipsis;
+  font: 400 var(--ui-fs-2) / 1.2 var(--ui-sans);
+  color: var(--ui-ink-2);
+  pointer-events: none;
 }
 
 @media (max-width: 767px) {
   .i3d-dialog-arena {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Narrow well: the model name keeps its room; OBJ stays in the 6-Up dialog. */
+@container i3d-slot (max-width: 159px) {
+  .i3d-obj-btn {
+    display: none;
+  }
+}
+
+/* Size steps (tile width) ------------------------------------------------------------ */
+
+@container ui-tile (max-width: 319px) {
+  .i3d-body {
+    padding: var(--ui-1);
+  }
+
+  .i3d-dropbar {
+    max-width: none;
+    flex: 1 1 auto;
+  }
+}
+
+@container ui-tile (max-width: 239px) {
+  .i3d-bar,
+  .i3d-slot-meta,
+  .i3d-obj-btn {
+    display: none;
   }
 }
