@@ -7,26 +7,51 @@
     'models/gemini-3.8-live',
     'models/gemini-live-2.5-flash-native-audio'
   ];
-  const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+  const WS_BASE =
+    'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+  const SETUP_TIMEOUT_MS = 12000;
+  const MAX_BUFFERED_BYTES = 262144;
 
-  // Share the same storage keys as Cell #1 so a key entered once works across the grid.
+  // Share the same storage keys as Cell #1 & Cell #4 so a key entered once works across the grid.
   const SESSION_KEY = 'dc_gemini_api_key_session';
   const LOCAL_KEY = 'dc_gemini_api_key_local';
   let memoryKey = '';
   let storageRestricted = false;
+  let syncingKey = false;
 
-  function safeGet(store, key) {
+  function getStore(storeName) {
     try {
-      return (store && store.getItem(key)) || '';
+      const store = global[storeName];
+      if (!store || typeof store.getItem !== 'function') {
+        storageRestricted = true;
+        return null;
+      }
+      return store;
+    } catch (_e) {
+      storageRestricted = true;
+      return null;
+    }
+  }
+
+  function safeGet(storeName, key) {
+    try {
+      const store = getStore(storeName);
+      if (!store) return '';
+      return store.getItem(key) || '';
     } catch (_e) {
       storageRestricted = true;
       return '';
     }
   }
 
-  function safeSet(store, key, val) {
+  function safeSet(storeName, key, val) {
     try {
-      if (store) store.setItem(key, val);
+      const store = getStore(storeName);
+      if (!store || typeof store.setItem !== 'function') {
+        storageRestricted = true;
+        return false;
+      }
+      store.setItem(key, val);
       return true;
     } catch (_e) {
       storageRestricted = true;
@@ -34,45 +59,122 @@
     }
   }
 
-  function safeRemove(store, key) {
+  function safeRemove(storeName, key) {
     try {
-      if (store) store.removeItem(key);
+      const store = getStore(storeName);
+      if (!store || typeof store.removeItem !== 'function') {
+        storageRestricted = true;
+        return;
+      }
+      store.removeItem(key);
     } catch (_e) {
       storageRestricted = true;
     }
   }
 
+  function syncSiblingsAndNotify(cleaned, persistLocal, mode) {
+    if (syncingKey) return;
+    syncingKey = true;
+    try {
+      ['GeminiDecisions', 'GeminiApiMatrix'].forEach(function (nsName) {
+        const ns = global[nsName];
+        const ks = ns && ((ns.Client && ns.Client.KeyStore) || ns.KeyStore);
+        if (!ks || ks === KeyStore) return;
+        try {
+          const current = typeof ks.get === 'function' ? ks.get() : null;
+          if (cleaned) {
+            if (current !== cleaned && typeof ks.set === 'function') {
+              ks.set(cleaned, Boolean(persistLocal));
+            }
+          } else if (current !== '' && typeof ks.clear === 'function') {
+            ks.clear();
+          }
+        } catch (_e) {
+          // Ignore sibling sync errors
+        }
+      });
+
+      if (typeof global.dispatchEvent === 'function') {
+        try {
+          const detail = { hasKey: Boolean(cleaned), storage: mode };
+          let ev = null;
+          if (typeof global.CustomEvent === 'function') {
+            ev = new global.CustomEvent('gemini-key-changed', { detail: detail });
+          } else if (typeof CustomEvent === 'function') {
+            ev = new CustomEvent('gemini-key-changed', { detail: detail });
+          } else if (typeof Event === 'function') {
+            ev = new Event('gemini-key-changed');
+          }
+          if (ev) global.dispatchEvent(ev);
+        } catch (_e) {
+          // Ignore CustomEvent construction errors in minimal mocks
+        }
+      }
+    } finally {
+      syncingKey = false;
+    }
+  }
+
   const KeyStore = {
     get: function () {
-      const s = safeGet(global.sessionStorage, SESSION_KEY);
+      storageRestricted = false;
+      const s = safeGet('sessionStorage', SESSION_KEY);
       if (s) {
         memoryKey = s;
         return s;
       }
-      const l = safeGet(global.localStorage, LOCAL_KEY);
+      const l = safeGet('localStorage', LOCAL_KEY);
       if (l) {
         memoryKey = l;
         return l;
       }
       if (!storageRestricted) {
         memoryKey = '';
+        return '';
       }
-      return memoryKey;
+      if (!memoryKey) {
+        const decisionsKs =
+          global.GeminiDecisions &&
+          global.GeminiDecisions.Client &&
+          global.GeminiDecisions.Client.KeyStore;
+        if (decisionsKs && typeof decisionsKs.get === 'function') {
+          try {
+            const fromDecisions = decisionsKs.get();
+            if (fromDecisions) {
+              memoryKey = fromDecisions;
+              return fromDecisions;
+            }
+          } catch (_e) {
+            // ignore
+          }
+        }
+      }
+      return memoryKey || '';
     },
-    set: function (rawKey) {
+    set: function (rawKey, persistLocal) {
       const cleaned = String(rawKey || '').trim();
       memoryKey = cleaned;
-      safeRemove(global.sessionStorage, SESSION_KEY);
-      safeRemove(global.localStorage, LOCAL_KEY);
+      safeRemove('sessionStorage', SESSION_KEY);
+      safeRemove('localStorage', LOCAL_KEY);
+      let mode = 'none';
       if (cleaned) {
-        safeSet(global.sessionStorage, SESSION_KEY, cleaned);
+        if (persistLocal) {
+          mode = safeSet('localStorage', LOCAL_KEY, cleaned) ? 'local' : 'memory';
+        } else {
+          mode = safeSet('sessionStorage', SESSION_KEY, cleaned) ? 'session' : 'memory';
+        }
       }
+      syncSiblingsAndNotify(cleaned, persistLocal, mode);
       return cleaned;
     },
     clear: function () {
       memoryKey = '';
-      safeRemove(global.sessionStorage, SESSION_KEY);
-      safeRemove(global.localStorage, LOCAL_KEY);
+      safeRemove('sessionStorage', SESSION_KEY);
+      safeRemove('localStorage', LOCAL_KEY);
+      syncSiblingsAndNotify('', false, 'none');
+    },
+    isStorageRestricted: function () {
+      return storageRestricted;
     }
   };
 
@@ -84,30 +186,49 @@
     function getCtx() {
       if (muted) return null;
       const AudioCtx = global.AudioContext || global.webkitAudioContext;
-      if (!AudioCtx) return null;
-      if (!ctx) ctx = new AudioCtx();
-      if (ctx.state === 'suspended') {
-        ctx.resume().catch(function () {});
+      if (typeof AudioCtx !== 'function') return null;
+      if (ctx && ctx.state === 'closed') {
+        ctx = null;
+      }
+      if (!ctx) {
+        try {
+          ctx = new AudioCtx();
+        } catch (_e) {
+          ctx = null;
+          return null;
+        }
+      }
+      if (ctx.state === 'suspended' && typeof ctx.resume === 'function') {
+        try {
+          const p = ctx.resume();
+          if (p && typeof p.catch === 'function') p.catch(function () {});
+        } catch (_e) {
+          // ignore
+        }
       }
       return ctx;
     }
 
     function playTone(audioCtx, freq, startOffset, duration, type, peakGain, endFreq) {
-      const now = audioCtx.currentTime + startOffset;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = type || 'sine';
-      osc.frequency.setValueAtTime(freq, now);
-      if (endFreq) {
-        osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration);
+      try {
+        const now = audioCtx.currentTime + startOffset;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type || 'sine';
+        osc.frequency.setValueAtTime(freq, now);
+        if (endFreq) {
+          osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration);
+        }
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(peakGain, now + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now);
+        osc.stop(now + duration + 0.02);
+      } catch (_e) {
+        // Never allow Web Audio synthesis limits/errors to interrupt UI handlers
       }
-      gain.gain.setValueAtTime(0.0001, now);
-      gain.gain.exponentialRampToValueAtTime(peakGain, now + 0.012);
-      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(now);
-      osc.stop(now + duration + 0.02);
     }
 
     return {
@@ -117,6 +238,18 @@
       toggleMute: function () {
         muted = !muted;
         return muted;
+      },
+      close: function () {
+        if (ctx) {
+          const prev = ctx;
+          ctx = null;
+          try {
+            const p = prev.close && prev.close();
+            if (p && typeof p.catch === 'function') p.catch(function () {});
+          } catch (_e) {
+            // ignore
+          }
+        }
       },
       playStreamToggle: function (starting) {
         const c = getCtx();
@@ -166,12 +299,31 @@
 
   // --- PCM 16kHz Helpers for Gemini Live API ---
   function downsampleTo16k(float32Buf, inputSampleRate) {
+    if (!float32Buf || !float32Buf.length || !(inputSampleRate > 0) || !Number.isFinite(inputSampleRate)) {
+      return new Float32Array(0);
+    }
     if (inputSampleRate === 16000) {
       return float32Buf;
     }
     const ratio = inputSampleRate / 16000;
     const outLength = Math.max(1, Math.round(float32Buf.length / ratio));
     const result = new Float32Array(outLength);
+
+    // Upsample via linear interpolation when inputSampleRate < 16000 (e.g. 8 kHz Bluetooth HFP)
+    if (inputSampleRate < 16000) {
+      const lastIdx = float32Buf.length - 1;
+      for (let i = 0; i < outLength; i++) {
+        const srcPos = i * ratio;
+        const idx0 = Math.min(lastIdx, Math.floor(srcPos));
+        const idx1 = Math.min(lastIdx, idx0 + 1);
+        const frac = srcPos - idx0;
+        const v0 = Number.isFinite(float32Buf[idx0]) ? float32Buf[idx0] : 0;
+        const v1 = Number.isFinite(float32Buf[idx1]) ? float32Buf[idx1] : 0;
+        result[i] = v0 + frac * (v1 - v0);
+      }
+      return result;
+    }
+
     let offsetResult = 0;
     let offsetBuffer = 0;
     while (offsetResult < result.length) {
@@ -179,10 +331,17 @@
       let accum = 0;
       let count = 0;
       for (let i = offsetBuffer; i < nextOffsetBuffer && i < float32Buf.length; i++) {
-        accum += float32Buf[i];
+        const sample = float32Buf[i];
+        accum += Number.isFinite(sample) ? sample : 0;
         count++;
       }
-      result[offsetResult] = count > 0 ? accum / count : 0;
+      if (count > 0) {
+        result[offsetResult] = accum / count;
+      } else {
+        const fallbackIdx = Math.min(offsetBuffer, float32Buf.length - 1);
+        const fallback = float32Buf[fallbackIdx];
+        result[offsetResult] = Number.isFinite(fallback) ? fallback : 0;
+      }
       offsetResult++;
       offsetBuffer = nextOffsetBuffer;
     }
@@ -190,10 +349,12 @@
   }
 
   function floatTo16BitPCMBase64(float32Buf) {
+    if (!float32Buf || !float32Buf.length) return '';
     const buffer = new ArrayBuffer(float32Buf.length * 2);
     const view = new DataView(buffer);
     for (let i = 0; i < float32Buf.length; i++) {
-      const s = Math.max(-1, Math.min(1, float32Buf[i]));
+      const raw = Number.isFinite(float32Buf[i]) ? float32Buf[i] : 0;
+      const s = Math.max(-1, Math.min(1, raw));
       view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
     }
     const bytes = new Uint8Array(buffer);
@@ -202,7 +363,16 @@
     for (let i = 0; i < bytes.length; i += chunk) {
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
     }
-    return global.btoa(binary);
+    if (typeof global.btoa === 'function') {
+      return global.btoa(binary);
+    }
+    if (typeof btoa === 'function') {
+      return btoa(binary);
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(bytes).toString('base64');
+    }
+    return '';
   }
 
   function normalizeToolArgs(args) {
@@ -236,20 +406,102 @@
 
   function createLiveSession(apiKey, callbacks) {
     const cb = callbacks || {};
+    const WS = global.WebSocket || (typeof WebSocket !== 'undefined' ? WebSocket : null);
+    const openState = WS && WS.OPEN !== undefined ? WS.OPEN : 1;
     let ws = null;
     let closed = false;
     let setupDone = false;
     let modelIdx = 0;
+    let setupTimer = null;
+
+    function clearSetupTimer() {
+      if (setupTimer !== null) {
+        clearTimeout(setupTimer);
+        setupTimer = null;
+      }
+    }
+
+    function detachSocket(sock) {
+      if (!sock) return;
+      sock.onopen = null;
+      sock.onmessage = null;
+      sock.onerror = null;
+      sock.onclose = null;
+    }
+
+    function safeSend(sock, payload) {
+      if (!sock || sock !== ws || closed || sock.readyState !== openState) return false;
+      try {
+        sock.send(payload);
+        return true;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    function failOrRetry(sock, reason, fireError) {
+      clearSetupTimer();
+      detachSocket(sock);
+      if (sock) {
+        try {
+          sock.close();
+        } catch (_e) {
+          // ignore
+        }
+      }
+      if (!setupDone && modelIdx + 1 < LIVE_MODELS.length) {
+        modelIdx += 1;
+        connect();
+        return;
+      }
+      closed = true;
+      ws = null;
+      if (fireError && cb.onError) {
+        cb.onError(reason);
+      }
+      if (cb.onClose) {
+        cb.onClose(reason);
+      }
+    }
 
     function connect() {
       if (closed) return;
+      clearSetupTimer();
+
+      if (typeof WS !== 'function') {
+        closed = true;
+        Promise.resolve().then(function () {
+          if (cb.onError) cb.onError('WebSocket is unavailable in this environment.');
+          if (cb.onClose) cb.onClose('WebSocket is unavailable in this environment.');
+        });
+        return;
+      }
+
       const modelName = LIVE_MODELS[modelIdx] || LIVE_MODELS[0];
       const url = WS_BASE + '?key=' + encodeURIComponent(apiKey);
-      ws = new WebSocket(url);
+      let sock = null;
+      try {
+        sock = new WS(url);
+      } catch (_e) {
+        failOrRetry(null, 'Failed to open Live WebSocket.', true);
+        return;
+      }
+      ws = sock;
 
-      ws.onopen = function () {
-        if (closed) {
-          ws.close();
+      setupTimer = setTimeout(function () {
+        setupTimer = null;
+        if (closed || sock !== ws || setupDone) return;
+        failOrRetry(sock, 'Live WebSocket setup timed out.', true);
+      }, SETUP_TIMEOUT_MS);
+
+      sock.onopen = function () {
+        if (closed || sock !== ws) {
+          detachSocket(sock);
+          try {
+            sock.close();
+          } catch (_e) {
+            // ignore
+          }
           return;
         }
         const setupMsg = {
@@ -285,20 +537,33 @@
             ]
           }
         };
-        ws.send(JSON.stringify(setupMsg));
+        if (!safeSend(sock, JSON.stringify(setupMsg))) {
+          failOrRetry(sock, 'Failed to send Live WebSocket setup.', true);
+        }
       };
 
-      ws.onmessage = function (event) {
-        if (closed) return;
+      sock.onmessage = function (event) {
+        if (closed || sock !== ws) return;
+
         const handleText = function (rawText) {
+          if (closed || sock !== ws || typeof rawText !== 'string') return;
           let msg = null;
           try {
             msg = JSON.parse(rawText);
           } catch (_e) {
             return;
           }
-          if (msg.setupComplete) {
+          if (!msg || typeof msg !== 'object') return;
+
+          if (msg.error && (setupDone || modelIdx + 1 >= LIVE_MODELS.length)) {
+            if (cb.onError) {
+              cb.onError(String((msg.error && msg.error.message) || 'Live API error.'));
+            }
+          }
+
+          if (msg.setupComplete && !setupDone) {
             setupDone = true;
+            clearSetupTimer();
             if (cb.onReady) cb.onReady(modelName);
           }
           // Live input transcription (final or interim, top-level or inside serverContent)
@@ -327,37 +592,56 @@
                 });
               }
             });
-            if (responses.length && ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ toolResponse: { functionResponses: responses } }));
+            if (responses.length) {
+              safeSend(sock, JSON.stringify({ toolResponse: { functionResponses: responses } }));
             }
           }
         };
 
-        if (event.data instanceof Blob) {
-          event.data.text().then(handleText).catch(function () {});
-        } else if (typeof event.data === 'string') {
-          handleText(event.data);
+        const data = event && event.data;
+        if (typeof data === 'string') {
+          handleText(data);
+        } else if (data && typeof data.text === 'function') {
+          data
+            .text()
+            .then(function (txt) {
+              if (closed || sock !== ws) return;
+              handleText(txt);
+            })
+            .catch(function () {});
+        } else if (
+          data &&
+          (data instanceof ArrayBuffer ||
+            ArrayBuffer.isView(data) ||
+            Object.prototype.toString.call(data) === '[object ArrayBuffer]')
+        ) {
+          try {
+            const TD = global.TextDecoder || (typeof TextDecoder !== 'undefined' ? TextDecoder : null);
+            if (TD) {
+              handleText(new TD('utf-8').decode(data));
+            } else if (typeof Buffer !== 'undefined') {
+              const u8 = ArrayBuffer.isView(data)
+                ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+                : new Uint8Array(data);
+              handleText(Buffer.from(u8).toString('utf8'));
+            }
+          } catch (_e) {
+            // ignore malformed binary frame
+          }
         }
       };
 
-      ws.onerror = function () {
-        if (!closed && cb.onError && setupDone) {
+      sock.onerror = function () {
+        if (closed || sock !== ws) return;
+        if (cb.onError && setupDone) {
           cb.onError('Live WebSocket connection error.');
         }
       };
 
-      ws.onclose = function (ev) {
-        if (closed) return;
-        // If server rejected the first model before setupComplete, try fallback model
-        if (!setupDone && modelIdx + 1 < LIVE_MODELS.length) {
-          modelIdx += 1;
-          connect();
-          return;
-        }
-        closed = true;
-        if (cb.onClose) {
-          cb.onClose(ev.reason || ('Closed (code ' + ev.code + ')'));
-        }
+      sock.onclose = function (ev) {
+        if (closed || sock !== ws) return;
+        const reason = (ev && ev.reason) || ('Closed (code ' + ((ev && ev.code) || 0) + ')');
+        failOrRetry(sock, reason, false);
       };
     }
 
@@ -365,10 +649,16 @@
 
     return {
       sendPCM: function (float32Samples, sampleRate) {
-        if (closed || !setupDone || !ws || ws.readyState !== WebSocket.OPEN) return;
+        if (closed || !setupDone || !ws || ws.readyState !== openState) return;
+        if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+          return;
+        }
         const pcm16k = downsampleTo16k(float32Samples, sampleRate);
+        if (!pcm16k || !pcm16k.length) return;
         const base64 = floatTo16BitPCMBase64(pcm16k);
-        ws.send(
+        if (!base64) return;
+        safeSend(
+          ws,
           JSON.stringify({
             realtimeInput: {
               audio: {
@@ -381,13 +671,16 @@
       },
       close: function () {
         closed = true;
+        clearSetupTimer();
         if (ws) {
+          const sock = ws;
+          ws = null;
+          detachSocket(sock);
           try {
-            ws.close();
+            sock.close();
           } catch (_e) {
             // ignore
           }
-          ws = null;
         }
       }
     };
@@ -429,6 +722,8 @@
     KeyStore: KeyStore,
     SoundFX: SoundFX,
     DEMO_PRESETS: DEMO_PRESETS,
+    downsampleTo16k: downsampleTo16k,
+    floatTo16BitPCMBase64: floatTo16BitPCMBase64,
     createLiveSession: createLiveSession
   };
 })(window);

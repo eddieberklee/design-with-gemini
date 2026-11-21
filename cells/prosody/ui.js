@@ -9,6 +9,8 @@
   const MIN_SCALE = 0.45;
   const MAX_SCALE = 1.85;
   const MAX_MARQUEE_WORDS = 28;
+  const SESSION_KEY = 'dc_gemini_api_key_session';
+  const LOCAL_KEY = 'dc_gemini_api_key_local';
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -22,7 +24,15 @@
   }
 
   function mount(container) {
-    if (!container) return;
+    if (!container) return function () {};
+
+    if (typeof container.__prosodyUnmount === 'function') {
+      container.__prosodyUnmount();
+    }
+
+    let unmounted = false;
+    let sessionEpoch = 0;
+    let stageObserver = null;
 
     const state = {
       scale: 1.0,
@@ -32,8 +42,10 @@
       liveSession: null,
       mediaStream: null,
       audioCtx: null,
+      source: null,
       analyser: null,
       processor: null,
+      silentGain: null,
       rafId: null
     };
 
@@ -51,12 +63,15 @@
     modeBadge.setAttribute('aria-expanded', 'false');
     modeBadge.title = 'Configure Gemini API key for continuous Live API audio streaming';
     const badgeDot = el('span', 'ps-badge-dot');
+    badgeDot.setAttribute('aria-hidden', 'true');
     const badgeLabel = el('span', '', 'SIM · +KEY');
     modeBadge.appendChild(badgeDot);
     modeBadge.appendChild(badgeLabel);
 
-    const sfxBtn = el('button', 'ps-icon-btn', 'SFX On');
+    const initialMuted = Boolean(NS.Client.SoundFX.isMuted && NS.Client.SoundFX.isMuted());
+    const sfxBtn = el('button', 'ps-icon-btn', initialMuted ? 'SFX Off' : 'SFX On');
     sfxBtn.type = 'button';
+    sfxBtn.setAttribute('aria-pressed', initialMuted ? 'false' : 'true');
     sfxBtn.title = 'Toggle synthesized resize sound effects';
 
     const resetBtn = el('button', 'ps-icon-btn', 'Reset');
@@ -132,7 +147,9 @@
 
     const micBtn = el('button', 'ps-mic-btn');
     micBtn.type = 'button';
+    micBtn.setAttribute('aria-pressed', 'false');
     const micDot = el('span', 'ps-mic-dot');
+    micDot.setAttribute('aria-hidden', 'true');
     const micLabel = el('span', '', 'Start Live Mic');
     micBtn.appendChild(micDot);
     micBtn.appendChild(micLabel);
@@ -171,6 +188,7 @@
 
     // --- Rendering helpers ---
     function syncBadge() {
+      if (unmounted) return;
       const hasKey = Boolean(NS.Client.KeyStore.get());
       modeBadge.classList.toggle('ps-badge--live', hasKey);
       badgeLabel.textContent = hasKey ? 'LIVE' : 'SIM · +KEY';
@@ -180,13 +198,13 @@
       keyPanel.classList.add('is-open');
       modeBadge.setAttribute('aria-expanded', 'true');
       keyInput.value = NS.Client.KeyStore.get();
-      keyInput.focus();
+      if (typeof keyInput.focus === 'function') keyInput.focus();
     }
 
     function closeKeyPanel(restoreFocus) {
       keyPanel.classList.remove('is-open');
       modeBadge.setAttribute('aria-expanded', 'false');
-      if (restoreFocus) modeBadge.focus();
+      if (restoreFocus && typeof modeBadge.focus === 'function') modeBadge.focus();
     }
 
     function pushMarqueeWords(text, emphasizedWord) {
@@ -229,8 +247,8 @@
     }
 
     function computeButtonDims(scaleVal) {
-      const maxW = stage.clientWidth > 60 ? stage.clientWidth - 24 : 252;
-      const maxH = stage.clientHeight > 80 ? stage.clientHeight - 62 : 76;
+      const maxW = stage.clientWidth > 0 ? Math.max(56, stage.clientWidth - 24) : 252;
+      const maxH = stage.clientHeight > 0 ? Math.max(22, stage.clientHeight - 58) : 76;
       const rawW = BASE_WIDTH * scaleVal;
       const rawH = BASE_HEIGHT * scaleVal;
       const fitRatio = Math.min(1, maxW / rawW, maxH / rawH);
@@ -268,8 +286,8 @@
 
     function syncWaveCanvasSize() {
       const dpr = Math.min(2, global.devicePixelRatio || 1);
-      const cw = Math.max(80, waveCanvas.clientWidth || 120);
-      const ch = Math.max(24, waveCanvas.clientHeight || 26);
+      const cw = Math.max(48, waveCanvas.clientWidth || 120);
+      const ch = Math.max(20, waveCanvas.clientHeight || 26);
       if (waveCanvas.width !== Math.round(cw * dpr) || waveCanvas.height !== Math.round(ch * dpr)) {
         waveCanvas.width = Math.round(cw * dpr);
         waveCanvas.height = Math.round(ch * dpr);
@@ -278,7 +296,7 @@
 
     function drawIdleWave() {
       syncWaveCanvasSize();
-      const ctx = waveCanvas.getContext('2d');
+      const ctx = typeof waveCanvas.getContext === 'function' ? waveCanvas.getContext('2d') : null;
       if (!ctx) return;
       const w = waveCanvas.width;
       const h = waveCanvas.height;
@@ -293,18 +311,18 @@
 
     function startWaveLoop() {
       syncWaveCanvasSize();
-      const ctx = waveCanvas.getContext('2d');
-      if (!ctx || !state.analyser) return;
+      const ctx = typeof waveCanvas.getContext === 'function' ? waveCanvas.getContext('2d') : null;
+      if (!ctx || !state.analyser || typeof global.requestAnimationFrame !== 'function') return;
       const buf = new Uint8Array(state.analyser.fftSize);
       const dpr = Math.min(2, global.devicePixelRatio || 1);
 
       function frame() {
-        if (!state.streaming || !state.analyser) return;
+        if (unmounted || !state.streaming || !state.analyser) return;
         state.analyser.getByteTimeDomainData(buf);
         const w = waveCanvas.width;
         const h = waveCanvas.height;
         ctx.clearRect(0, 0, w, h);
-        ctx.strokeStyle = '#d94f1e';
+        ctx.strokeStyle = '#b43a10';
         ctx.lineWidth = 1.6 * dpr;
         ctx.beginPath();
         const slice = w / buf.length;
@@ -354,19 +372,24 @@
     }
 
     function stopLiveStream(silent) {
+      sessionEpoch += 1;
       const wasActive = state.streaming || state.connecting;
       state.connecting = false;
       state.streaming = false;
 
       if (state.rafId) {
-        global.cancelAnimationFrame(state.rafId);
+        if (typeof global.cancelAnimationFrame === 'function') {
+          global.cancelAnimationFrame(state.rafId);
+        }
         state.rafId = null;
       }
       if (state.liveSession) {
-        state.liveSession.close();
+        const sess = state.liveSession;
         state.liveSession = null;
+        sess.close();
       }
       if (state.processor) {
+        state.processor.onaudioprocess = null;
         try {
           state.processor.disconnect();
         } catch (_e) {
@@ -374,32 +397,66 @@
         }
         state.processor = null;
       }
-      if (state.mediaStream) {
-        state.mediaStream.getTracks().forEach(function (t) {
-          t.stop();
-        });
-        state.mediaStream = null;
-      }
-      if (state.audioCtx) {
+      if (state.silentGain) {
         try {
-          state.audioCtx.close();
+          state.silentGain.disconnect();
         } catch (_e) {
           // ignore
         }
-        state.audioCtx = null;
+        state.silentGain = null;
+      }
+      if (state.source) {
+        try {
+          state.source.disconnect();
+        } catch (_e) {
+          // ignore
+        }
+        state.source = null;
+      }
+      if (state.analyser) {
+        try {
+          state.analyser.disconnect();
+        } catch (_e) {
+          // ignore
+        }
         state.analyser = null;
+      }
+      if (state.mediaStream) {
+        const stream = state.mediaStream;
+        state.mediaStream = null;
+        stream.getTracks().forEach(function (t) {
+          t.onended = null;
+          try {
+            t.stop();
+          } catch (_e) {
+            // ignore
+          }
+        });
+      }
+      if (state.audioCtx) {
+        const ctx = state.audioCtx;
+        state.audioCtx = null;
+        try {
+          const p = ctx.close && ctx.close();
+          if (p && typeof p.catch === 'function') p.catch(function () {});
+        } catch (_e) {
+          // ignore
+        }
       }
 
       micBtn.classList.remove('is-recording', 'is-processing');
+      micBtn.setAttribute('aria-pressed', 'false');
       micLabel.textContent = 'Start Live Mic';
-      drawIdleWave();
-      if (wasActive && !silent) {
+      if (!unmounted) {
+        drawIdleWave();
+      }
+      if (wasActive && !silent && !unmounted) {
         NS.Client.SoundFX.playStreamToggle(false);
       }
     }
 
     function startLiveStream() {
-      if (state.connecting || state.streaming) return;
+      if (unmounted || state.connecting || state.streaming) return;
       syncBadge();
       const apiKey = NS.Client.KeyStore.get();
       if (!apiKey) {
@@ -408,34 +465,63 @@
         return;
       }
 
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
         renderReadout('Microphone capture is unavailable in this browser context.', true);
         return;
       }
 
+      const AudioCtxInit = global.AudioContext || global.webkitAudioContext;
+      if (typeof AudioCtxInit !== 'function') {
+        renderReadout('Web Audio API is unavailable in this browser context.', true);
+        return;
+      }
+
+      const myEpoch = ++sessionEpoch;
       state.connecting = true;
       micBtn.classList.add('is-processing');
+      micBtn.setAttribute('aria-pressed', 'true');
       micLabel.textContent = 'Connecting…';
       renderReadout('Opening Gemini Live WebSocket…', false);
 
       navigator.mediaDevices
         .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
         .then(function (stream) {
-          if (!state.connecting) {
+          if (unmounted || myEpoch !== sessionEpoch || !state.connecting) {
             stream.getTracks().forEach(function (t) {
-              t.stop();
+              try {
+                t.stop();
+              } catch (_e) {
+                // ignore
+              }
             });
             return;
           }
           state.mediaStream = stream;
+          stream.getTracks().forEach(function (track) {
+            track.onended = function () {
+              if (unmounted || myEpoch !== sessionEpoch) return;
+              const wasStreaming = state.streaming || state.connecting;
+              stopLiveStream(true);
+              if (wasStreaming) {
+                renderReadout('Microphone disconnected.', true);
+              }
+            };
+          });
 
           const AudioCtx = global.AudioContext || global.webkitAudioContext;
+          if (typeof AudioCtx !== 'function') {
+            stopLiveStream(true);
+            renderReadout('Web Audio API is unavailable in this browser context.', true);
+            return;
+          }
           state.audioCtx = new AudioCtx();
-          if (state.audioCtx.state === 'suspended') {
-            state.audioCtx.resume().catch(function () {});
+          if (state.audioCtx.state === 'suspended' && typeof state.audioCtx.resume === 'function') {
+            const p = state.audioCtx.resume();
+            if (p && typeof p.catch === 'function') p.catch(function () {});
           }
 
           const source = state.audioCtx.createMediaStreamSource(stream);
+          state.source = source;
           state.analyser = state.audioCtx.createAnalyser();
           state.analyser.fftSize = 256;
           source.connect(state.analyser);
@@ -445,22 +531,26 @@
           const silentGain = state.audioCtx.createGain();
           silentGain.gain.value = 0;
           state.processor = processor;
+          state.silentGain = silentGain;
           source.connect(processor);
           processor.connect(silentGain);
           silentGain.connect(state.audioCtx.destination);
 
           state.liveSession = NS.Client.createLiveSession(apiKey, {
             onReady: function (modelName) {
+              if (unmounted || myEpoch !== sessionEpoch) return;
               state.connecting = false;
               state.streaming = true;
               micBtn.classList.remove('is-processing');
               micBtn.classList.add('is-recording');
+              micBtn.setAttribute('aria-pressed', 'true');
               micLabel.textContent = 'Live · Click to Stop';
               NS.Client.SoundFX.playStreamToggle(true);
               renderReadout('Live streaming (' + modelName.replace('models/', '') + ') — speak naturally.', false);
               startWaveLoop();
             },
             onTranscript: function (chunk, isInterim) {
+              if (unmounted || myEpoch !== sessionEpoch) return;
               if (isInterim) {
                 renderReadout('Hearing: "' + chunk.trim() + '"', false);
               } else {
@@ -468,12 +558,15 @@
               }
             },
             onResize: function (res) {
+              if (unmounted || myEpoch !== sessionEpoch) return;
               applyProsodyResult(res);
             },
             onError: function (msg) {
+              if (unmounted || myEpoch !== sessionEpoch) return;
               renderReadout('Live stream error: ' + msg, true);
             },
             onClose: function (reason) {
+              if (unmounted || myEpoch !== sessionEpoch) return;
               const wasStreaming = state.streaming || state.connecting;
               stopLiveStream(true);
               if (wasStreaming) {
@@ -483,12 +576,15 @@
           });
 
           processor.onaudioprocess = function (ev) {
-            if (!state.streaming || !state.liveSession) return;
+            if (unmounted || myEpoch !== sessionEpoch || !state.streaming || !state.liveSession || !state.audioCtx) {
+              return;
+            }
             const input = ev.inputBuffer.getChannelData(0);
             state.liveSession.sendPCM(input, state.audioCtx.sampleRate);
           };
         })
         .catch(function (err) {
+          if (unmounted || myEpoch !== sessionEpoch) return;
           stopLiveStream(true);
           renderReadout('Mic error: ' + ((err && err.message) || 'check browser permissions.'), true);
         });
@@ -507,6 +603,7 @@
     sfxBtn.addEventListener('click', function () {
       const muted = NS.Client.SoundFX.toggleMute();
       sfxBtn.textContent = muted ? 'SFX Off' : 'SFX On';
+      sfxBtn.setAttribute('aria-pressed', muted ? 'false' : 'true');
     });
 
     resetBtn.addEventListener('click', function () {
@@ -565,16 +662,83 @@
       syncBadge();
     });
 
-    global.addEventListener('focus', syncBadge);
-    global.addEventListener('resize', function () {
+    function onKeySync() {
+      syncBadge();
+    }
+
+    function onStorageSync(ev) {
+      if (!ev || !ev.key || ev.key === SESSION_KEY || ev.key === LOCAL_KEY) {
+        syncBadge();
+      }
+    }
+
+    function onWindowResize() {
+      if (unmounted) return;
       renderButtonSize();
-      if (!state.streaming) drawIdleWave();
-    });
+      if (state.streaming) {
+        syncWaveCanvasSize();
+      } else {
+        drawIdleWave();
+      }
+    }
+
+    function onPageHide() {
+      stopLiveStream(true);
+    }
+
+    if (typeof global.addEventListener === 'function') {
+      global.addEventListener('focus', onKeySync);
+      global.addEventListener('gemini-key-changed', onKeySync);
+      global.addEventListener('storage', onStorageSync);
+      global.addEventListener('resize', onWindowResize);
+      global.addEventListener('pagehide', onPageHide);
+    }
+
+    if (typeof global.ResizeObserver === 'function') {
+      stageObserver = new global.ResizeObserver(function () {
+        if (unmounted) return;
+        renderButtonSize();
+        if (state.streaming) {
+          syncWaveCanvasSize();
+        } else {
+          drawIdleWave();
+        }
+      });
+      stageObserver.observe(stage);
+    }
+
+    function unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      stopLiveStream(true);
+      if (NS.Client.SoundFX && typeof NS.Client.SoundFX.close === 'function') {
+        NS.Client.SoundFX.close();
+      }
+      if (stageObserver) {
+        stageObserver.disconnect();
+        stageObserver = null;
+      }
+      if (typeof global.removeEventListener === 'function') {
+        global.removeEventListener('focus', onKeySync);
+        global.removeEventListener('gemini-key-changed', onKeySync);
+        global.removeEventListener('storage', onStorageSync);
+        global.removeEventListener('resize', onWindowResize);
+        global.removeEventListener('pagehide', onPageHide);
+      }
+      if (container.__prosodyUnmount === unmount) {
+        delete container.__prosodyUnmount;
+      }
+      container.textContent = '';
+    }
+
+    container.__prosodyUnmount = unmount;
 
     // Initial render
     syncBadge();
     renderButtonSize();
     drawIdleWave();
+
+    return unmount;
   }
 
   function boot() {
