@@ -1268,9 +1268,32 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.equal(synthSegBtn.getAttribute('aria-pressed'), 'true', 'Synth button must be aria-pressed after Studio fallback');
   assert.equal(portalCamBtn.getAttribute('aria-busy'), 'false', 'Portal Cam button must clear aria-busy after NotAllowedError');
 
-  // 6. Verify Cell 09 Tolerances slider syncs Pinch threshold label & Studio gate pills show live tolerances
-  const pinchRange = findFirst(wbCells[8], '.hg-tuner-range');
-  assert.ok(pinchRange, 'Expected tuner range inputs in Cell 09 Tolerances');
+  // 6. Verify Cell 09 Tolerances `Pinch at` slider + `Defaults` sync labels, Schmitt marks & portalHintText
+  function findAll(root, sel, out = []) {
+    if (!root || !root.children) return out;
+    for (let i = 0; i < root.children.length; i++) {
+      const c = root.children[i];
+      if (matchesSimple(c, sel)) out.push(c);
+      findAll(c, sel, out);
+    }
+    return out;
+  }
+  const tunerRanges = findAll(wbCells[8], '.hg-tuner-range');
+  assert.equal(tunerRanges.length, 4, 'Expected 4 tuner range inputs in Cell 09 Tolerances');
+  const tunePinchInput = tunerRanges[2];
+  assert.equal(tunePinchInput.value, '0.28');
+  const prims = findFirst(portalCell, '.hg-mini-primitives').children;
+  const primPinchLbl = findFirst(prims[1], '.ui-label');
+  const c3Labels = findFirst(wbCells[2], '.hg-schmitt-labels').children;
+  const portalStatus = findFirst(portalCell, '.hg-portal-status');
+
+  tunePinchInput.value = '0.20';
+  tunePinchInput.dispatchEvent(new sandbox.Event('input'));
+  assert.equal(primPinchLbl.textContent, 'Pinch <.20');
+  assert.ok(prims[1].getAttribute('data-tip').includes('0.20'));
+  assert.equal(c3Labels[1].textContent, 'ENG <.20');
+  assert.equal(c3Labels[2].textContent, 'REL >.40');
+
   const gateGroup = findFirst(hgPage, '.hg-gates');
   assert.ok(gateGroup && gateGroup.children.length === 5, 'Expected 5 live tolerance/gesture gate pills');
   for (let i = 0; i < 16; i++) {
@@ -1284,12 +1307,50 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.ok(facePillText.includes('≥.22'), `Expected face gate tolerance ≥.22, got ${facePillText}`);
   assert.ok(kbdPillText.includes('<.86'), `Expected kbd gate tolerance <.86, got ${kbdPillText}`);
 
-  // Close Studio back to Main Grid and test Main Tile live tracking, tolerances, mini cursor trail & gestures
+  // Close Studio with tuned Pinch = 0.20 and verify footer portalHintTip reflects `pinch < .20`
+  assert.equal(
+    wbCells[1].querySelector('.hg-cell-foot').classList.contains('ui-tile-foot--keep'),
+    true,
+    'Studio instrument footers must carry shared ui-tile-foot--keep'
+  );
   backBtn.click();
   while (pendingCallbacks.length) pendingCallbacks.shift()();
   await new Promise((r) => setTimeout(r, 5));
   assert.equal(hgPage.hidden, true);
   assert.equal(mainGrid.hidden, false);
+  assert.equal(
+    portalStatus.textContent,
+    'Hold an open palm still, then pinch, twist or scroll.'
+  );
+  assert.equal(
+    portalStatus.getAttribute('data-tip'),
+    'Arm 200 ms · pinch < .20 · lock 14 px · twist ±3.5° · above keyboard < .86.',
+    'Closing Studio after tuning Pinch at must keep footer tolerance tip synced with pinchEngage'
+  );
+
+  // Re-open Studio, click Defaults, and close back to Main Grid to verify full `.28` restoration
+  studioBtn.click();
+  while (pendingCallbacks.length) pendingCallbacks.shift()();
+  await new Promise((r) => setTimeout(r, 5));
+  const defaultsBtn = findByText(wbCells[8], 'Defaults');
+  defaultsBtn.click();
+  assert.equal(tunePinchInput.value, '0.28');
+  assert.equal(primPinchLbl.textContent, 'Pinch <.28');
+  assert.equal(c3Labels[1].textContent, 'ENG <.28');
+
+  backBtn.click();
+  while (pendingCallbacks.length) pendingCallbacks.shift()();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(hgPage.hidden, true);
+  assert.equal(mainGrid.hidden, false);
+  assert.equal(
+    portalStatus.textContent,
+    'Hold an open palm still, then pinch, twist or scroll.'
+  );
+  assert.equal(
+    portalStatus.getAttribute('data-tip'),
+    'Arm 200 ms · pinch < .28 · lock 14 px · twist ±3.5° · above keyboard < .86.'
+  );
 
   // The detected gesture shows in the Gesture readout row (an in-stage badge only repeated it).
   function findPrimValue(root, label) {
@@ -1310,13 +1371,15 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   const miniScreen = findFirst(portalCell, '.hg-mini-screen');
   const miniTrail = findFirst(portalCell, '.hg-mini-cursor-trail');
   const miniDot = findFirst(portalCell, '.hg-mini-cursor-dot');
-  const portalStatus = findFirst(portalCell, '.hg-portal-status');
+  const staticStandbyTrailPts = miniTrail.getAttribute('points');
   assert.equal(miniGesture.textContent, 'STANDBY');
   assert.equal(miniRoiLabel.textContent, 'ROI .22–.78');
   assert.equal(miniKbdLabel.textContent, 'KBD <.86');
   assert.equal(miniGatesLabel.textContent, 'SPAN ≥.055 · FACE ≥+.22');
   assert.ok(miniScreen, 'Expected mini screen-cursor monitor inset');
-  assert.ok(miniTrail.getAttribute('points').length > 10, 'Expected static standby cursor trail points');
+  const staticPtsArr = staticStandbyTrailPts.trim().split(/\s+/);
+  assert.equal(staticPtsArr.length, 12, 'Expected exactly 12 static standby cursor trail points');
+  assert.equal(staticPtsArr.includes('114.0,8.0'), false, 'Static mini trail must never wrap around into uninitialized (114.0,8.0) slots');
 
   const portalSimBtn = findByText(portalCell, 'Sim');
   const dotStartCx = miniDot.getAttribute('cx');
@@ -1338,9 +1401,14 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.ok(portalStatus.textContent.includes('span ') && portalStatus.textContent.includes('≥.055'),
     `Expected live gate tolerances in tile footer, got: ${portalStatus.textContent}`);
 
-  // Turn Sim off and verify clean STANDBY reset + zero [title] attributes across the entire tree
+  // Turn Sim off and verify clean STANDBY reset (including exact static trail without stale live points) + zero [title]
   portalSimBtn.click();
   assert.equal(miniGesture.textContent, 'STANDBY');
+  assert.equal(
+    miniTrail.getAttribute('points'),
+    staticStandbyTrailPts,
+    'Standby mini trail after live Sim must restore exact 12-point arc with zero stale ring-buffer points'
+  );
   function countTitleAttrs(node) {
     if (!node) return 0;
     let n = node.getAttribute && node.getAttribute('title') !== null ? 1 : 0;
@@ -1348,4 +1416,638 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
     return n;
   }
   assert.equal(countTitleAttrs(body), 0, 'Zero [title] attributes allowed anywhere in Cell 08');
+});
+
+test('Normal pinch release zeroes twistTotalDeg & twistBreakoutSign, and resetAll() resets cursorU/V & rawU/V to 0.5', () => {
+  const eng = new K.KinematicEngine();
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoOrbit = false;
+  rig.mirrorX = 0.68;
+  rig.camY = 0.34;
+  let t = runFrames(eng, rig, 0, 20);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+  assert.ok(eng.slots[0].cursorU > 0.75);
+  assert.ok(eng.slots[0].rawU > 0.75);
+
+  rig.targetPinch = 1;
+  t = runFrames(eng, rig, t, 8);
+  rig.wristRollDeg = 28;
+  t = runFrames(eng, rig, t, 8);
+  assert.equal(eng.slots[0].pinched, true);
+  assert.equal(eng.slots[0].twistBrokenOut, true);
+  assert.equal(eng.slots[0].twistBreakoutSign, 1);
+  assert.ok(eng.slots[0].twistTotalDeg > 35);
+
+  // Release pinch normally while keeping hand armed & rolled -> twist excursion must zero cleanly
+  rig.targetPinch = 0;
+  t = runFrames(eng, rig, t, 10);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+  assert.equal(eng.slots[0].pinched, false);
+  assert.equal(eng.slots[0].twistBrokenOut, false);
+  assert.equal(eng.slots[0].twistBreakoutSign, 0);
+  assert.equal(eng.slots[0].twistTotalDeg, 0, 'Normal pinch release must zero slot.twistTotalDeg');
+  assert.equal(eng.slots[0].twistDeltaDeg, 0);
+
+  // resetAll() must restore cursorU/V and rawU/V to 0.5 on both slots
+  eng.resetAll();
+  assert.equal(eng.slots[0].cursorU, 0.5);
+  assert.equal(eng.slots[0].cursorV, 0.5);
+  assert.equal(eng.slots[0].rawU, 0.5);
+  assert.equal(eng.slots[0].rawV, 0.5);
+  assert.equal(eng.slots[1].cursorU, 0.5);
+  assert.equal(eng.slots[1].cursorV, 0.5);
+  assert.equal(eng.slots[1].rawU, 0.5);
+  assert.equal(eng.slots[1].rawV, 0.5);
+});
+
+test('UI edge-case & lifecycle guards: fmtDot/gate rounding, spatial Sim tap STANDBY, latch/hold clearing, rig/puck/viewport guards & Blink detent', async () => {
+  function createHarness() {
+    const scopeArcs = [];
+    function createEl(tag, ns) {
+      const attrs = {};
+      const listeners = {};
+      const classes = new Set();
+      let rawScrollTop = 0;
+      const el = {
+        tagName: String(tag).toUpperCase(),
+        namespaceURI: ns || null,
+        id: '',
+        hidden: false,
+        disabled: false,
+        textContent: '',
+        value: '',
+        quantizeScroll: false,
+        playCalls: 0,
+        videoWidth: 640,
+        videoHeight: 480,
+        readyState: 4,
+        currentTime: 0.1,
+        srcObject: null,
+        style: {},
+        dataset: {},
+        children: [],
+        parentNode: null,
+        nextSibling: null,
+        classList: {
+          add(...cs) { cs.forEach((c) => c && classes.add(c)); },
+          remove(...cs) { cs.forEach((c) => classes.delete(c)); },
+          toggle(c, force) {
+            const on = force !== undefined ? Boolean(force) : !classes.has(c);
+            if (on) classes.add(c); else classes.delete(c);
+            return on;
+          },
+          contains(c) { return classes.has(c); },
+        },
+        setAttribute(k, v) {
+          attrs[k] = String(v);
+          if (k === 'id') el.id = String(v);
+          if (k === 'hidden') el.hidden = true;
+          if (k === 'class') {
+            classes.clear();
+            String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+          }
+        },
+        getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; },
+        removeAttribute(k) {
+          delete attrs[k];
+          if (k === 'hidden') el.hidden = false;
+        },
+        getClientRects() {
+          return el.hidden ? [] : [el.getBoundingClientRect()];
+        },
+        appendChild(child) {
+          if (!child || typeof child !== 'object') return child;
+          child.parentNode = el;
+          if (el.children.length > 0) el.children[el.children.length - 1].nextSibling = child;
+          el.children.push(child);
+          return child;
+        },
+        insertBefore(node, ref) {
+          node.parentNode = el;
+          const idx = ref ? el.children.indexOf(ref) : -1;
+          if (idx >= 0) el.children.splice(idx, 0, node);
+          else el.children.push(node);
+          return node;
+        },
+        addEventListener(type, fn) {
+          if (!listeners[type]) listeners[type] = [];
+          listeners[type].push(fn);
+        },
+        dispatchEvent(ev) {
+          const list = listeners[ev.type] || [];
+          ev.target = ev.target || el;
+          ev.preventDefault = ev.preventDefault || function () {};
+          ev.stopPropagation = ev.stopPropagation || function () {};
+          list.forEach((fn) => fn(ev));
+          return true;
+        },
+        click() {
+          el.dispatchEvent({ type: 'click', target: el });
+        },
+        play() {
+          el.playCalls += 1;
+          return Promise.resolve();
+        },
+        focus() {
+          doc.activeElement = el;
+        },
+        closest(sel) {
+          let cur = el;
+          while (cur) {
+            if (sel === 'main.grid' && cur.tagName === 'MAIN' && cur.classList.contains('grid')) return cur;
+            if (sel.includes('button') && cur.tagName === 'BUTTON') return cur;
+            if (sel === '.hg-puck-card' && cur.classList && cur.classList.contains('hg-puck-card')) return cur;
+            if (sel === '.hg-tape-row' && cur.classList && cur.classList.contains('hg-tape-row')) return cur;
+            cur = cur.parentNode;
+          }
+          return null;
+        },
+        querySelector(sel) {
+          return findFirst(el, sel);
+        },
+        getBoundingClientRect() {
+          return el.rectOverride || { left: 0, top: 0, right: 320, bottom: 200, width: 320, height: 200 };
+        },
+        getContext() {
+          const isScope = el.classList.contains('hg-scope-canvas');
+          return new Proxy({}, {
+            get(_t, prop) {
+              if (isScope && prop === 'lineTo') {
+                return (x, y) => { scopeArcs.push([x, y]); };
+              }
+              return function () {};
+            },
+          });
+        },
+      };
+      Object.defineProperty(el, 'scrollTop', {
+        get() { return rawScrollTop; },
+        set(v) {
+          const next = Math.max(0, Number(v) || 0);
+          if (el.quantizeScroll) {
+            const delta = next - rawScrollTop;
+            if (Math.abs(delta) < 0.5) return;
+            rawScrollTop = Math.round(rawScrollTop + delta);
+          } else {
+            rawScrollTop = next;
+          }
+        },
+      });
+      Object.defineProperty(el, 'className', {
+        get() { return Array.from(classes).join(' '); },
+        set(v) {
+          classes.clear();
+          String(v || '').split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+        },
+      });
+      return el;
+    }
+
+    function matchesSimple(node, sel) {
+      if (!node || !node.tagName) return false;
+      if (sel === 'input') return node.tagName === 'INPUT';
+      if (sel === 'video') return node.tagName === 'VIDEO';
+      if (sel === 'main.grid') return node.tagName === 'MAIN' && node.classList.contains('grid');
+      if (sel === 'dialog[open]') return node.tagName === 'DIALOG' && Boolean(node.open);
+      if (sel.startsWith('#')) return node.id === sel.slice(1);
+      if (sel.startsWith('.')) return node.classList.contains(sel.slice(1));
+      return false;
+    }
+
+    function findFirst(root, sel) {
+      if (!root || !root.children) return null;
+      for (let i = 0; i < root.children.length; i++) {
+        const c = root.children[i];
+        if (matchesSimple(c, sel)) return c;
+        const hit = findFirst(c, sel);
+        if (hit) return hit;
+      }
+      return null;
+    }
+
+    function findAll(root, sel, out = []) {
+      if (!root || !root.children) return out;
+      for (let i = 0; i < root.children.length; i++) {
+        const c = root.children[i];
+        if (matchesSimple(c, sel)) out.push(c);
+        findAll(c, sel, out);
+      }
+      return out;
+    }
+
+    function findByText(root, text) {
+      if (!root) return null;
+      if (root.textContent === text && root.tagName === 'BUTTON') return root;
+      if (!root.children) return null;
+      for (let i = 0; i < root.children.length; i++) {
+        const hit = findByText(root.children[i], text);
+        if (hit) return hit;
+      }
+      return null;
+    }
+
+    const body = createEl('body');
+    const mainGrid = createEl('main');
+    mainGrid.className = 'grid';
+    const portalCell = createEl('section');
+    portalCell.id = 'cell-hand-gesture';
+    portalCell.className = 'cell cell--hand-gesture';
+    mainGrid.appendChild(portalCell);
+    body.appendChild(mainGrid);
+
+    const winListeners = {};
+    const docListeners = {};
+    const locationObj = { hash: '', pathname: '/', search: '' };
+    let elementAtPoint = null;
+    let nowMs = 2000;
+    let rafCallback = null;
+    let nextRafId = 1;
+
+    const doc = {
+      readyState: 'complete',
+      hidden: false,
+      body,
+      activeElement: body,
+      createElement: (t) => createEl(t),
+      createElementNS: (ns, t) => createEl(t, ns),
+      createTextNode: (txt) => ({ nodeType: 3, textContent: String(txt) }),
+      getElementById: (id) => findFirst(body, '#' + id),
+      querySelector: (sel) => findFirst(body, sel),
+      elementFromPoint: () => elementAtPoint,
+      addEventListener(type, fn) {
+        if (!docListeners[type]) docListeners[type] = [];
+        docListeners[type].push(fn);
+      },
+      dispatchEvent(ev) {
+        (docListeners[ev.type] || []).forEach((fn) => fn(ev));
+      },
+    };
+
+    const sandbox = {
+      window: null,
+      globalThis: null,
+      document: doc,
+      location: locationObj,
+      navigator: {},
+      performance: { now: () => nowMs },
+      Event: function (type) { this.type = type; },
+      HandGestureKinematics: K,
+      HandGestureTracker: T,
+      matchMedia: () => ({ matches: false }),
+      requestAnimationFrame: (fn) => { rafCallback = fn; return nextRafId++; },
+      cancelAnimationFrame: () => { rafCallback = null; },
+      scrollBy: () => {},
+      scrollTo: () => {},
+      scrollY: 0,
+      setTimeout,
+      clearTimeout,
+      innerWidth: 1280,
+      innerHeight: 800,
+      devicePixelRatio: 2,
+      addEventListener(type, fn) {
+        if (!winListeners[type]) winListeners[type] = [];
+        winListeners[type].push(fn);
+      },
+      dispatchEvent(ev) {
+        (winListeners[ev.type] || []).forEach((fn) => fn(ev));
+      },
+      history: {
+        pushState(_s, _t, url) { locationObj.hash = url; },
+        replaceState() { locationObj.hash = ''; },
+        back() {
+          locationObj.hash = '';
+          (winListeners.popstate || []).forEach((fn) => fn({ type: 'popstate' }));
+          (winListeners.hashchange || []).forEach((fn) => fn({ type: 'hashchange' }));
+        },
+      },
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    const uiCode = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
+    vm.runInNewContext(uiCode, sandbox, { filename: 'ui.js' });
+
+    function stepFrames(n, dtMs = 16.67) {
+      for (let i = 0; i < n; i++) {
+        nowMs += dtMs;
+        const cb = rafCallback;
+        if (cb) {
+          rafCallback = null;
+          cb(nowMs);
+        }
+      }
+    }
+
+    return {
+      sandbox,
+      doc,
+      body,
+      mainGrid,
+      portalCell,
+      scopeArcs,
+      findFirst,
+      findAll,
+      findByText,
+      stepFrames,
+      getRaf: () => rafCallback,
+      setElementAtPoint: (el) => { elementAtPoint = el; },
+      setNow: (t) => { nowMs = t; },
+      getNow: () => nowMs,
+    };
+  }
+
+  const h = createHarness();
+  const UI = h.sandbox.HandGestureUI;
+
+  // A. Threshold-safe & `-0`-safe `fmtDot` / `fmtSignedDot` / `fmtGateGe` / `fmtGateLt` (#29.6)
+  assert.equal(UI.fmtSignedDot(-0.001), '+.00', 'fmtSignedDot(-0.001) must never emit -.00');
+  assert.equal(UI.fmtDot(-0.001), '.00', 'fmtDot(-0.001) must never emit -0.00');
+  assert.equal(UI.fmtDot(-0.05), '-.05', 'fmtDot(-0.05) must omit leading 0 symmetrically');
+  assert.equal(UI.fmtDot(0.29), '.29');
+  assert.equal(UI.fmtSignedDot(1.0), '+1.00');
+  assert.equal(UI.fmtSignedDot(-1.0), '-1.00');
+  assert.equal(UI.fmtGateGe(0.219, 0.22, true), '+.21', '0.219 failing >=0.22 must never round up to +.22');
+  assert.equal(UI.fmtGateGe(0.22, 0.22, true), '+.22');
+  assert.equal(UI.fmtGateLt(0.859, 0.86), '.85', '0.859 passing <0.86 must never round up to .86');
+  assert.equal(UI.fmtGateLt(0.86, 0.86), '.86');
+  assert.equal(UI.fmtGateGe(0.0549, 0.055, false), '.05');
+  assert.equal(UI.fmtGateGe(0.055, 0.055, false), '.06');
+
+  // B. Spatial PINCH TAP on main-grid `Sim` button must leave tile cleanly in STANDBY (#29.2)
+  const portalSimBtn = h.findByText(h.portalCell, 'Sim');
+  const portalPill = h.findFirst(h.portalCell, '.hg-portal-pill');
+  const portalPillLbl = h.findFirst(portalPill, '.ui-pill-label');
+  const prims = h.findFirst(h.portalCell, '.hg-mini-primitives').children;
+  const primPosVal = h.findFirst(prims[0], '.hg-prim-val');
+  const primPinchVal = h.findFirst(prims[1], '.hg-prim-val');
+  const primGestureVal = h.findFirst(prims[3], '.hg-prim-val');
+  const overlay = h.findFirst(h.body, '#hg-spatial-overlay');
+
+  // Open Studio briefly to toggle Orbit off so hand stays steady, or use Tour Phase 1 click!
+  // Let's open Studio first to exercise Studio checks, then test main-grid Sim spatial tap.
+  const studioBtn = h.findByText(h.portalCell, 'Studio ↗');
+  studioBtn.click();
+  const hgPage = h.findFirst(h.body, '#hand-gesture-page');
+  const wbCells = h.findFirst(hgPage, '.hg-workbench-grid').children;
+  const rigBtnOrbit = h.findByText(wbCells[0], 'Orbit');
+  const rigBtnPinch = h.findByText(wbCells[0], 'Pinch');
+  const rigBtnVScroll = h.findByText(wbCells[0], 'Scroll');
+  const pointerSegBtn = h.findByText(hgPage, 'Pointer');
+  const synthSegBtn = h.findByText(hgPage, 'Synth');
+  const backBtn = h.findByText(hgPage, 'Close');
+  const gateGroup = h.findFirst(hgPage, '.hg-gates');
+  const gestureGateLbl = h.findFirst(gateGroup.children[4], '.ui-pill-label');
+
+  // Stop orbit and arm hand in Studio
+  if (rigBtnOrbit.getAttribute('aria-pressed') === 'true') rigBtnOrbit.click();
+  wbCells.forEach((cell, idx) => {
+    cell.rectOverride = idx === 5
+      ? { left: 0, top: 0, right: 1280, bottom: 800, width: 1280, height: 800 }
+      : { left: 2000, top: 2000, right: 2050, bottom: 2050, width: 50, height: 50 };
+  });
+  h.sandbox.dispatchEvent({ type: 'scroll' });
+  h.stepFrames(18);
+
+  // C. Studio spatial latches clear on mode switch & tab hide (#29.3) + Pointer resets LOCUS to 0.500 (#29.8)
+  const c6Track = h.findFirst(wbCells[5], '.hg-fader-track-wrap');
+  const c6Badge = h.findFirst(wbCells[5], '.hg-fader-badge');
+  const c2XyReadout = h.findFirst(wbCells[1], '.hg-foot-read');
+
+  h.doc.dispatchEvent({ type: 'keydown', key: 'p', repeat: false, target: h.body, preventDefault() {} });
+  h.stepFrames(8);
+  assert.equal(c6Track.classList.contains('is-latched'), true, 'Expected Cell 06 fader latched during spatial pinch');
+  assert.equal(c6Badge.textContent, 'PINCH LATCH');
+  assert.equal(wbCells[5].classList.contains('is-spatial-latched'), true);
+
+  // Switch mid-pinch to Pointer -> spatial latches must clear immediately & cursorU/V resets to 0.500
+  pointerSegBtn.click();
+  h.stepFrames(2);
+  assert.equal(c6Track.classList.contains('is-latched'), false, 'Mode switch must clear Cell 06 spatial latch');
+  assert.equal(c6Badge.textContent, 'READY');
+  assert.equal(wbCells[5].classList.contains('is-spatial-latched'), false);
+  assert.equal(c2XyReadout.textContent, 'LOCUS 0.500, 0.500', 'resetAll() on mode switch must reset cursorU/V to 0.5');
+  h.doc.dispatchEvent({ type: 'keyup', key: 'p', target: h.body });
+
+  // Switch back to Synth, re-arm, pinch Cell 06, then hide tab -> spatial latches clear on visibilitychange
+  synthSegBtn.click();
+  h.stepFrames(18);
+  h.doc.dispatchEvent({ type: 'keydown', key: 'p', repeat: false, target: h.body, preventDefault() {} });
+  h.stepFrames(8);
+  assert.equal(c6Track.classList.contains('is-latched'), true);
+  h.doc.hidden = true;
+  h.doc.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(c6Track.classList.contains('is-latched'), false, 'Tab hide must clear Studio spatial latches');
+  h.doc.hidden = false;
+  h.doc.dispatchEvent({ type: 'visibilitychange' });
+  h.doc.dispatchEvent({ type: 'keyup', key: 'p', target: h.body });
+  h.stepFrames(18);
+
+  // D. `classifyGesture` PINCH TAP hold-latch clears on mode switch & when superseded by V-Scroll (#29.4)
+  wbCells.forEach((cell) => {
+    cell.rectOverride = { left: 2000, top: 2000, right: 2050, bottom: 2050, width: 50, height: 50 };
+  });
+  h.sandbox.dispatchEvent({ type: 'scroll' });
+  h.doc.dispatchEvent({ type: 'keydown', key: 'p', repeat: false, target: h.body, preventDefault() {} });
+  h.stepFrames(5);
+  h.doc.dispatchEvent({ type: 'keyup', key: 'p', target: h.body });
+  h.stepFrames(6);
+  assert.equal(gestureGateLbl.textContent, 'PINCH TAP', 'Expected 950ms PINCH TAP hold after quick pinch tap');
+
+  // Switch Synth -> Pointer -> Synth within <400ms: must NOT leak PINCH TAP onto newly armed hand
+  pointerSegBtn.click();
+  synthSegBtn.click();
+  h.stepFrames(18); // ~300ms < 950ms
+  assert.equal(gestureGateLbl.textContent, 'OPEN PALM', 'Mode switch within 950ms must not leak stale PINCH TAP');
+
+  // Trigger another PINCH TAP, then start & stop V-Scroll within 950ms -> must return to OPEN PALM
+  h.doc.dispatchEvent({ type: 'keydown', key: 'p', repeat: false, target: h.body, preventDefault() {} });
+  h.stepFrames(5);
+  h.doc.dispatchEvent({ type: 'keyup', key: 'p', target: h.body });
+  h.stepFrames(6);
+  assert.equal(gestureGateLbl.textContent, 'PINCH TAP');
+  rigBtnVScroll.click();
+  h.stepFrames(8);
+  assert.ok(gestureGateLbl.textContent.startsWith('SCROLL'), `Expected SCROLL gesture, got ${gestureGateLbl.textContent}`);
+  rigBtnVScroll.click();
+  h.stepFrames(8);
+  assert.equal(gestureGateLbl.textContent, 'OPEN PALM', 'Ending V-Scroll within 950ms must not revert to stale PINCH TAP');
+
+  // E. Rig fist/pinch button sync & `keyup('p')` input guard (#29.9)
+  rigBtnPinch.dispatchEvent({ type: 'pointerdown', pointerId: 1 });
+  rigBtnPinch.dispatchEvent({ type: 'pointerup', pointerId: 1 }); // quick tap latches pinch
+  assert.equal(rigBtnPinch.getAttribute('aria-pressed'), 'true');
+  // `keyup('p')` from an <input> must NOT unlatch `rigBtnPinch`
+  const tuneInput = h.findFirst(wbCells[8], 'input');
+  h.doc.dispatchEvent({ type: 'keyup', key: 'p', target: tuneInput });
+  assert.equal(rigBtnPinch.getAttribute('aria-pressed'), 'true', 'keyup(p) on INPUT must not clear Synth pinch');
+  // Pressing `G` (fist clutch) clears targetPinch AND syncs `rigBtnPinch` aria-pressed to false
+  h.doc.dispatchEvent({ type: 'keydown', key: 'g', repeat: false, target: h.body, preventDefault() {} });
+  assert.equal(rigBtnPinch.getAttribute('aria-pressed'), 'false', 'Pressing G must sync rigBtnPinch aria-pressed=false');
+  // Clicking `rigBtnPinch` while fist was active must clear targetFist so pinch actually engages!
+  rigBtnPinch.dispatchEvent({ type: 'pointerdown', pointerId: 2 });
+  h.stepFrames(8);
+  assert.equal(gestureGateLbl.textContent, 'PINCH LOCK', 'rigBtnPinch must clear targetFist so pinch engages');
+  rigBtnPinch.dispatchEvent({ type: 'pointercancel', pointerId: 2 });
+  h.stepFrames(6);
+
+  // F. Cell 08 puck `pointercancel` and window `blur` must NOT toggle stage bypass (#29.10)
+  const c8Bay = h.findFirst(wbCells[7], '.hg-puck-bay');
+  const c8Metric = h.findFirst(wbCells[7], '.hg-cell-metric');
+  assert.equal(c8Metric.textContent, '4/4 ON');
+  c8Bay.children[0].dispatchEvent({ type: 'pointerdown', clientX: 20, clientY: 20, pointerId: 3, target: c8Bay.children[0] });
+  c8Bay.dispatchEvent({ type: 'pointerdown', clientX: 20, clientY: 20, pointerId: 3, target: c8Bay.children[0] });
+  c8Bay.dispatchEvent({ type: 'pointercancel', pointerId: 3 });
+  assert.equal(c8Metric.textContent, '4/4 ON', 'pointercancel on puck must not toggle bypass');
+  c8Bay.dispatchEvent({ type: 'pointerdown', clientX: 20, clientY: 20, pointerId: 4, target: c8Bay.children[0] });
+  h.sandbox.dispatchEvent({ type: 'blur' });
+  assert.equal(c8Metric.textContent, '4/4 ON', 'window blur during puck press must not toggle bypass');
+  c8Bay.dispatchEvent({ type: 'pointerdown', clientX: 20, clientY: 20, pointerId: 5, target: c8Bay.children[0] });
+  c8Bay.dispatchEvent({ type: 'pointerup', pointerId: 5 });
+  assert.equal(c8Metric.textContent, '3/4 ON', 'normal pointerup tap on puck toggles bypass');
+
+  // G. Frozen scope resize must not mutate 2D cursor trail (#29.8)
+  const freezeBtn = h.findByText(wbCells[1], 'Hold Trace');
+  h.stepFrames(10);
+  freezeBtn.click();
+  assert.equal(freezeBtn.getAttribute('aria-pressed'), 'true');
+  h.scopeArcs.length = 0;
+  h.sandbox.dispatchEvent({ type: 'resize' });
+  const frozenSnapshot = JSON.stringify(h.scopeArcs);
+  // Move simulated hand via keyboard arrows while frozen, then resize repeatedly
+  const rigStage = h.findFirst(wbCells[0], '.hg-rig-stage');
+  rigStage.dispatchEvent({ type: 'keydown', key: 'ArrowRight', shiftKey: true, preventDefault() {} });
+  h.stepFrames(6);
+  h.scopeArcs.length = 0;
+  h.sandbox.dispatchEvent({ type: 'resize' });
+  assert.equal(JSON.stringify(h.scopeArcs), frozenSnapshot, 'Resizing while Hold Trace is frozen must not push new trail points');
+  freezeBtn.click();
+
+  // H. `innerWidth = 0` and `innerWidth = NaN` never emit NaN reticle transforms (#29.10)
+  const primaryCursor = h.findFirst(overlay, '.hg-spatial-cursor');
+  h.sandbox.innerWidth = 0;
+  h.sandbox.innerHeight = 0;
+  h.stepFrames(2);
+  assert.equal(String(primaryCursor.style.transform).includes('NaN'), false, 'innerWidth=0 must keep reticle transform finite');
+  h.sandbox.innerWidth = NaN;
+  h.sandbox.innerHeight = NaN;
+  h.stepFrames(2);
+  assert.equal(String(primaryCursor.style.transform).includes('NaN'), false, 'innerWidth=NaN must keep reticle transform finite');
+  h.sandbox.innerWidth = 1280;
+  h.sandbox.innerHeight = 800;
+
+  // I. Cell 07 `< 18 px/s` row detent converges onto exact `25px` row multiple under Blink 0.5px quantization (#30.2)
+  const tapeList = h.findFirst(wbCells[6], '.hg-tape-list');
+  tapeList.quantizeScroll = true;
+  const flickDownBtn = h.findByText(wbCells[6], 'Flick ↓');
+  flickDownBtn.click();
+  h.stepFrames(180);
+  assert.ok(tapeList.scrollTop > 0, 'Expected Flick ↓ to advance quantized tape');
+  assert.equal(
+    tapeList.scrollTop % 25,
+    0,
+    `Expected quantized Cell 07 row detent to settle on exact 25px multiple, got ${tapeList.scrollTop}`
+  );
+
+  // J. Live Studio gate pills never show rounding contradictions at 0.219 facing or 0.859 palmY (#29.6)
+  const origStepPop = K.SyntheticHandRig.prototype.stepAndPopulate;
+  const customNorm = new Float64Array(63);
+  const customWorld = new Float64Array(63);
+  const helperRig = new K.SyntheticHandRig();
+  helperRig.noiseSigma = 0;
+  try {
+    // Build a pose with camY yielding palmY ~ 0.859 (< 0.86 pass) and dorsal yielding palmFacingCos ~ 0.219 (< 0.22 fail)
+    let targetDorsal = 0.43;
+    for (let d = 0.35; d <= 0.50; d += 0.0005) {
+      helperRig.buildPoseForTest({ rawCamX: 0.5, camY: 0.5, dorsal: d, isLeftLabel: true }, customNorm, customWorld);
+      const c = K.computePalmFacingCosFlat(customWorld, true, false);
+      if (c >= 0.216 && c < 0.220) { targetDorsal = d; break; }
+    }
+    let targetCamY = 0.88;
+    for (let y = 0.80; y <= 0.92; y += 0.0005) {
+      helperRig.buildPoseForTest({ rawCamX: 0.5, camY: y, dorsal: targetDorsal, isLeftLabel: true }, customNorm, customWorld);
+      const py = (customNorm[1] + customNorm[16] + customNorm[28] + customNorm[52]) * 0.25;
+      if (py >= 0.856 && py < 0.860) { targetCamY = y; break; }
+    }
+    helperRig.buildPoseForTest({ rawCamX: 0.5, camY: targetCamY, dorsal: targetDorsal, isLeftLabel: true }, customNorm, customWorld);
+    K.SyntheticHandRig.prototype.stepAndPopulate = function (eng) {
+      eng.setFlatCandidate(0, customNorm, customWorld, true, 4 / 3);
+      return 1;
+    };
+    h.stepFrames(2);
+    const faceGateEl = gateGroup.children[1];
+    const kbdGateEl = gateGroup.children[2];
+    const faceLbl = h.findFirst(faceGateEl, '.ui-pill-label').textContent;
+    const kbdLbl = h.findFirst(kbdGateEl, '.ui-pill-label').textContent;
+    assert.equal(faceGateEl.getAttribute('data-tone'), 'attention', '0.219 facing must fail >=0.22 gate');
+    assert.equal(faceLbl, 'FACE +.21≥.22', 'Failing 0.219 facing must display +.21≥.22, never +.22≥.22');
+    assert.equal(kbdGateEl.getAttribute('data-state'), 'pass', '0.859 palmY must pass <0.86 gate');
+    assert.equal(kbdLbl, 'KBD .85<.86', 'Passing 0.859 palmY must display .85<.86, never .86<.86');
+  } finally {
+    K.SyntheticHandRig.prototype.stepAndPopulate = origStepPop;
+  }
+
+  // K. `swapDomToMain` calls `setMode(IDLE)` BEFORE `setVideoElement(miniVideo)` (#29.10)
+  const origSetMode = T.HandTrackerController.prototype.setMode;
+  const origSetVid = T.HandTrackerController.prototype.setVideoElement;
+  const closeCallOrder = [];
+  T.HandTrackerController.prototype.setMode = function (m) {
+    closeCallOrder.push('setMode:' + m);
+    return origSetMode.call(this, m);
+  };
+  T.HandTrackerController.prototype.setVideoElement = function (el) {
+    closeCallOrder.push('setVideoElement:' + (el && el.className));
+    return origSetVid.call(this, el);
+  };
+  try {
+    backBtn.click();
+  } finally {
+    T.HandTrackerController.prototype.setMode = origSetMode;
+    T.HandTrackerController.prototype.setVideoElement = origSetVid;
+  }
+  assert.equal(hgPage.hidden, true);
+  assert.deepEqual(
+    closeCallOrder,
+    ['setMode:idle', 'setVideoElement:hg-mini-video'],
+    'swapDomToMain must stop camera via setMode(IDLE) before handing video element back to miniVideo'
+  );
+
+  // L. Spatial PINCH TAP on Studio `Close` button & Main-grid `Sim` button (#29.2)
+  studioBtn.click();
+  const tourSegBtn = h.findByText(hgPage, 'Tour');
+  tourSegBtn.click();
+  h.setElementAtPoint(backBtn);
+  for (let i = 0; i < 160 && !hgPage.hidden; i++) {
+    h.stepFrames(1);
+  }
+  assert.equal(hgPage.hidden, true, 'Spatial PINCH TAP on Close button during Tour must close Studio');
+  assert.equal(portalPillLbl.textContent, 'Off', 'Tile pill must stay Off after spatial tap closes Studio');
+  assert.equal(h.getRaf(), null, 'rAF loop must remain stopped after spatial tap closes Studio');
+
+  portalSimBtn.click();
+  h.stepFrames(20);
+  assert.equal(portalPillLbl.textContent, 'ARMED');
+  const origStepAndPopulate = K.SyntheticHandRig.prototype.stepAndPopulate;
+  let injectPinchFrames = -1;
+  K.SyntheticHandRig.prototype.stepAndPopulate = function (eng, dt, aspect) {
+    if (injectPinchFrames >= 0) {
+      this.autoOrbit = false;
+      this.targetPinch = (injectPinchFrames >= 10 && injectPinchFrames <= 15) ? 1 : 0;
+      injectPinchFrames++;
+    }
+    return origStepAndPopulate.call(this, eng, dt, aspect);
+  };
+  try {
+    h.setElementAtPoint(portalSimBtn);
+    injectPinchFrames = 0;
+    h.stepFrames(26);
+  } finally {
+    K.SyntheticHandRig.prototype.stepAndPopulate = origStepAndPopulate;
+  }
+  assert.equal(portalSimBtn.getAttribute('aria-pressed'), 'false', 'Spatial PINCH TAP on main-grid Sim button must turn Sim off');
+  assert.equal(portalPillLbl.textContent, 'Off', 'Main-grid Sim spatial tap must not overwrite Off pill with IDLE');
+  assert.equal(primPosVal.textContent, '0.50, 0.50', 'Main-grid Sim spatial tap must preserve reset 0.50, 0.50 readout');
+  assert.equal(primPinchVal.textContent, '0.72 OPEN', 'Main-grid Sim spatial tap must preserve reset 0.72 OPEN readout');
+  assert.equal(primGestureVal.textContent, 'STANDBY', 'Main-grid Sim spatial tap must preserve STANDBY gesture readout');
+  assert.equal(overlay.hidden, true, 'Spatial overlay must remain hidden after Sim turns off');
+  assert.equal(h.getRaf(), null, 'rAF must remain stopped after Sim turns off');
 });

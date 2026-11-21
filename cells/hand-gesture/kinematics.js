@@ -352,6 +352,10 @@
       this.worldLm = new Float64Array(63);
       this.euroFilter = new OneEuroFilter2D();
       this.reset();
+      this.resetPosition();
+    }
+
+    resetPosition() {
       this.palmX = 0.5;
       this.palmY = 0.5;
       this.palmSpan = 0;
@@ -474,7 +478,9 @@
 
     resetAll() {
       this.slots[0].reset();
+      this.slots[0].resetPosition();
       this.slots[1].reset();
+      this.slots[1].resetPosition();
       this.scope.clear();
       this._twoHandWasActive = false;
       this._twoHandTotalDeg = 0;
@@ -484,6 +490,8 @@
       this.events.twoHandScaleRatio = 1.0;
       this.events.twoHandTotalDeg = 0;
       this.events.scrollVelocityPx = 0;
+      this._prevInteractiveX = 0;
+      this._prevInteractiveY = 0;
       this.resetClock();
     }
 
@@ -499,6 +507,7 @@
     resetSlot(idx) {
       if (idx === 0 || idx === 1) {
         this.slots[idx].reset();
+        this.slots[idx].resetPosition();
       }
     }
 
@@ -720,6 +729,7 @@
             s0.interactiveY = s0.screenY;
             s0.twistAnchorRad = s0.unwrappedRad;
             s0.twistBrokenOut = false;
+            s0.twistBreakoutSign = 0;
             s0.twistTotalDeg = 0;
             s0.twistDeltaDeg = 0;
             this._prevInteractiveX = s0.interactiveX;
@@ -735,6 +745,7 @@
             s1.interactiveY = s1.screenY;
             s1.twistAnchorRad = s1.unwrappedRad;
             s1.twistBrokenOut = false;
+            s1.twistBreakoutSign = 0;
             s1.twistTotalDeg = 0;
             s1.twistDeltaDeg = 0;
           }
@@ -954,6 +965,7 @@
           slot.pinched = false;
           slot.pinchMode = PINCH_MODE.NONE;
           slot.twistBrokenOut = false;
+          slot.twistBreakoutSign = 0;
           slot.twistTotalDeg = 0;
           slot.twistDeltaDeg = 0;
           if (isPrimary) this.events.pinchRelease = true;
@@ -1047,6 +1059,8 @@
         slot.pinched = false;
         slot.pinchMode = PINCH_MODE.NONE;
         slot.twistBrokenOut = false;
+        slot.twistBreakoutSign = 0;
+        slot.twistTotalDeg = 0;
         slot.twistDeltaDeg = 0;
         if (isPrimary) {
           this.events.pinchRelease = true;

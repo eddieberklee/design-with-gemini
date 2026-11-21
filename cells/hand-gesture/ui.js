@@ -23,14 +23,66 @@
   const MINI_TRAIL_LEN = 18;
   const GESTURE_HOLD_MS = 950;
 
+  function roundCents(v) {
+    if (!Number.isFinite(v)) return 0;
+    const c = Math.round(v * 100);
+    return c === 0 ? 0 : c;
+  }
+
+  function gateGeCents(v, threshold) {
+    let c = roundCents(v);
+    if (!Number.isFinite(v) || !Number.isFinite(threshold)) return c;
+    const minPass = Math.ceil(threshold * 100 - 1e-9);
+    if (v < threshold && c >= minPass) c = minPass - 1;
+    else if (v >= threshold && c < minPass) c = minPass;
+    return c === 0 ? 0 : c;
+  }
+
+  function gateLtCents(v, threshold) {
+    let c = roundCents(v);
+    if (!Number.isFinite(v) || !Number.isFinite(threshold)) return c;
+    const minFail = Math.floor(threshold * 100 + 1e-9);
+    if (v < threshold && c >= minFail) c = minFail - 1;
+    else if (v >= threshold && c < minFail) c = minFail;
+    return c === 0 ? 0 : c;
+  }
+
+  function fmtCentsDot(cents, forceSign) {
+    const c = Number.isFinite(cents) ? Math.trunc(cents) : 0;
+    const absC = Math.abs(c);
+    const whole = Math.floor(absC / 100);
+    const frac = String(absC % 100).padStart(2, '0');
+    const body = (whole > 0 ? String(whole) : '') + '.' + frac;
+    if (forceSign) {
+      return (c < 0 ? '-' : '+') + body;
+    }
+    return (c < 0 ? '-' : '') + body;
+  }
+
+  function fmtCentsFixed2(cents, forceSign) {
+    const c = Number.isFinite(cents) ? Math.trunc(cents) : 0;
+    const absC = Math.abs(c);
+    const body = Math.floor(absC / 100) + '.' + String(absC % 100).padStart(2, '0');
+    if (forceSign) {
+      return (c < 0 ? '-' : '+') + body;
+    }
+    return (c < 0 ? '-' : '') + body;
+  }
+
   function fmtDot(v) {
-    const s = Number.isFinite(v) ? v.toFixed(2) : '0.00';
-    return s.indexOf('0.') === 0 ? s.slice(1) : s;
+    return fmtCentsDot(roundCents(v), false);
   }
 
   function fmtSignedDot(v) {
-    const num = Number.isFinite(v) ? v : 0;
-    return (num >= 0 ? '+' : '-') + fmtDot(Math.abs(num));
+    return fmtCentsDot(roundCents(v), true);
+  }
+
+  function fmtGateGe(v, threshold, forceSign) {
+    return fmtCentsDot(gateGeCents(v, threshold), Boolean(forceSign));
+  }
+
+  function fmtGateLt(v, threshold) {
+    return fmtCentsDot(gateLtCents(v, threshold), false);
   }
 
   const TAPE_SPEC_ITEMS = [
@@ -131,7 +183,13 @@
   }
 
   function setAttr(el, k, v) {
-    if (el) el.setAttribute(k, String(v));
+    if (!el) return;
+    const str = String(v);
+    if (el.getAttribute(k) !== str) el.setAttribute(k, str);
+  }
+
+  function setText(el, str) {
+    if (el && el.textContent !== str) el.textContent = str;
   }
 
   function safeSetPointerCapture(el, pointerId) {
@@ -215,32 +273,39 @@
     let gestureHoldUntilMs = 0;
     const gestureOut = { badge: 'STANDBY', short: 'STANDBY', active: false };
 
-    function clearGestureHold() {
+    function resetGestureHoldLatch() {
       gestureHoldCode = '';
       gestureHoldUntilMs = 0;
+    }
+
+    function clearGestureHold() {
+      resetGestureHoldLatch();
       gestureOut.badge = 'STANDBY';
       gestureOut.short = 'STANDBY';
       gestureOut.active = false;
     }
 
     function classifyGesture(s0, events, nowMs, mode) {
-      if (events && events.clickFired) {
-        gestureHoldCode = 'PINCH TAP';
-        gestureHoldUntilMs = nowMs + GESTURE_HOLD_MS;
-      }
       if (mode === TRACKER_MODE.IDLE) {
+        resetGestureHoldLatch();
         gestureOut.badge = 'STANDBY';
         gestureOut.short = 'STANDBY';
         gestureOut.active = false;
         return gestureOut;
       }
       if (mode === TRACKER_MODE.POINTER) {
+        resetGestureHoldLatch();
         gestureOut.badge = 'POINTER';
         gestureOut.short = 'POINTER';
         gestureOut.active = false;
         return gestureOut;
       }
+      if (events && events.clickFired) {
+        gestureHoldCode = 'PINCH TAP';
+        gestureHoldUntilMs = nowMs + GESTURE_HOLD_MS;
+      }
       if (events && events.twoHandActive) {
+        resetGestureHoldLatch();
         if (Math.abs(events.twoHandTotalDeg) >= 4) {
           const tDeg = Math.round(events.twoHandTotalDeg);
           const sDeg = (tDeg >= 0 ? '+' : '') + tDeg + '°';
@@ -256,6 +321,7 @@
       }
       if (s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING) {
         if (s0.pinched) {
+          resetGestureHoldLatch();
           if (s0.twistBrokenOut) {
             const rVal = Math.round(s0.twistTotalDeg);
             const sVal = (rVal >= 0 ? '+' : '') + rVal + '°';
@@ -272,6 +338,7 @@
           return gestureOut;
         }
         if (s0.vScrollActive) {
+          resetGestureHoldLatch();
           const down = (events ? events.scrollVelocityPx : 0) >= 0;
           gestureOut.badge = down ? 'SCROLL DOWN' : 'SCROLL UP';
           gestureOut.short = down ? 'SCROLL ↓' : 'SCROLL ↑';
@@ -279,16 +346,20 @@
           return gestureOut;
         }
         if (s0.clutchReleased) {
+          resetGestureHoldLatch();
           gestureOut.badge = 'FIST CLUTCH';
           gestureOut.short = 'FIST CLUTCH';
           gestureOut.active = true;
           return gestureOut;
         }
-        if (nowMs < gestureHoldUntilMs && gestureHoldCode) {
-          gestureOut.badge = gestureHoldCode;
-          gestureOut.short = gestureHoldCode;
-          gestureOut.active = true;
-          return gestureOut;
+        if (gestureHoldCode) {
+          if (nowMs < gestureHoldUntilMs) {
+            gestureOut.badge = gestureHoldCode;
+            gestureOut.short = gestureHoldCode;
+            gestureOut.active = true;
+            return gestureOut;
+          }
+          resetGestureHoldLatch();
         }
         if (s0.state === HAND_STATE.COASTING) {
           const coast = 'COAST ' + s0.coastFrames + '/4';
@@ -302,6 +373,7 @@
         gestureOut.active = false;
         return gestureOut;
       }
+      resetGestureHoldLatch();
       if (s0.state === HAND_STATE.ARMING) {
         gestureOut.badge = 'ARMING ' + Math.round(s0.armProgress * 200) + 'ms';
         gestureOut.short = 'ARMING ' + Math.round(s0.armProgress * 100) + '%';
@@ -380,28 +452,6 @@
       textContent: 'SPAN ≥.055 · FACE ≥+.22',
     });
 
-    // Top-left detected gesture HUD badge inside the 160 × 120 camera field.
-    const miniGestureBg = svgEl('rect', {
-      x: 5, y: 5, width: 38, height: 12, rx: '2.5',
-      fill: withAlpha(PAL.surface, 0.9), stroke: PAL.line, 'stroke-width': '1',
-    });
-    const miniGestureText = svgEl('text', {
-      className: 'hg-mini-gesture', x: 9, y: 12.8,
-      fill: PAL.ink2, 'font-family': MONO, 'font-size': '5.5', 'font-weight': '600', 'letter-spacing': '0.04em',
-      textContent: 'STANDBY',
-    });
-    let miniGestureKey = '';
-    function setMiniGesture(label, active) {
-      const key = label + '|' + (active ? '1' : '0');
-      if (key === miniGestureKey) return;
-      miniGestureKey = key;
-      miniGestureText.textContent = label;
-      const w = Math.min(102, Math.max(36, label.length * 3.55 + 8));
-      setAttr(miniGestureBg, 'width', w.toFixed(1));
-      setAttr(miniGestureBg, 'stroke', active ? PAL.accent : PAL.line);
-      setAttr(miniGestureText, 'fill', active ? PAL.accent : PAL.ink2);
-    }
-
     // Top-right mini screen-cursor monitor inset showing the mapped cursor moving around.
     const miniScreenBox = svgEl('rect', {
       className: 'hg-mini-screen', x: 111, y: 5, width: 44, height: 30, rx: '2.5',
@@ -409,10 +459,6 @@
     });
     const miniScreenAxes = svgEl('path', {
       d: 'M133 8V32M114 20H152', stroke: PAL.hairline, 'stroke-width': '1',
-    });
-    const miniScreenLabel = svgEl('text', {
-      x: 113.5, y: 11.2, fill: PAL.ink3, 'font-family': MONO, 'font-size': '4.2', 'letter-spacing': '0.04em',
-      textContent: 'CURSOR',
     });
     const miniCursorTrail = svgEl('polyline', {
       className: 'hg-mini-cursor-trail', fill: 'none', stroke: CAN.inkA25,
@@ -435,6 +481,9 @@
     let miniTrailCount = 0;
     let miniTrailLive = false;
 
+    let miniCursorKey = '';
+    let miniBoneKey = '';
+
     function renderMiniTrailPoints() {
       let pts = '';
       for (let k = 0; k < miniTrailCount; k++) {
@@ -451,22 +500,31 @@
       const cv = clamp(v, 0, 1);
       const cx = 114 + cu * 38;
       const cy = 8 + cv * 24;
-      setAttr(miniCursorDot, 'cx', cx.toFixed(1));
-      setAttr(miniCursorDot, 'cy', cy.toFixed(1));
+      const cxS = cx.toFixed(1);
+      const cyS = cy.toFixed(1);
+      let lxS = '';
+      let lyS = '';
+      if (pinched) {
+        lxS = (114 + clamp(lockU, 0, 1) * 38).toFixed(1);
+        lyS = (8 + clamp(lockV, 0, 1) * 24).toFixed(1);
+      }
+      const key = cxS + '|' + cyS + '|' + (pinched ? '1:' + lxS + ',' + lyS : '0');
+      if (key === miniCursorKey) return;
+      miniCursorKey = key;
+      setAttr(miniCursorDot, 'cx', cxS);
+      setAttr(miniCursorDot, 'cy', cyS);
       setAttr(miniCursorDot, 'fill', pinched ? PAL.accent : PAL.ink);
       setAttr(
         miniCursorCross,
         'd',
-        'M' + cx.toFixed(1) + ' ' + (cy - 3.2).toFixed(1) + 'V' + (cy + 3.2).toFixed(1) +
-        'M' + (cx - 3.2).toFixed(1) + ' ' + cy.toFixed(1) + 'H' + (cx + 3.2).toFixed(1)
+        'M' + cxS + ' ' + (cy - 3.2).toFixed(1) + 'V' + (cy + 3.2).toFixed(1) +
+        'M' + (cx - 3.2).toFixed(1) + ' ' + cyS + 'H' + (cx + 3.2).toFixed(1)
       );
       setAttr(miniCursorCross, 'stroke', pinched ? PAL.accent : PAL.ink);
       setAttr(miniCursorTrail, 'stroke', pinched ? CAN.accentA45 : CAN.inkA25);
       if (pinched) {
-        const lx = 114 + clamp(lockU, 0, 1) * 38;
-        const ly = 8 + clamp(lockV, 0, 1) * 24;
-        setAttr(miniCursorLock, 'cx', lx.toFixed(1));
-        setAttr(miniCursorLock, 'cy', ly.toFixed(1));
+        setAttr(miniCursorLock, 'cx', lxS);
+        setAttr(miniCursorLock, 'cy', lyS);
         setAttr(miniCursorLock, 'visibility', 'visible');
       } else {
         setAttr(miniCursorLock, 'visibility', 'hidden');
@@ -606,14 +664,23 @@
     const PILL_TIP_STANDBY = 'Hand cursor is off. Press Cam or Sim to start it.';
     setPortalPill('Off', 'idle', PILL_TIP_STANDBY);
 
+    const PORTAL_HINT = 'Hold an open palm still, then pinch, twist or scroll.';
+    function portalHintTip() {
+      return (
+        'Arm 200 ms · pinch < ' +
+        fmtDot(engine.config.pinchEngage) +
+        ' · lock 14 px · twist ±3.5° · above keyboard < ' +
+        fmtDot(engine.config.keyboardExclusionY) +
+        '.'
+      );
+    }
+
     function setPortalStatus(text, tip) {
       if (portalStatusText.textContent !== text) portalStatusText.textContent = text;
       if (tip) portalStatusText.setAttribute('data-tip', tip);
       else portalStatusText.removeAttribute('data-tip');
     }
-    const PORTAL_HINT = 'Hold an open palm still, then pinch, twist or scroll.';
-    const PORTAL_HINT_TIP = 'Arm 200 ms · pinch < .28 · lock 14 px · twist ±3.5° · above keyboard < .86.';
-    setPortalStatus(PORTAL_HINT, PORTAL_HINT_TIP);
+    setPortalStatus(PORTAL_HINT, portalHintTip());
 
     // Cam / Sim: pressed state, running tone (rust) and a tip that says what the next click does.
     // `inStudio` is passed in (not read from `isSecondaryOpen`, which is declared later).
@@ -671,10 +738,10 @@
       setAttr(miniAnchorRing, 'stroke-dashoffset', '0');
       setAttr(miniKbdText, 'fill', PAL.ink3);
       setAttr(miniGatesText, 'fill', PAL.ink3);
-      setMiniGesture('STANDBY', false);
 
+      miniBoneKey = '';
       miniTrailLive = false;
-      miniTrailHead = 0;
+      miniTrailHead = 12;
       miniTrailCount = 12;
       for (let k = 0; k < 12; k++) {
         const t = k / 11;
@@ -997,6 +1064,7 @@
     function tunerRow(label, tip, input, val) {
       return h('label', { className: 'hg-tuner-row', 'data-tip': tip }, [h('span', { className: 'ui-label hg-tuner-label', textContent: label }), input, val]);
     }
+    const tunerInputs = [tuneMinCutoff, tuneBeta, tunePinch, tuneNoise];
     const tunerRows = [
       tunerRow('Cutoff', '1€ filter at rest: lower is steadier, higher follows faster.', tuneMinCutoff, valMinCutoff),
       tunerRow('Beta', '1€ filter speed boost: higher drops smoothing sooner on fast moves.', tuneBeta, valBeta),
@@ -1130,7 +1198,28 @@
     const dialCtx = dialCanvas.getContext('2d', { alpha: true });
     const canvasSizes = { rigW: 320, rigH: 200, scopeW: 320, scopeH: 200, dialW: 200, dialH: 160 };
 
-    const c2 = { waypointU: 0.5, waypointV: 0.5, frozen: false, trailU: new Float32Array(56), trailV: new Float32Array(56), trailHead: 0, trailCount: 0 };
+    const c2 = {
+      waypointU: 0.5,
+      waypointV: 0.5,
+      frozen: false,
+      trailU: new Float32Array(56),
+      trailV: new Float32Array(56),
+      trailHead: 0,
+      trailCount: 0,
+      heldRawU: 0.5,
+      heldRawV: 0.5,
+      heldCursorU: 0.5,
+      heldCursorV: 0.5,
+      heldScope: {
+        capacity: 240,
+        rawX: new Float32Array(240),
+        smoothX: new Float32Array(240),
+        speed: new Float32Array(240),
+        damped: new Uint8Array(240),
+        head: 0,
+        count: 0,
+      },
+    };
     const c3 = { clickCount: 0, lastPadIdx: -1 };
     const c4 = { angleDeg: 0 };
     const c5 = { tx: 0, ty: 0, scale: 1.0, rotDeg: 0, baseScaleOn2H: 1.0, showGuides: true };
@@ -1149,11 +1238,29 @@
     let savedMainScrollY = 0;
     let enteredFromMainGrid = false;
     let cameraSuspendedByVisibility = false;
+    let lastTrackerMode = tracker.mode;
     let rafId = 0;
     let lastUiFrameMs = 0;
     let uiFrameCounter = 0;
     let rectsDirty = true;
     let puckEls = [];
+    const reticleCache = {
+      primaryVis: false,
+      primaryTx: '',
+      dwellOffset: '',
+      color: '',
+      tag: '',
+      lockMode: 0,
+      lockCoord: '',
+      tetherCoord: '',
+      secVis: false,
+      secTx: '',
+      chordVis: false,
+      chordCoord: '',
+      pillVis: false,
+      pillPos: '',
+      pillText: '',
+    };
 
     const tapeRowEls = TAPE_SPEC_ITEMS.map(function (pair, i) {
       const row = h('div', {
@@ -1301,6 +1408,8 @@
         }
         cursorPrimary.classList.remove('is-visible');
         cursorSecondary.classList.remove('is-visible');
+        reticleCache.primaryVis = false;
+        reticleCache.secVis = false;
       }
     }
 
@@ -1313,6 +1422,8 @@
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
+        clearSpatialLatches();
+        clearGestureHold();
         suspendCameraForHide();
       } else if (cameraSuspendedByVisibility) {
         cameraSuspendedByVisibility = false;
@@ -1325,15 +1436,18 @@
     function resetPortalPreview() {
       clearGestureHold();
       drawStaticMiniHand();
-      primPosVal.textContent = '0.50, 0.50';
-      primPinchVal.textContent = '0.72 OPEN';
-      primRotVal.textContent = '+0.0°';
-      primGestureVal.textContent = 'STANDBY';
+      setText(primPosVal, '0.50, 0.50');
+      setText(primPinchVal, '0.72 OPEN');
+      setText(primRotVal, '+0.0°');
+      setText(primGestureVal, 'STANDBY');
       primPosRow.classList.remove('is-lit');
       primPinchRow.classList.remove('is-lit');
       primRotRow.classList.remove('is-lit');
       primGestureRow.classList.remove('is-lit');
       setPortalPill('Off', 'idle', PILL_TIP_STANDBY);
+      if (!tracker.cameraError && !tracker.isWebcamStarting) {
+        setPortalStatus(PORTAL_HINT, portalHintTip());
+      }
     }
 
     // Any manual rig control while Auto Tour (or Pointer) is driving takes over as Synth Rig, so the
@@ -1454,6 +1568,17 @@
     }
 
     tracker.onStatusChange(function (mode, camStatus, camError, delegate) {
+      const modeChanged = mode !== lastTrackerMode || camStatus === CAMERA_STATUS.ERROR;
+      lastTrackerMode = mode;
+      if (modeChanged) {
+        clearSpatialLatches();
+        clearGestureHold();
+        if (!c2.frozen) {
+          c2.trailHead = 0;
+          c2.trailCount = 0;
+        }
+      }
+
       const isLive = mode === TRACKER_MODE.WEBCAM && camStatus === CAMERA_STATUS.STREAMING;
       const camPending = tracker.isWebcamStarting;
       miniVideo.classList.toggle('is-live', isLive && !isSecondaryOpen);
@@ -1490,7 +1615,7 @@
         setPortalStatus('Simulated hand is driving the cursor across this page', '');
       } else {
         camBanner.hidden = true;
-        setPortalStatus(PORTAL_HINT, PORTAL_HINT_TIP);
+        setPortalStatus(PORTAL_HINT, portalHintTip());
       }
       if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) {
         resetPortalPreview();
@@ -1614,7 +1739,7 @@
       if (!isSecondaryOpen) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = e.target && e.target.tagName ? e.target.tagName : '';
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || Boolean(e.target && e.target.isContentEditable)) return;
       const k = e.key;
       if (k === '?') { e.preventDefault(); btnToggleKeys.click(); return; }
       if (k === 'c' || k === 'C') {
@@ -1646,6 +1771,7 @@
         synthRig.targetPinch = 0;
         synthRig.targetVScroll = 0;
         synthRig.targetFist = synthRig.targetFist > 0.5 ? 0 : 1;
+        syncRigButtons();
       } else if ((k === 'f' || k === 'F') && !e.repeat) {
         takeManualRigControl();
         synthRig.targetDorsal = synthRig.targetDorsal > 0.5 ? 0 : 1;
@@ -1674,6 +1800,9 @@
     });
 
     document.addEventListener('keyup', function (e) {
+      if (!isSecondaryOpen) return;
+      const tag = e.target && e.target.tagName ? e.target.tagName : '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || Boolean(e.target && e.target.isContentEditable)) return;
       if (e.key === 'p' || e.key === 'P') {
         if (synthRig.targetPinch !== 0) {
           synthRig.targetPinch = 0;
@@ -1688,7 +1817,7 @@
       dialDrag = false;
       stDrag = false;
       fdDrag = false;
-      if (puckDragSlot >= 0) endPuck();
+      if (puckDragSlot >= 0) endPuck(true);
       c5Card.classList.remove('is-manipulating');
       c6Track.classList.remove('is-latched');
       c6LatchBadge.textContent = 'READY';
@@ -1734,6 +1863,8 @@
     rigStage.addEventListener('dblclick', function () {
       if (tracker.mode === TRACKER_MODE.WEBCAM) return;
       takeManualRigControl();
+      synthRig.targetVScroll = 0;
+      synthRig.targetFist = 0;
       synthRig.targetPinch = 1;
       syncRigButtons();
       setTimeout(function () {
@@ -1769,6 +1900,7 @@
       takeManualRigControl();
       pinchPressTs = performance.now();
       synthRig.targetVScroll = 0;
+      synthRig.targetFist = 0;
       safeSetPointerCapture(rigBtnPinch, e.pointerId);
       if (synthRig.targetPinch < 0.5) { synthRig.targetPinch = 1; syncRigButtons(); }
       else pinchPressTs = -1;
@@ -1781,9 +1913,25 @@
       syncRigButtons();
     });
     rigBtnPinch.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); takeManualRigControl(); synthRig.targetPinch = synthRig.targetPinch > 0.5 ? 0 : 1; syncRigButtons(); }
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        takeManualRigControl();
+        const next = synthRig.targetPinch > 0.5 ? 0 : 1;
+        if (next) {
+          synthRig.targetVScroll = 0;
+          synthRig.targetFist = 0;
+        }
+        synthRig.targetPinch = next;
+        syncRigButtons();
+      }
     });
-    rigBtnVScroll.addEventListener('click', function () { takeManualRigControl(); synthRig.targetPinch = 0; synthRig.targetVScroll = synthRig.targetVScroll > 0.5 ? 0 : 1; syncRigButtons(); });
+    rigBtnVScroll.addEventListener('click', function () {
+      takeManualRigControl();
+      synthRig.targetPinch = 0;
+      synthRig.targetFist = 0;
+      synthRig.targetVScroll = synthRig.targetVScroll > 0.5 ? 0 : 1;
+      syncRigButtons();
+    });
     rigBtnDorsal.addEventListener('click', function () { takeManualRigControl(); synthRig.targetDorsal = synthRig.targetDorsal > 0.5 ? 0 : 1; syncRigButtons(); });
     rigBtnDual.addEventListener('click', function () {
       takeManualRigControl();
@@ -1805,8 +1953,10 @@
 
     secondaryPage.addEventListener('pointermove', function (e) {
       if (tracker.mode !== TRACKER_MODE.POINTER) return;
-      const u = clamp(e.clientX / Math.max(1, global.innerWidth), 0, 1);
-      const v = clamp(e.clientY / Math.max(1, global.innerHeight), 0, 1);
+      const vw = Math.max(1, Number.isFinite(global.innerWidth) ? global.innerWidth : 1280);
+      const vh = Math.max(1, Number.isFinite(global.innerHeight) ? global.innerHeight : 800);
+      const u = clamp(e.clientX / vw, 0, 1);
+      const v = clamp(e.clientY / vh, 0, 1);
       feedPointerToScope(u, v);
     });
 
@@ -1835,6 +1985,20 @@
     });
     c2FreezeBtn.addEventListener('click', function () {
       c2.frozen = !c2.frozen;
+      if (c2.frozen) {
+        const s0 = engine.slots[0];
+        const sc = engine.scope;
+        c2.heldRawU = s0.rawU;
+        c2.heldRawV = s0.rawV;
+        c2.heldCursorU = s0.cursorU;
+        c2.heldCursorV = s0.cursorV;
+        c2.heldScope.rawX.set(sc.rawX);
+        c2.heldScope.smoothX.set(sc.smoothX);
+        c2.heldScope.speed.set(sc.speed);
+        c2.heldScope.damped.set(sc.damped);
+        c2.heldScope.head = sc.head;
+        c2.heldScope.count = sc.count;
+      }
       setAttr(c2FreezeBtn, 'aria-pressed', String(c2.frozen));
     });
 
@@ -2016,9 +2180,9 @@
         }
       }
     });
-    const endPuck = function () {
+    const endPuck = function (cancelled) {
       if (puckDragSlot < 0) return;
-      if (!puckBroken) togglePuckBypass(puckDragSlot);
+      if (!cancelled && !puckBroken) togglePuckBypass(puckDragSlot);
       else if (puckEls[puckDragSlot]) {
         puckEls[puckDragSlot].style.transform = '';
         puckEls[puckDragSlot].classList.remove('is-dragging');
@@ -2026,8 +2190,8 @@
       puckDragSlot = -1;
       puckBroken = false;
     };
-    c8Bay.addEventListener('pointerup', endPuck);
-    c8Bay.addEventListener('pointercancel', endPuck);
+    c8Bay.addEventListener('pointerup', function () { endPuck(false); });
+    c8Bay.addEventListener('pointercancel', function () { endPuck(true); });
     c8Bay.addEventListener('keydown', function (e) {
       const card = e.target.closest('.hg-puck-card');
       if (!card) return;
@@ -2067,6 +2231,9 @@
         'data-tip',
         'Finger gap over palm width; engages below ' + eng.toFixed(2) + ' and releases above ' + rel.toFixed(2) + '.'
       );
+      if (tracker.mode === TRACKER_MODE.IDLE && !tracker.cameraError && !tracker.isWebcamStarting) {
+        setPortalStatus(PORTAL_HINT, portalHintTip());
+      }
     }
 
     function syncRotationSourceUi() {
@@ -2128,7 +2295,9 @@
       const events = tracker.tick(safeNowMs, global.innerWidth, global.innerHeight);
       const s0 = engine.slots[0];
       const s1 = engine.slots[1];
-      const gesture = classifyGesture(s0, events, safeNowMs, tracker.mode);
+      const modeBeforeDispatch = tracker.mode;
+      let gesture = classifyGesture(s0, events, safeNowMs, modeBeforeDispatch);
+      let dialogOpen = !isSecondaryOpen && Boolean(document.querySelector('dialog[open]'));
       uiFrameCounter = (uiFrameCounter + 1) & 1;
 
       if (isSecondaryOpen) {
@@ -2138,34 +2307,53 @@
           c6Peak.style.bottom = (c6.peak * 100).toFixed(1) + '%';
         }
         dispatchSecondaryGestures(s0, s1, events, uiDtSec);
+        if (!shouldRunLoop() || !isSecondaryOpen) {
+          return;
+        }
+        if (tracker.mode !== modeBeforeDispatch) {
+          gesture = classifyGesture(s0, engine.events, safeNowMs, tracker.mode);
+        }
         drawCell01Rig(s0, s1, gesture);
         drawCell02Scope(s0);
         drawCell04Dial(s0);
         if (uiFrameCounter === 0) {
-          updateSecondaryReadouts(s0, events, gesture);
+          updateSecondaryReadouts(s0, engine.events, gesture);
         }
       } else {
-        dispatchMainGridGestures(s0, events);
-        updatePortalPreview(s0, events, gesture, uiFrameCounter === 0);
+        const clicked = dispatchMainGridGestures(s0, events, dialogOpen);
+        if (!shouldRunLoop()) {
+          return;
+        }
+        if (clicked) {
+          dialogOpen = !isSecondaryOpen && Boolean(document.querySelector('dialog[open]'));
+        }
+        if (tracker.mode !== modeBeforeDispatch) {
+          gesture = classifyGesture(s0, engine.events, safeNowMs, tracker.mode);
+        }
+        if (!isSecondaryOpen && !mainGrid.hidden && tracker.mode !== TRACKER_MODE.IDLE) {
+          updatePortalPreview(s0, engine.events, gesture, uiFrameCounter === 0);
+        }
       }
 
-      updateSpatialReticle(s0, s1, events, gesture);
+      updateSpatialReticle(s0, s1, engine.events, gesture, dialogOpen);
 
       if (shouldRunLoop() && !rafId) {
         rafId = requestAnimationFrame(onFrame);
       }
     }
 
-    function dispatchMainGridGestures(s0, events) {
-      if (mainGrid.hidden || document.querySelector('dialog[open]')) return;
+    function dispatchMainGridGestures(s0, events, dialogOpen) {
+      if (mainGrid.hidden || dialogOpen) return false;
       const isArmed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
-      if (!isArmed) return;
+      if (!isArmed) return false;
       if (Math.abs(events.scrollDeltaPx) > 0.25) {
         global.scrollBy(0, events.scrollDeltaPx);
       }
       if (events.clickFired && Number.isFinite(events.clickX) && Number.isFinite(events.clickY)) {
-        const maxX = Math.max(0, (global.innerWidth || 1) - 1);
-        const maxY = Math.max(0, (global.innerHeight || 1) - 1);
+        const vw = Math.max(1, Number.isFinite(global.innerWidth) ? global.innerWidth : 1280);
+        const vh = Math.max(1, Number.isFinite(global.innerHeight) ? global.innerHeight : 800);
+        const maxX = Math.max(0, vw - 1);
+        const maxY = Math.max(0, vh - 1);
         const cx = clamp(events.clickX, 0, maxX);
         const cy = clamp(events.clickY, 0, maxY);
         const el = document.elementFromPoint(cx, cy);
@@ -2178,14 +2366,17 @@
             btn.getAttribute('aria-disabled') !== 'true'
           ) {
             btn.click();
+            return true;
           }
         }
       }
+      return false;
     }
 
     function updatePortalPreview(s0, events, gesture, updateFoot) {
-      const vw = Math.max(1, global.innerWidth || 1);
-      const vh = Math.max(1, global.innerHeight || 1);
+      if (tracker.mode === TRACKER_MODE.IDLE) return;
+      const vw = Math.max(1, Number.isFinite(global.innerWidth) ? global.innerWidth : 1280);
+      const vh = Math.max(1, Number.isFinite(global.innerHeight) ? global.innerHeight : 800);
       const armed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
       const curU = armed ? clamp(s0.interactiveX / vw, 0, 1) : s0.cursorU;
       const curV = armed ? clamp(s0.interactiveY / vh, 0, 1) : s0.cursorV;
@@ -2193,56 +2384,71 @@
       const lockV = clamp(s0.lockOriginY / vh, 0, 1);
 
       if (s0.visible) {
-        const lm = s0.normLm;
-        for (let i = 0; i < HAND_BONES.length; i += 2) {
-          const a = HAND_BONES[i] * 3;
-          const b = HAND_BONES[i + 1] * 3;
-          const line = miniBoneLines[i >> 1];
-          setAttr(line, 'x1', ((1 - lm[a]) * 160).toFixed(1));
-          setAttr(line, 'y1', (lm[a + 1] * 120).toFixed(1));
-          setAttr(line, 'x2', ((1 - lm[b]) * 160).toFixed(1));
-          setAttr(line, 'y2', (lm[b + 1] * 120).toFixed(1));
-          setAttr(line, 'stroke', s0.gateFacingOk ? PAL.ink2 : PAL.accent);
+        const boneKey =
+          s0.lastSeenSec +
+          '|' +
+          (s0.gateFacingOk ? 1 : 0) +
+          '|' +
+          (s0.pinched ? 1 : 0) +
+          '|' +
+          (armed ? 1 : 0) +
+          '|' +
+          s0.armProgress.toFixed(3);
+        if (boneKey !== miniBoneKey) {
+          miniBoneKey = boneKey;
+          const lm = s0.normLm;
+          for (let i = 0; i < HAND_BONES.length; i += 2) {
+            const a = HAND_BONES[i] * 3;
+            const b = HAND_BONES[i + 1] * 3;
+            const line = miniBoneLines[i >> 1];
+            setAttr(line, 'x1', ((1 - lm[a]) * 160).toFixed(1));
+            setAttr(line, 'y1', (lm[a + 1] * 120).toFixed(1));
+            setAttr(line, 'x2', ((1 - lm[b]) * 160).toFixed(1));
+            setAttr(line, 'y2', (lm[b + 1] * 120).toFixed(1));
+            setAttr(line, 'stroke', s0.gateFacingOk ? PAL.ink2 : PAL.accent);
+          }
+          setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 160).toFixed(1));
+          setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 120).toFixed(1));
+          setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 160).toFixed(1));
+          setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 120).toFixed(1));
+          setAttr(miniPinchLine, 'stroke', s0.pinched ? PAL.accent : PAL.ink3);
+          setAttr(miniPinchLine, 'stroke-dasharray', s0.pinched ? 'none' : '3 3');
+          const ax = (1 - s0.anchorCamX) * 160;
+          const ay = s0.anchorCamY * 120;
+          setAttr(miniAnchorDot, 'cx', ax.toFixed(1));
+          setAttr(miniAnchorDot, 'cy', ay.toFixed(1));
+          setAttr(miniAnchorRing, 'cx', ax.toFixed(1));
+          setAttr(miniAnchorRing, 'cy', ay.toFixed(1));
+          setAttr(miniAnchorRing, 'stroke', s0.pinched ? PAL.accent : (armed ? PAL.ink : PAL.accent));
+          setAttr(miniAnchorRing, 'stroke-dashoffset', (CIRC_MINI_R * (1 - s0.armProgress)).toFixed(2));
         }
-        setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 160).toFixed(1));
-        setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 120).toFixed(1));
-        setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 160).toFixed(1));
-        setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 120).toFixed(1));
-        setAttr(miniPinchLine, 'stroke', s0.pinched ? PAL.accent : PAL.ink3);
-        setAttr(miniPinchLine, 'stroke-dasharray', s0.pinched ? 'none' : '3 3');
-        const ax = (1 - s0.anchorCamX) * 160;
-        const ay = s0.anchorCamY * 120;
-        setAttr(miniAnchorDot, 'cx', ax.toFixed(1));
-        setAttr(miniAnchorDot, 'cy', ay.toFixed(1));
-        setAttr(miniAnchorRing, 'cx', ax.toFixed(1));
-        setAttr(miniAnchorRing, 'cy', ay.toFixed(1));
-        setAttr(miniAnchorRing, 'stroke', s0.pinched ? PAL.accent : (armed ? PAL.ink : PAL.accent));
-        setAttr(miniAnchorRing, 'stroke-dashoffset', (CIRC_MINI_R * (1 - s0.armProgress)).toFixed(2));
       }
 
       setAttr(miniKbdText, 'fill', s0.visible && !s0.gateKeyboardOk ? PAL.accent : PAL.ink3);
       setAttr(miniGatesText, 'fill', s0.visible && (!s0.gateSpanOk || !s0.gateFacingOk) ? PAL.accent : PAL.ink3);
-      setMiniGesture(gesture.badge, gesture.active);
       if (s0.visible || armed) {
         pushMiniCursorSample(curU, curV, s0.pinched, lockU, lockV);
       }
 
-      primPosVal.textContent = curU.toFixed(2) + ', ' + curV.toFixed(2);
+      setText(primPosVal, curU.toFixed(2) + ', ' + curV.toFixed(2));
       const pinchState = s0.pinched ? ' LOCK' : (s0.velocityDamped ? ' DAMP' : ' OPEN');
-      primPinchVal.textContent = s0.pinchRatio.toFixed(2) + pinchState;
-      primRotVal.textContent = (s0.twistTotalDeg >= 0 ? '+' : '') + s0.twistTotalDeg.toFixed(1) + '°';
-      primGestureVal.textContent = gesture.short;
+      setText(primPinchVal, s0.pinchRatio.toFixed(2) + pinchState);
+      setText(primRotVal, (s0.twistTotalDeg >= 0 ? '+' : '') + s0.twistTotalDeg.toFixed(1) + '°');
+      setText(primGestureVal, gesture.short);
 
       primPosRow.classList.toggle('is-lit', armed);
       primPinchRow.classList.toggle('is-lit', s0.pinched);
       primRotRow.classList.toggle('is-lit', s0.twistBrokenOut);
       primGestureRow.classList.toggle('is-lit', gesture.active);
 
+      const cfg = engine.config;
       if (updateFoot && !tracker.cameraError && !tracker.isWebcamStarting) {
         if (s0.visible) {
           setPortalStatus(
-            'Gates: span ' + fmtDot(s0.palmSpan) + '≥.055 · face ' + fmtSignedDot(s0.palmFacingCos) +
-            '≥.22 · y ' + fmtDot(s0.palmY) + '<.86 · scroll ' + Math.round(events.scrollVelocityPx) + 'px/s',
+            'Gates: span ' + fmtGateGe(s0.palmSpan, cfg.minPalmSpan, false) + '≥.055 · face ' +
+            fmtGateGe(s0.palmFacingCos, cfg.minPalmFacingCos, true) + '≥' + fmtDot(cfg.minPalmFacingCos) +
+            ' · y ' + fmtGateLt(s0.palmY, cfg.keyboardExclusionY) + '<' + fmtDot(cfg.keyboardExclusionY) +
+            ' · scroll ' + Math.round(events.scrollVelocityPx) + 'px/s',
             'Live hand-gate tolerances and two-finger vertical scroll speed.'
           );
         } else if (tracker.mode === TRACKER_MODE.WEBCAM) {
@@ -2253,6 +2459,7 @@
         }
       }
 
+      if (tracker.isWebcamStarting) return;
       const sim = tracker.mode !== TRACKER_MODE.WEBCAM;
       if (s0.state === HAND_STATE.ARMED) {
         if (s0.pinched) setPortalPill('PINCHED', 'attention', 'Pinch held: a click or drag is in progress.');
@@ -2363,7 +2570,9 @@
       if (!(s0.vScrollActive && spatial.vScrollTarget === 'tape') && Math.abs(totalTapeVel) > 0 && Math.abs(totalTapeVel) < 18) {
         const targetTop = Math.round(c7Tape.scrollTop / 25) * 25;
         const gap = targetTop - c7Tape.scrollTop;
-        c7Tape.scrollTop += Math.abs(gap) <= 1.5 ? gap : gap * 0.22;
+        if (gap !== 0) {
+          c7Tape.scrollTop += Math.abs(gap) <= 1.5 ? gap : Math.sign(gap) * Math.max(1, Math.abs(gap) * 0.22);
+        }
         c7.subPixelScroll = 0;
       } else if (Math.abs(totalTapeDelta) > 0.02) {
         c7.subPixelScroll += totalTapeDelta;
@@ -2391,7 +2600,7 @@
         else if (hitCell === 8 && nextTuner >= 0) {
           spatial.latchedType = 'c9-tuner';
           spatial.latchedSubIdx = nextTuner;
-          spatial.latchStartVal = Number(tunerRows[nextTuner].querySelector('input').value);
+          spatial.latchStartVal = Number(tunerInputs[nextTuner].value);
         } else spatial.latchedType = 'generic';
       }
 
@@ -2436,7 +2645,7 @@
           }
         } else if (lt === 'c9-tuner') {
           const idx = spatial.latchedSubIdx;
-          const inp = tunerRows[idx].querySelector('input');
+          const inp = tunerInputs[idx];
           const min = Number(inp.min);
           const max = Number(inp.max);
           const step = Number(inp.step);
@@ -2479,8 +2688,10 @@
         c5Viewport.classList.toggle('show-guides', c5.showGuides);
         return;
       }
-      const maxX = Math.max(0, (global.innerWidth || 1) - 1);
-      const maxY = Math.max(0, (global.innerHeight || 1) - 1);
+      const vw = Math.max(1, Number.isFinite(global.innerWidth) ? global.innerWidth : 1280);
+      const vh = Math.max(1, Number.isFinite(global.innerHeight) ? global.innerHeight : 800);
+      const maxX = Math.max(0, vw - 1);
+      const maxY = Math.max(0, vh - 1);
       const el = document.elementFromPoint(clamp(x, 0, maxX), clamp(y, 0, maxY));
       if (!el) return;
       const btn = el.closest('button');
@@ -2492,32 +2703,64 @@
       if (row) pinTapeRow(Number(row.dataset.row));
     }
 
-    function updateSpatialReticle(s0, s1, events, gesture) {
-      const mainObscured =
-        !isSecondaryOpen &&
-        (mainGrid.hidden || Boolean(document.querySelector('dialog[open]')));
+    function updateSpatialReticle(s0, s1, events, gesture, dialogOpen) {
+      const hasOpenDialog =
+        dialogOpen !== undefined ? dialogOpen : (!isSecondaryOpen && Boolean(document.querySelector('dialog[open]')));
+      const mainObscured = !isSecondaryOpen && (mainGrid.hidden || hasOpenDialog);
       if (
         mainObscured ||
         tracker.mode === TRACKER_MODE.POINTER ||
         tracker.mode === TRACKER_MODE.IDLE ||
         (s0.state === HAND_STATE.IDLE && !s0.visible)
       ) {
-        cursorPrimary.classList.remove('is-visible');
-        cursorSecondary.classList.remove('is-visible');
-        setAttr(chordLine, 'visibility', 'hidden');
-        setAttr(dragTetherLine, 'visibility', 'hidden');
-        setAttr(lockOriginRing, 'visibility', 'hidden');
-        bimanualPill.hidden = true;
+        if (reticleCache.primaryVis) {
+          cursorPrimary.classList.remove('is-visible');
+          reticleCache.primaryVis = false;
+        }
+        if (reticleCache.secVis) {
+          cursorSecondary.classList.remove('is-visible');
+          reticleCache.secVis = false;
+        }
+        if (reticleCache.chordVis) {
+          setAttr(chordLine, 'visibility', 'hidden');
+          reticleCache.chordVis = false;
+        }
+        if (reticleCache.lockMode !== 0) {
+          setAttr(dragTetherLine, 'visibility', 'hidden');
+          setAttr(lockOriginRing, 'visibility', 'hidden');
+          reticleCache.lockMode = 0;
+        }
+        if (reticleCache.pillVis) {
+          bimanualPill.hidden = true;
+          reticleCache.pillVis = false;
+        }
         return;
       }
 
+      const vw = Math.max(1, Number.isFinite(global.innerWidth) ? global.innerWidth : 1280);
+      const vh = Math.max(1, Number.isFinite(global.innerHeight) ? global.innerHeight : 800);
       const armed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
-      const px = armed ? s0.interactiveX : s0.euroFilter.x * global.innerWidth;
-      const py = armed ? s0.interactiveY : s0.euroFilter.y * global.innerHeight;
+      const rawPx = armed ? s0.interactiveX : s0.euroFilter.x * vw;
+      const rawPy = armed ? s0.interactiveY : s0.euroFilter.y * vh;
+      const px = Number.isFinite(rawPx) ? rawPx : 0.5 * vw;
+      const py = Number.isFinite(rawPy) ? rawPy : 0.5 * vh;
 
-      cursorPrimary.classList.add('is-visible');
-      cursorPrimary.style.transform = 'translate3d(' + px.toFixed(1) + 'px, ' + py.toFixed(1) + 'px, 0)';
-      setAttr(cursorDwellRing, 'stroke-dashoffset', (CIRC_R16 * (1 - s0.armProgress)).toFixed(2));
+      if (!reticleCache.primaryVis) {
+        cursorPrimary.classList.add('is-visible');
+        reticleCache.primaryVis = true;
+      }
+      const pxS = px.toFixed(1);
+      const pyS = py.toFixed(1);
+      const nextTx = 'translate3d(' + pxS + 'px, ' + pyS + 'px, 0)';
+      if (reticleCache.primaryTx !== nextTx) {
+        reticleCache.primaryTx = nextTx;
+        cursorPrimary.style.transform = nextTx;
+      }
+      const nextDwell = (CIRC_R16 * (1 - s0.armProgress)).toFixed(2);
+      if (reticleCache.dwellOffset !== nextDwell) {
+        reticleCache.dwellOffset = nextDwell;
+        setAttr(cursorDwellRing, 'stroke-dashoffset', nextDwell);
+      }
 
       // Ink and one accent: the tag text names the state; colour only says quiet, ready or active.
       let tag = 'IDLE';
@@ -2542,50 +2785,123 @@
       else if (!s0.gateFacingOk) { tag = 'BACK OF HAND'; color = PAL.accent; }
       else if (!s0.gateKeyboardOk) { tag = 'KBD ZONE ≥.86'; color = PAL.accent; }
 
-      setAttr(cursorDwellRing, 'stroke', color);
-      setAttr(cursorCore, 'fill', color);
-      cursorPrimaryTag.textContent = tag;
+      if (reticleCache.color !== color) {
+        reticleCache.color = color;
+        setAttr(cursorDwellRing, 'stroke', color);
+        setAttr(cursorCore, 'fill', color);
+      }
+      if (reticleCache.tag !== tag) {
+        reticleCache.tag = tag;
+        cursorPrimaryTag.textContent = tag;
+      }
 
       if (s0.pinched && s0.pinchMode === PINCH_MODE.CLICK_LOCK) {
-        setAttr(lockOriginRing, 'cx', s0.lockOriginX.toFixed(1));
-        setAttr(lockOriginRing, 'cy', s0.lockOriginY.toFixed(1));
-        setAttr(lockOriginRing, 'visibility', 'visible');
-        setAttr(dragTetherLine, 'visibility', 'hidden');
+        const lxS = s0.lockOriginX.toFixed(1);
+        const lyS = s0.lockOriginY.toFixed(1);
+        const lCoord = lxS + ',' + lyS;
+        if (reticleCache.lockCoord !== lCoord) {
+          reticleCache.lockCoord = lCoord;
+          setAttr(lockOriginRing, 'cx', lxS);
+          setAttr(lockOriginRing, 'cy', lyS);
+        }
+        if (reticleCache.lockMode !== 1) {
+          setAttr(lockOriginRing, 'visibility', 'visible');
+          setAttr(dragTetherLine, 'visibility', 'hidden');
+          reticleCache.lockMode = 1;
+        }
       } else if (s0.pinched && s0.pinchMode === PINCH_MODE.DRAG) {
-        setAttr(lockOriginRing, 'cx', s0.lockOriginX.toFixed(1));
-        setAttr(lockOriginRing, 'cy', s0.lockOriginY.toFixed(1));
-        setAttr(lockOriginRing, 'visibility', 'visible');
-        setAttr(dragTetherLine, 'x1', s0.lockOriginX.toFixed(1));
-        setAttr(dragTetherLine, 'y1', s0.lockOriginY.toFixed(1));
-        setAttr(dragTetherLine, 'x2', px.toFixed(1));
-        setAttr(dragTetherLine, 'y2', py.toFixed(1));
-        setAttr(dragTetherLine, 'visibility', 'visible');
-      } else {
+        const lxS = s0.lockOriginX.toFixed(1);
+        const lyS = s0.lockOriginY.toFixed(1);
+        const lCoord = lxS + ',' + lyS;
+        if (reticleCache.lockCoord !== lCoord) {
+          reticleCache.lockCoord = lCoord;
+          setAttr(lockOriginRing, 'cx', lxS);
+          setAttr(lockOriginRing, 'cy', lyS);
+        }
+        const tCoord = lCoord + '|' + pxS + ',' + pyS;
+        if (reticleCache.tetherCoord !== tCoord) {
+          reticleCache.tetherCoord = tCoord;
+          setAttr(dragTetherLine, 'x1', lxS);
+          setAttr(dragTetherLine, 'y1', lyS);
+          setAttr(dragTetherLine, 'x2', pxS);
+          setAttr(dragTetherLine, 'y2', pyS);
+        }
+        if (reticleCache.lockMode !== 2) {
+          setAttr(lockOriginRing, 'visibility', 'visible');
+          setAttr(dragTetherLine, 'visibility', 'visible');
+          reticleCache.lockMode = 2;
+        }
+      } else if (reticleCache.lockMode !== 0) {
         setAttr(lockOriginRing, 'visibility', 'hidden');
         setAttr(dragTetherLine, 'visibility', 'hidden');
+        reticleCache.lockMode = 0;
       }
 
       if (s1.state === HAND_STATE.ARMED || s1.state === HAND_STATE.COASTING) {
-        cursorSecondary.classList.add('is-visible');
-        cursorSecondary.style.transform = 'translate3d(' + s1.screenX.toFixed(1) + 'px, ' + s1.screenY.toFixed(1) + 'px, 0)';
+        if (!reticleCache.secVis) {
+          cursorSecondary.classList.add('is-visible');
+          reticleCache.secVis = true;
+        }
+        const s1xS = (Number.isFinite(s1.screenX) ? s1.screenX : 0.5 * vw).toFixed(1);
+        const s1yS = (Number.isFinite(s1.screenY) ? s1.screenY : 0.5 * vh).toFixed(1);
+        const secTx = 'translate3d(' + s1xS + 'px, ' + s1yS + 'px, 0)';
+        if (reticleCache.secTx !== secTx) {
+          reticleCache.secTx = secTx;
+          cursorSecondary.style.transform = secTx;
+        }
         if (events.twoHandActive) {
-          setAttr(chordLine, 'x1', px.toFixed(1));
-          setAttr(chordLine, 'y1', py.toFixed(1));
-          setAttr(chordLine, 'x2', s1.screenX.toFixed(1));
-          setAttr(chordLine, 'y2', s1.screenY.toFixed(1));
-          setAttr(chordLine, 'visibility', 'visible');
-          bimanualPill.hidden = false;
-          bimanualPill.style.left = events.twoHandMidX.toFixed(1) + 'px';
-          bimanualPill.style.top = events.twoHandMidY.toFixed(1) + 'px';
-          bimanualPill.textContent = events.twoHandScaleRatio.toFixed(2) + '× · ' + (events.twoHandTotalDeg >= 0 ? '+' : '') + Math.round(events.twoHandTotalDeg) + '°';
+          const cCoord = pxS + ',' + pyS + '|' + s1xS + ',' + s1yS;
+          if (reticleCache.chordCoord !== cCoord) {
+            reticleCache.chordCoord = cCoord;
+            setAttr(chordLine, 'x1', pxS);
+            setAttr(chordLine, 'y1', pyS);
+            setAttr(chordLine, 'x2', s1xS);
+            setAttr(chordLine, 'y2', s1yS);
+          }
+          if (!reticleCache.chordVis) {
+            setAttr(chordLine, 'visibility', 'visible');
+            reticleCache.chordVis = true;
+          }
+          if (!reticleCache.pillVis) {
+            bimanualPill.hidden = false;
+            reticleCache.pillVis = true;
+          }
+          const midX = (Number.isFinite(events.twoHandMidX) ? events.twoHandMidX : 0.5 * vw).toFixed(1);
+          const midY = (Number.isFinite(events.twoHandMidY) ? events.twoHandMidY : 0.5 * vh).toFixed(1);
+          const pPos = midX + ',' + midY;
+          if (reticleCache.pillPos !== pPos) {
+            reticleCache.pillPos = pPos;
+            bimanualPill.style.left = midX + 'px';
+            bimanualPill.style.top = midY + 'px';
+          }
+          const pText = events.twoHandScaleRatio.toFixed(2) + '× · ' + (events.twoHandTotalDeg >= 0 ? '+' : '') + Math.round(events.twoHandTotalDeg) + '°';
+          if (reticleCache.pillText !== pText) {
+            reticleCache.pillText = pText;
+            bimanualPill.textContent = pText;
+          }
         } else {
-          setAttr(chordLine, 'visibility', 'hidden');
-          bimanualPill.hidden = true;
+          if (reticleCache.chordVis) {
+            setAttr(chordLine, 'visibility', 'hidden');
+            reticleCache.chordVis = false;
+          }
+          if (reticleCache.pillVis) {
+            bimanualPill.hidden = true;
+            reticleCache.pillVis = false;
+          }
         }
       } else {
-        cursorSecondary.classList.remove('is-visible');
-        setAttr(chordLine, 'visibility', 'hidden');
-        bimanualPill.hidden = true;
+        if (reticleCache.secVis) {
+          cursorSecondary.classList.remove('is-visible');
+          reticleCache.secVis = false;
+        }
+        if (reticleCache.chordVis) {
+          setAttr(chordLine, 'visibility', 'hidden');
+          reticleCache.chordVis = false;
+        }
+        if (reticleCache.pillVis) {
+          bimanualPill.hidden = true;
+          reticleCache.pillVis = false;
+        }
       }
     }
 
@@ -2621,7 +2937,8 @@
         ctx.fillStyle = (!s0.gateSpanOk || !s0.gateFacingOk || !s0.gateKeyboardOk) ? PAL.accent : PAL.ink3;
         ctx.textAlign = 'end';
         ctx.fillText(
-          'span ' + fmtDot(s0.palmSpan) + ' · face ' + fmtSignedDot(s0.palmFacingCos) + ' · y ' + fmtDot(s0.palmY),
+          'span ' + fmtGateGe(s0.palmSpan, cfg.minPalmSpan, false) + ' · face ' +
+          fmtGateGe(s0.palmFacingCos, cfg.minPalmFacingCos, true) + ' · y ' + fmtGateLt(s0.palmY, cfg.keyboardExclusionY),
           w - 6,
           hPx - 5
         );
@@ -2755,12 +3072,48 @@
       ctx.fill();
     }
 
+    function drawScopePosTrace(ctx, arr, head, n, cap, ox, ow, baseTop, baseH, mid, invSpan2, stroke, width) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      const denom = cap - 1;
+      for (let i = 0; i < n; i++) {
+        const bi = (head - n + i + cap) % cap;
+        const px = ox + (i / denom) * ow;
+        const norm = clamp((arr[bi] - mid) * invSpan2 + 0.5, 0.04, 0.96);
+        const py = baseTop + (1 - norm) * baseH;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
+    function drawScopeSpeedTrace(ctx, arr, head, n, cap, ox, ow, baseTop, baseH, stroke, width) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      const denom = cap - 1;
+      for (let i = 0; i < n; i++) {
+        const bi = (head - n + i + cap) % cap;
+        const px = ox + (i / denom) * ow;
+        const norm = clamp(arr[bi] / 2.2, 0.04, 0.95);
+        const py = baseTop + (1 - norm) * baseH;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
     function drawCell02Scope(s0, force) {
       if (c2.frozen && !force) return;
       const ctx = scopeCtx;
       const w = canvasSizes.scopeW;
       const hPx = canvasSizes.scopeH;
-      const scope = engine.scope;
+      const scope = c2.frozen ? c2.heldScope : engine.scope;
+      const rawU = c2.frozen ? c2.heldRawU : s0.rawU;
+      const rawV = c2.frozen ? c2.heldRawV : s0.rawV;
+      const curU = c2.frozen ? c2.heldCursorU : s0.cursorU;
+      const curV = c2.frozen ? c2.heldCursorV : s0.cursorV;
       ctx.fillStyle = PAL.surface;
       ctx.fillRect(0, 0, w, hPx);
 
@@ -2789,11 +3142,13 @@
       ctx.moveTo(wx, wy - 6); ctx.lineTo(wx, wy + 6);
       ctx.stroke();
 
-      const ti = c2.trailHead;
-      c2.trailU[ti] = s0.cursorU;
-      c2.trailV[ti] = s0.cursorV;
-      c2.trailHead = (ti + 1) % 56;
-      if (c2.trailCount < 56) c2.trailCount++;
+      if (!c2.frozen) {
+        const ti = c2.trailHead;
+        c2.trailU[ti] = curU;
+        c2.trailV[ti] = curV;
+        c2.trailHead = (ti + 1) % 56;
+        if (c2.trailCount < 56) c2.trailCount++;
+      }
 
       if (c2.trailCount > 2) {
         ctx.strokeStyle = CAN.inkA25;
@@ -2812,11 +3167,11 @@
       ctx.strokeStyle = PAL.accent;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
-      ctx.arc(m + s0.rawU * pw, m + s0.rawV * ph, 3.5, 0, Math.PI * 2);
+      ctx.arc(m + rawU * pw, m + rawV * ph, 3.5, 0, Math.PI * 2);
       ctx.stroke();
       ctx.fillStyle = PAL.ink;
       ctx.beginPath();
-      ctx.arc(m + s0.cursorU * pw, m + s0.cursorV * ph, 4, 0, Math.PI * 2);
+      ctx.arc(m + curU * pw, m + curV * ph, 4, 0, Math.PI * 2);
       ctx.fill();
 
       const ox = splitX + 4;
@@ -2857,24 +3212,10 @@
           }
         }
 
-        const drawTrace = function (arr, stroke, width, mapY, baseTop, baseH) {
-          ctx.strokeStyle = stroke;
-          ctx.lineWidth = width;
-          ctx.beginPath();
-          for (let i = 0; i < n; i++) {
-            const bi = (scope.head - n + i + cap) % cap;
-            const px = ox + (i / (cap - 1)) * ow;
-            const py = baseTop + (1 - mapY(arr[bi])) * baseH;
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
-          }
-          ctx.stroke();
-        };
-
-        const normOsc = function (v) { return clamp((v - mid) / (halfSpan * 2) + 0.5, 0.04, 0.96); };
-        drawTrace(scope.rawX, CAN.accentA70, 1.05, normOsc, topY, topH);
-        drawTrace(scope.smoothX, PAL.ink, 1.8, normOsc, topY, topH);
-        drawTrace(scope.speed, PAL.ink3, 1.25, function (v) { return clamp(v / 2.2, 0.04, 0.95); }, botY, botH);
+        const invSpan2 = 1 / (halfSpan * 2);
+        drawScopePosTrace(ctx, scope.rawX, scope.head, n, cap, ox, ow, topY, topH, mid, invSpan2, CAN.accentA70, 1.05);
+        drawScopePosTrace(ctx, scope.smoothX, scope.head, n, cap, ox, ow, topY, topH, mid, invSpan2, PAL.ink, 1.8);
+        drawScopeSpeedTrace(ctx, scope.speed, scope.head, n, cap, ox, ow, botY, botH, PAL.ink3, 1.25);
       }
 
       ctx.font = CAN.fontBold;
@@ -2962,22 +3303,27 @@
 
     function updateSecondaryReadouts(s0, events, gesture) {
       const st = tracker.stats;
+      const cfg = engine.config;
       if (tracker.mode === TRACKER_MODE.TOUR) syncRigButtons();
-      fpsReadout.textContent = Math.round(st.fps) + ' FPS · ' + st.frameMs.toFixed(1) + 'ms';
+      setText(fpsReadout, Math.round(st.fps) + ' FPS · ' + st.frameMs.toFixed(1) + 'ms');
       setGate(
         gSpan,
         s0.visible ? (s0.gateSpanOk ? 'pass' : 'attention') : 'idle',
-        s0.visible ? ('SPAN ' + fmtDot(s0.palmSpan) + '≥.055') : 'SPAN ≥.055'
+        s0.visible ? ('SPAN ' + fmtGateGe(s0.palmSpan, cfg.minPalmSpan, false) + '≥.055') : 'SPAN ≥.055'
       );
       setGate(
         gFacing,
         s0.visible ? (s0.gateFacingOk ? 'pass' : 'attention') : 'idle',
-        s0.visible ? ('FACE ' + fmtSignedDot(s0.palmFacingCos) + '≥.22') : 'FACE ≥+.22'
+        s0.visible
+          ? ('FACE ' + fmtGateGe(s0.palmFacingCos, cfg.minPalmFacingCos, true) + '≥' + fmtDot(cfg.minPalmFacingCos))
+          : ('FACE ≥+' + fmtDot(cfg.minPalmFacingCos))
       );
       setGate(
         gKbd,
         s0.visible ? (s0.gateKeyboardOk ? 'pass' : 'attention') : 'idle',
-        s0.visible ? ('KBD ' + fmtDot(s0.palmY) + '<.86') : 'KBD <.86'
+        s0.visible
+          ? ('KBD ' + fmtGateLt(s0.palmY, cfg.keyboardExclusionY) + '<' + fmtDot(cfg.keyboardExclusionY))
+          : ('KBD <' + fmtDot(cfg.keyboardExclusionY))
       );
 
       if (s0.state === HAND_STATE.ARMED) setGate(gArm, 'pass', 'ARMED');
@@ -2990,26 +3336,26 @@
         setGate(gGesture, gTone, gesture.short);
       }
 
-      c2Metric.textContent = 'fc ' + s0.euroFilter.cutoffHz.toFixed(2) + 'Hz · ' + engine.scope.attenuationDb.toFixed(1) + 'dB';
-      c2XyReadout.textContent = 'LOCUS ' + s0.cursorU.toFixed(3) + ', ' + s0.cursorV.toFixed(3);
+      setText(c2Metric, 'fc ' + s0.euroFilter.cutoffHz.toFixed(2) + 'Hz · ' + engine.scope.attenuationDb.toFixed(1) + 'dB');
+      setText(c2XyReadout, 'LOCUS ' + s0.cursorU.toFixed(3) + ', ' + s0.cursorV.toFixed(3));
 
       const pr = s0.visible ? s0.pinchRatio : 0.75;
       c3SchmittFill.style.width = clamp((pr / 0.80) * 100, 2, 100).toFixed(1) + '%';
       c3SchmittFill.classList.toggle('is-pinched', s0.pinched);
       c3SchmittFill.classList.toggle('is-damped', s0.velocityDamped && !s0.pinched);
-      c3Metric.textContent = 'd/s ' + pr.toFixed(2) + ' · ' + (s0.pinched ? (s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'LOCK' : 'DRAG') : (s0.velocityDamped ? 'DAMP' : 'OPEN'));
+      setText(c3Metric, 'd/s ' + pr.toFixed(2) + ' · ' + (s0.pinched ? (s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'LOCK' : 'DRAG') : (s0.velocityDamped ? 'DAMP' : 'OPEN')));
 
       const vel = c7.displayVelPx;
-      c7Metric.textContent = 'VEL ' + Math.round(vel) + ' px/s';
+      setText(c7Metric, 'VEL ' + Math.round(vel) + ' px/s');
       const barMag = clamp(Math.abs(vel) / 900, 0, 0.5) * 100;
       c7VelBar.style.top = vel >= 0 ? '50%' : (50 - barMag).toFixed(1) + '%';
       c7VelBar.style.height = barMag.toFixed(1) + '%';
       updateTapePosReadout();
 
-      c9Metric.textContent = 'detect ' + st.detectMs.toFixed(2) + 'ms';
-      teleSpan.textContent = s0.visible ? s0.palmSpan.toFixed(3) : '—';
-      teleNz.textContent = s0.visible ? ((s0.palmFacingCos >= 0 ? '+' : '') + s0.palmFacingCos.toFixed(2)) : '—';
-      teleY.textContent = s0.visible ? s0.palmY.toFixed(2) : '—';
+      setText(c9Metric, 'detect ' + st.detectMs.toFixed(2) + 'ms');
+      setText(teleSpan, s0.visible ? s0.palmSpan.toFixed(3) : '—');
+      setText(teleNz, s0.visible ? fmtCentsFixed2(gateGeCents(s0.palmFacingCos, cfg.minPalmFacingCos), true) : '—');
+      setText(teleY, s0.visible ? fmtCentsFixed2(gateLtCents(s0.palmY, cfg.keyboardExclusionY), false) : '—');
     }
 
     // -----------------------------------------------------------------------
@@ -3086,12 +3432,16 @@
       }
       isSecondaryOpen = false;
       clearSpatialLatches();
+      c2.frozen = false;
+      setAttr(c2FreezeBtn, 'aria-pressed', 'false');
+      c2.trailHead = 0;
+      c2.trailCount = 0;
       synthRig.resetPosture();
       engine.resetSlot(1);
       syncRigButtons();
       cameraSuspendedByVisibility = false;
-      tracker.setVideoElement(miniVideo);
       tracker.setMode(TRACKER_MODE.IDLE);
+      tracker.setVideoElement(miniVideo);
       resetPortalPreview();
       ensureLoopState();
       if (restoreFocus && !crossCellHash && !mainGrid.hidden) {
@@ -3224,6 +3574,8 @@
     global.addEventListener('hashchange', syncLocationHash);
     global.addEventListener('pagehide', function () {
       cameraSuspendedByVisibility = false;
+      clearSpatialLatches();
+      clearGestureHold();
       tracker.teardown();
       ensureLoopState();
     });
@@ -3244,5 +3596,11 @@
     bootstrap();
   }
 
-  global.HandGestureUI = { mount: mountHandGestureCell };
+  global.HandGestureUI = {
+    mount: mountHandGestureCell,
+    fmtDot: fmtDot,
+    fmtSignedDot: fmtSignedDot,
+    fmtGateGe: fmtGateGe,
+    fmtGateLt: fmtGateLt,
+  };
 })(typeof window !== 'undefined' ? window : globalThis);
