@@ -162,8 +162,8 @@ Contract (`ui/tooltip.js`, one delegated system for every cell):
 - Cost: three always-on capture listeners on `document` (`pointerover`, `pointerdown`, `focusin`)
   that do one `closest()` and return. All other listeners and one MutationObserver exist only while a
   tip is pending or shown. No timers, rAF or polling when idle.
-- API: `UITooltip.hide()`, `UITooltip.destroy()`, plus the pure `computePlacement`, `adoptTitle`,
-  `keyLabel` (also `module.exports` for tests).
+- API: `UITooltip.init()`, `UITooltip.hide()`, `UITooltip.destroy()`, plus the pure
+  `computePlacement`, `adoptTitle`, `keyLabel` (also `module.exports` for tests).
 
 Copy rules:
 

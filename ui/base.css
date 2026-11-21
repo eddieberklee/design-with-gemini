@@ -229,8 +229,13 @@ body {
   pointer-events: auto;
 }
 
-.ui-tile-head--overlay .ui-btn {
+.ui-tile-head--overlay :is(.ui-tile-index, .ui-tile-step, .ui-tile-title) {
+  text-shadow: 0 0 4px var(--ui-surface), 0 0 2px var(--ui-surface);
+}
+
+.ui-tile-head--overlay .ui-btn:not(.ui-btn--primary):not([data-tone="attention"]) {
   background: var(--ui-surface);
+  box-shadow: 0 0 0 2px var(--ui-surface);
 }
 
 .ui-truncate {
@@ -311,7 +316,7 @@ body {
 }
 
 .ui-btn[data-tone="attention"]:hover {
-  background: var(--ui-accent-tint);
+  background: color-mix(in srgb, var(--ui-accent) 16%, var(--ui-surface));
   border-color: var(--ui-accent);
 }
 
@@ -696,6 +701,7 @@ body {
 }
 
 .ui-dialog {
+  margin: auto;
   padding: 0;
   border: 1px solid var(--ui-hairline);
   border-radius: var(--ui-radius);
@@ -755,7 +761,7 @@ body {
   }
 
   .ui-pill:is(button, a)::after {
-    inset: -5px -5px;             /* dot-only pill still has a 30 x 30 hit area */
+    inset: -5px -2px;             /* 24 x 30 hit area; fits inside 6px action gap */
   }
 }
 
@@ -781,7 +787,7 @@ body {
   width: max-content;
   max-width: min(260px, calc(100vw - 16px));
   height: auto;
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-ink);
   color: var(--ui-surface);
@@ -848,11 +854,19 @@ body {
 /* 5. Reduced motion ------------------------------------------------------------------------ */
 
 @media (prefers-reduced-motion: reduce) {
+  :root {
+    --ui-dur: 0.01ms;
+  }
+
   .ui-btn,
   .ui-seg > button,
   .ui-pill,
   .ui-chip,
   .ui-slider::-webkit-slider-thumb {
+    transition: none;
+  }
+
+  .ui-slider::-moz-range-thumb {
     transition: none;
   }
 
