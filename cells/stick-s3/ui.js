@@ -143,7 +143,7 @@
   }
 
   function formatSigned(val) {
-    const n = Number(val) || 0;
+    const n = ColorEngine.clamp(val, -9.99, 9.99);
     return (n >= 0 ? '+' : '') + n.toFixed(2);
   }
 
@@ -257,7 +257,7 @@
       }, 1050);
     }
 
-    // ---------- 1. Top Floating Swiss Capsule ----------
+    // ---------- 1. Top Obsidian Instrument Header ----------
     const modeBtns = ColorEngine.MODES.map(function (m) {
       return el('button', {
         type: 'button',
@@ -348,7 +348,7 @@
       'aria-label': 'M5StickS3 3-axis accelerometer tilt dome. Tilt physical StickS3 or drag/arrow-keys to steer cell color. Double-click to zero tare.'
     }, [domeSvg]);
 
-    const hexTextEl = el('span', { textContent: '#D5C8C0' });
+    const hexTextEl = el('span', { textContent: '#D5C6CA' });
     const hexCopyBtn = el('button', {
       type: 'button',
       className: 's3-hex-copy s3-mono',
@@ -360,10 +360,7 @@
           announce((res && res.ok ? 'Copied ' : 'Selected ') + hex);
         });
       }
-    }, [
-      el('span', { className: 's3-hex-dot', 'aria-hidden': 'true' }),
-      hexTextEl
-    ]);
+    }, [hexTextEl]);
 
     const oklchSpecEl = el('span', { className: 's3-oklch-spec s3-mono', textContent: 'C.02 · H000°' });
 
@@ -438,7 +435,7 @@
     ]);
 
     // Micro badge when Cell 03 shrinks grid <= 235px
-    const microHexEl = el('span', { className: 's3-micro-pill s3-mono', textContent: '#D5C8C0' });
+    const microHexEl = el('span', { className: 's3-micro-pill s3-mono', textContent: '#D5C6CA' });
     const microWrap = el('button', {
       type: 'button',
       className: 's3-micro',
@@ -490,7 +487,7 @@
     const scopeRateEl = el('span', { className: 's3-mono', textContent: '0 Hz' });
     const scopeCanvas = el('canvas', { className: 's3-scope-canvas', width: 268, height: 76 });
 
-    const heroHexEl = el('span', { className: 's3-hero-hex s3-mono', textContent: '#D5C8C0' });
+    const heroHexEl = el('span', { className: 's3-hero-hex s3-mono', textContent: '#D5C6CA' });
     const heroMetricsEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'oklch(0.84 0.020 000deg)' });
     const heroContrastEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'Contrast 15.9:1 AAA' });
     const heroSwatch = el('div', { className: 's3-hero-swatch' }, [
@@ -716,6 +713,43 @@
       renderStaticControls();
     }
 
+    function applyColorToDom(col) {
+      const theme = ColorEngine.pickAdaptiveTheme(col.r, col.g, col.b, state.prevIsLightBg);
+      state.prevIsLightBg = theme.isLightBg;
+
+      rootEl.style.setProperty('--s3-live-hex', col.hex);
+      rootEl.style.setProperty('--s3-reticle-ink', theme.ink);
+      rootEl.style.setProperty('--s3-reticle-halo', theme.reticleHalo);
+      rootEl.style.setProperty('--s3-dome-well', theme.domeWell);
+      centerStage.style.backgroundColor = col.hex;
+      microWrap.style.backgroundColor = col.hex;
+
+      hexTextEl.textContent = col.hex;
+      microHexEl.textContent = col.hex;
+      swatchLightnessEl.textContent = 'L' + String(Math.round(col.l * 100)).padStart(2, '0');
+      oklchSpecEl.textContent =
+        'C.' + String(Math.round(col.c * 100)).padStart(2, '0') +
+        ' · H' + pad3(col.h) + '°';
+      return theme;
+    }
+
+    function applyAxisBarsToDom() {
+      [
+        { bar: axisBarX, val: state.ax },
+        { bar: axisBarY, val: state.ay },
+        { bar: axisBarZ, val: state.az }
+      ].forEach(function (item) {
+        const norm = ColorEngine.clamp(item.val / 1.25, -1, 1);
+        const halfPct = Math.abs(norm) * 50;
+        item.bar.style.width = halfPct.toFixed(1) + '%';
+        item.bar.style.left = (norm >= 0 ? 50 : (50 - halfPct)).toFixed(1) + '%';
+      });
+      axesInlineEl.textContent =
+        'X' + formatSigned(state.ax) +
+        ' Y' + formatSigned(state.ay) +
+        ' Z' + formatSigned(state.az) + 'g';
+    }
+
     function toggleHold(sendToHw, captureChip) {
       state.hold = !state.hold;
       state.pinnedCustomSwatch = false;
@@ -726,6 +760,11 @@
         announce('Held color ' + state.displayColor.hex);
       } else {
         state.heldColor = null;
+        if (!state.hwConnected) {
+          recomputeLocalTarget();
+        } else {
+          state.targetColor = ColorEngine.mapImuToColor(state.tx, state.ty, state.az, state.kin, state.mode);
+        }
         showToast('LIVE IMU');
         announce('Live accelerometer tracking');
       }
@@ -758,19 +797,21 @@
       state.ty = ty;
       state.roll = Math.atan2(tx, Math.hypot(ty, state.az)) * (180 / Math.PI);
       state.pitch = Math.atan2(ty, Math.hypot(tx, state.az)) * (180 / Math.PI);
-      const col = ColorEngine.mapImuToColor(tx, ty, state.az, state.kin, state.mode);
-      if (!state.hold) {
-        state.targetColor = col;
-      }
+      state.targetColor = ColorEngine.mapImuToColor(tx, ty, state.az, state.kin, state.mode);
     }
 
     // ---------- Pointer & Keyboard Fallback on Gravity Dome ----------
 
-    function applyDomePointer(ev) {
+    function applyDomePointer(ev, isInitialDown) {
       const rect = domePad.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
-      const nx = ColorEngine.clamp(((ev.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
-      const ny = ColorEngine.clamp(1 - ((ev.clientY - rect.top) / rect.height) * 2, -1, 1);
+      let nx = ColorEngine.clamp(((ev.clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
+      let ny = ColorEngine.clamp(1 - ((ev.clientY - rect.top) / rect.height) * 2, -1, 1);
+      const radial = Math.hypot(nx, ny);
+      if (radial > 1) {
+        nx /= radial;
+        ny /= radial;
+      }
       const magSq = Math.min(0.96, nx * nx + ny * ny);
       const zSign = state.az >= 0 ? 1 : -1;
       state.simPreset = 'idle';
@@ -779,7 +820,9 @@
       state.ax = nx * 0.92;
       state.ay = ny * 0.92;
       state.az = zSign * Math.sqrt(Math.max(0.04, 1 - magSq));
-      state.kin = ColorEngine.clamp(Math.hypot(ev.movementX || 0, ev.movementY || 0) / 36, 0, 0.85);
+      state.kin = isInitialDown
+        ? 0
+        : ColorEngine.clamp(Math.hypot(ev.movementX || 0, ev.movementY || 0) / 36, 0, 0.85);
       state.hold = false;
       state.pinnedCustomSwatch = false;
       state.heldColor = null;
@@ -791,25 +834,31 @@
       if (state.hwConnected) return;
       state.draggingPad = true;
       try { domePad.setPointerCapture(ev.pointerId); } catch (_e) {}
-      applyDomePointer(ev);
+      applyDomePointer(ev, true);
     });
 
     domePad.addEventListener('pointermove', function (ev) {
       if (!state.draggingPad || state.hwConnected) return;
-      applyDomePointer(ev);
+      applyDomePointer(ev, false);
     });
 
     function endDomeDrag() {
+      if (!state.draggingPad && state.kin === 0) return;
       state.draggingPad = false;
       state.kin = 0;
+      if (!state.hwConnected) {
+        recomputeLocalTarget();
+      }
     }
     domePad.addEventListener('pointerup', endDomeDrag);
     domePad.addEventListener('pointercancel', endDomeDrag);
+    domePad.addEventListener('lostpointercapture', endDomeDrag);
     domePad.addEventListener('dblclick', function () {
       state.ax = 0;
       state.ay = 0;
       state.az = 1;
       triggerTare(state.hwConnected);
+      renderStaticControls();
     });
 
     function onKeyDown(ev) {
@@ -844,6 +893,11 @@
           moved = true;
         }
         if (moved) {
+          const arrowRad = Math.hypot(state.ax, state.ay);
+          if (arrowRad > 0.98) {
+            state.ax = (state.ax / arrowRad) * 0.98;
+            state.ay = (state.ay / arrowRad) * 0.98;
+          }
           const magSq = Math.min(0.96, state.ax * state.ax + state.ay * state.ay);
           const zSign = state.az >= 0 ? 1 : -1;
           state.az = zSign * Math.sqrt(Math.max(0.04, 1 - magSq));
@@ -875,15 +929,9 @@
               state.hold = true;
               state.pinnedCustomSwatch = true;
               state.heldColor = spec;
-              state.targetColor = spec;
               state.displayColor = spec;
               state.pendingHoldUntil = Date.now() + COMMAND_LEASE_MS;
-              rootEl.style.setProperty('--s3-live-hex', spec.hex);
-              centerStage.style.backgroundColor = spec.hex;
-              microWrap.style.backgroundColor = spec.hex;
-              hexTextEl.textContent = spec.hex;
-              microHexEl.textContent = spec.hex;
-              swatchLightnessEl.textContent = 'L' + String(Math.round(spec.l * 100)).padStart(2, '0');
+              applyColorToDom(spec);
               link.sendCommand({ cmd: 'hold', h: 1 });
               copyToClipboard(sw.hex);
               showToast('PINNED ' + sw.hex);
@@ -1065,7 +1113,7 @@
           ctx.fillText(b.lbl, 8, b.y + 7);
           ctx.fillStyle = '#262624';
           ctx.fillRect(22, b.y, 64, 7);
-          const w = Math.round(Math.min(1, Math.abs(b.v) / 1.2) * 30);
+          const w = Math.round(ColorEngine.clamp(Math.abs(b.v) / 1.25, 0, 1) * 30);
           ctx.fillStyle = b.c;
           ctx.fillRect(b.v >= 0 ? 54 : 54 - w, b.y + 1, w, 5);
           ctx.fillStyle = '#f5f5f3';
@@ -1143,20 +1191,18 @@
           : ColorEngine.lerpColorOklab(state.displayColor, goal, lerpFactor);
       const col = state.displayColor;
 
-      const theme = ColorEngine.pickAdaptiveTheme(col.r, col.g, col.b, state.prevIsLightBg);
-      state.prevIsLightBg = theme.isLightBg;
+      const theme = applyColorToDom(col);
 
-      rootEl.style.setProperty('--s3-live-hex', col.hex);
-      rootEl.style.setProperty('--s3-reticle-ink', theme.ink);
-      rootEl.style.setProperty('--s3-reticle-stroke', theme.reticleStroke);
-      rootEl.style.setProperty('--s3-reticle-halo', theme.reticleHalo);
-      rootEl.style.setProperty('--s3-dome-well', theme.domeWell);
-      centerStage.style.backgroundColor = col.hex;
-      microWrap.style.backgroundColor = col.hex;
-
-      // Update SVG Gravity Dome coordinates
-      const px = 50 + ColorEngine.clamp(state.tx, -1, 1) * 34;
-      const py = 50 - ColorEngine.clamp(state.ty, -1, 1) * 34;
+      // Update SVG Gravity Dome coordinates (clamped to unit disk so puck stays inside domeRing)
+      let dx = ColorEngine.clamp(state.tx, -1, 1);
+      let dy = ColorEngine.clamp(state.ty, -1, 1);
+      const dMag = Math.hypot(dx, dy);
+      if (dMag > 1) {
+        dx /= dMag;
+        dy /= dMag;
+      }
+      const px = 50 + dx * 34;
+      const py = 50 - dy * 34;
       stemHalo.setAttribute('x2', px.toFixed(1));
       stemHalo.setAttribute('y2', py.toFixed(1));
       stemLine.setAttribute('x2', px.toFixed(1));
@@ -1171,25 +1217,7 @@
       const kinArcLen = ColorEngine.clamp(state.kin, 0, 1) * kinCircumference;
       kinArc.setAttribute('stroke-dasharray', kinArcLen.toFixed(1) + ' 320');
 
-      // Update StickS3-matched center-zero X / Y / Z bars
-      [
-        { bar: axisBarX, val: state.ax },
-        { bar: axisBarY, val: state.ay },
-        { bar: axisBarZ, val: state.az }
-      ].forEach(function (item) {
-        const norm = ColorEngine.clamp(item.val / 1.25, -1, 1);
-        const halfPct = Math.abs(norm) * 50;
-        item.bar.style.width = halfPct.toFixed(1) + '%';
-        item.bar.style.left = (norm >= 0 ? 50 : (50 - halfPct)).toFixed(1) + '%';
-      });
-
-      // Update Tabular Readouts
-      hexTextEl.textContent = col.hex;
-      microHexEl.textContent = col.hex;
-      swatchLightnessEl.textContent = 'L' + String(Math.round(col.l * 100)).padStart(2, '0');
-      oklchSpecEl.textContent =
-        'C.' + String(Math.round(col.c * 100)).padStart(2, '0') +
-        ' · H' + pad3(col.h) + '°';
+      applyAxisBarsToDom();
       axesInlineEl.textContent =
         'X' + formatSigned(state.ax) +
         ' Y' + formatSigned(state.ay) +
@@ -1268,8 +1296,7 @@
               needsStaticSync = true;
             }
           } else if (pkt.event === 'hold') {
-            if (now > state.pendingHoldUntil) {
-              state.pinnedCustomSwatch = false;
+            if (now > state.pendingHoldUntil && !state.pinnedCustomSwatch) {
               state.hold = true;
               state.heldColor = pkt.color;
               needsStaticSync = true;
@@ -1303,7 +1330,7 @@
           }
         }
 
-        if (now <= state.pendingModeUntil) {
+        if (now <= state.pendingModeUntil || (now <= state.pendingHoldUntil && !state.hold)) {
           state.targetColor = ColorEngine.mapImuToColor(pkt.tx, pkt.ty, pkt.az, pkt.kin, state.mode);
         } else {
           state.targetColor = pkt.color;
@@ -1380,8 +1407,11 @@
     rootEl.__stickS3Instance = instance;
 
     renderSwatches();
-    renderStaticControls();
     recomputeLocalTarget();
+    state.displayColor = state.targetColor;
+    applyColorToDom(state.displayColor);
+    applyAxisBarsToDom();
+    renderStaticControls();
     link.start();
     if (typeof root.requestAnimationFrame === 'function') {
       rafId = root.requestAnimationFrame(renderFrame);

@@ -1,8 +1,8 @@
 /* ==========================================================================
    M5StickS3 Accelerometer Color Studio — Cell #07 & Hardware Twin Workbench
    Strictly scoped to .cell--stick-s3, .s3-*, and .s3-dialog.
-   Full-bleed living pigment cell with D65 Matte Swiss Paper HUD capsules
-   (>= 15.8:1 WCAG AAA) and hysteresis-protected Gravity Dome reticle.
+   #101010 obsidian instrument bezel + dominant .s3-stage hero color swatch card
+   mirroring the physical M5StickS3 135x240 LCD layout.
    ========================================================================== */
 
 .cell--stick-s3,
@@ -11,7 +11,6 @@
   --s3-paper-solid: #ffffff;
   --s3-canvas: #fafafa;
   --s3-recess: #f6f6f4;
-  --s3-track: #eaeae6;
   --s3-border: #e5e5e5;
   --s3-hairline: #efefef;
   --s3-capsule-border: rgba(20, 20, 19, 0.14);
@@ -20,19 +19,8 @@
   --s3-ink-2: #525250;
   --s3-ink-3: #63635f;
 
-  --s3-signal: #d94f1e;
-  --s3-signal-ink: #b43a10;
-  --s3-signal-bg: #fff1eb;
-
-  --s3-live: #047857;
-  --s3-live-bg: #ecfdf5;
-  --s3-live-border: #a7f3d0;
-
-  --s3-sim: #b45309;
-  --s3-sim-bg: #fffbeb;
-  --s3-sim-border: #fde68a;
-
   --s3-focus: #2563eb;
+  --s3-focus-dark: #60a5fa;
   --s3-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   --s3-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --s3-ease: 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -75,9 +63,8 @@
 
 .cell.cell--stick-s3,
 .cell--stick-s3 {
-  --s3-live-hex: #D5C8C0;
+  --s3-live-hex: #D5C6CA;
   --s3-reticle-ink: #000000;
-  --s3-reticle-stroke: rgba(8, 8, 8, 0.62);
   --s3-reticle-halo: rgba(255, 255, 255, 0.42);
   --s3-dome-well: rgba(255, 255, 255, 0.10);
 
@@ -88,15 +75,19 @@
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  padding: 8px;
-  gap: 6px;
+  padding: clamp(6px, 2cqi, 8px);
+  gap: clamp(4px, 1.5cqi, 6px);
   background: #101010;
   border-color: #282826;
   color: #f5f5f3;
   user-select: none;
 }
 
-.cell--stick-s3 button:focus-visible,
+.cell--stick-s3 button:focus-visible {
+  outline: 2px solid var(--s3-focus-dark);
+  outline-offset: 2px;
+}
+
 .s3-dialog button:focus-visible,
 .s3-dialog input:focus-visible {
   outline: 2px solid var(--s3-focus);
@@ -306,9 +297,9 @@
 
 .s3-dome-pad {
   position: relative;
-  width: clamp(50px, 21cqi, 84px);
+  width: clamp(44px, 21cqi, 84px);
+  max-width: 100%;
   aspect-ratio: 1 / 1;
-  max-height: 100%;
   border-radius: 50%;
   background: transparent;
   cursor: grab;
@@ -422,10 +413,6 @@
 
 .s3-hex-copy:hover {
   background: var(--s3-dome-well);
-}
-
-.s3-hex-dot {
-  display: none;
 }
 
 .s3-oklch-spec {
@@ -614,25 +601,28 @@
   .s3-xyz-bars {
     display: none;
   }
-  .cell.cell--stick-s3,
-  .cell--stick-s3 {
-    padding: 6px;
-    gap: 4px;
+  .s3-stage {
+    padding: 5px 8px;
   }
   .s3-swatch-strip .s3-swatch-dot:nth-child(n+4) {
     display: none;
   }
 }
 
-@container s3-card (max-width: 235px) {
-  .s3-brand,
-  .s3-stage,
-  .s3-hud-bottom,
-  .s3-mode-cycle {
+@container s3-card (max-width: 280px) {
+  .s3-brand {
     display: none;
   }
   .s3-hud-top {
     justify-content: flex-end;
+  }
+}
+
+@container s3-card (max-width: 235px) {
+  .s3-stage,
+  .s3-hud-bottom,
+  .s3-mode-cycle {
+    display: none;
   }
   .s3-micro {
     display: flex;

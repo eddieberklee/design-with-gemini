@@ -2,7 +2,7 @@
 
 ## 1. Intent & Architecture
 
-`cells/stick-s3/` pairs an **M5Stack M5StickS3** (`ESP32-S3-PICO-1-N8R8`, `ST7789P3` 135×240 IPS LCD, **Bosch BMI270** 6-axis IMU, **M5PM1** PMIC, `KEY1` `GPIO11`, `KEY2` `GPIO12`) directly to a full-bleed chromatic grid cell (`#cell-stick-s3`) so tilting, flipping, or shaking the physical stick steers the cell's color at 50–60 Hz with pixel-locked color math on both screens.
+`cells/stick-s3/` pairs an **M5Stack M5StickS3** (`ESP32-S3-PICO-1-N8R8`, `ST7789P3` 135×240 IPS LCD, **Bosch BMI270** 6-axis IMU, **M5PM1** PMIC, `KEY1` `GPIO11`, `KEY2` `GPIO12`) directly to an M5StickS3-matched `#101010` obsidian instrument cell (`#cell-stick-s3`) framing a dominant hero color swatch card (`.s3-stage`, `~77%–88%` of cell area) so tilting, flipping, or shaking the physical stick steers the cell's color at 50–60 Hz with pixel-locked color math on both screens.
 
 ### Module Ownership & Data Flow
 
@@ -28,10 +28,10 @@
 
 ## 2. Design & Technical Decisions (Protocol B Best-of-3 Synthesis)
 
-Three divergent candidates were evaluated by an independent Design & Color-Science Critic:
-- **Candidate A (`full_bleed_adaptive_glass` — Winner, synthesized)**: Floods the entire `.cell--stick-s3` background edge-to-edge with the live accelerometer color so the cell itself acts as a visceral block of living pigment in the grid.
-- **Candidate B (`swiss_colorimeter_bezel` — Runner-up)**: Framed pigment inside a static white bezel; rejected as primary layout because a static outer frame diluted the sensation of directly coloring the grid cell, though its **constant D65 Matte Swiss Paper capsules** (`rgba(255, 255, 255, 0.93)`) and **Pantone swatch chips** were merged into Candidate A to eliminate HUD polarity strobing.
-- **Candidate C (`spatial_3d_wand_studio` — Runner-up)**: Placed a dark 3D stick brick over the in-grid cell; rejected for the small 4:3 card because the dark hardware silhouette occluded the color field at narrow container widths, and promoted instead to the left column of the expanded `<dialog>` Studio Workbench.
+Three initial candidates were evaluated and refined with direct user feedback to mirror the physical M5StickS3 screen UI:
+- **StickS3 Obsidian Bezel + Hero Color Swatch Card (Shipped)**: Uses `.cell.cell--stick-s3` (`#101010` obsidian bezel, specificity `(0,2,0)` so `index.html`'s `.cell { background: #ffffff }` never overrides it) around a dominant `.s3-stage` rounded pigment card (`~77%–88%` of cell area, `94.7%` unobstructed) with direct corner stamps (`OKLCH`, `Lxx`, `#HEX`, `C·H°`), a compact center circular tilt reticle, bottom-bar coral/emerald/cobalt `X/Y/Z` center-zero telemetry bars, and Pantone swatch chips; matte Swiss paper capsules (`rgba(255, 255, 255, 0.93)`) are used inside `<dialog class="s3-dialog">` (`.s3-hero-pill`).
+- **Static White Bezel (`swiss_colorimeter_bezel`)**: Rejected because a bright white outer bezel competed with light OKLCH tints instead of matching the physical StickS3's `#101010` screen contrast.
+- **In-Grid 3D Stick Brick (`spatial_3d_wand_studio`)**: Rejected for the small 4:3 card because the dark 3D hardware silhouette occluded the color field at narrow container widths, and promoted instead to the left column of the expanded `<dialog>` Studio Workbench.
 
 ---
 

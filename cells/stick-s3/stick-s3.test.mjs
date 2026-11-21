@@ -971,3 +971,55 @@ test('CSS specificity & StickS3-matched hero swatch card: .cell.cell--stick-s3 b
     handle.destroy();
   }
 });
+
+test('Offline swatch-pin synchronous WCAG ink sync, unhold recovery, unit-disk puck containment, and dblclick Z+ reset', () => {
+  const h = createUiVmHarness({ reducedMotion: true });
+  const cellEl = h.document.createElement('section');
+  cellEl.id = 'cell-stick-s3';
+  cellEl.className = 'cell cell--stick-s3';
+  h.document.body.appendChild(cellEl);
+  const handle = h.sandbox.StickS3Color.UI.mount(cellEl);
+
+  try {
+    const stageEl = cellEl.querySelector('.s3-stage');
+    const oklchEl = cellEl.querySelector('.s3-oklch-spec');
+    const domePad = cellEl.querySelector('.s3-dome-pad');
+    const puck = cellEl.querySelector('.s3-dome-puck');
+    const chipBtns = cellEl.querySelectorAll('.s3-chip-btn');
+    const holdBtn = chipBtns[0];
+    const zFlipBtn = chipBtns[2];
+
+    // 1. Pre-1st-rAF initial DOM is already synchronized with computed neutral #D5C6CA
+    assert.equal(stageEl.style.backgroundColor, '#D5C6CA');
+
+    // 2. Clicking dark swatch #3B5BDB synchronously updates adaptive ink (#ffffff) & oklchSpec without clobbering offline target
+    const swatchDots = cellEl.querySelectorAll('.s3-swatch-dot');
+    swatchDots[2].click(); // #3B5BDB
+    assert.equal(stageEl.style.backgroundColor, '#3B5BDB');
+    assert.equal(cellEl.style.getPropertyValue('--s3-reticle-ink'), '#ffffff');
+    assert.match(oklchEl.textContent, /H26\d°/);
+
+    // Unholding offline immediately restores neutral #D5C6CA on next frame
+    holdBtn.click();
+    h.stepFrame(32);
+    assert.equal(stageEl.style.backgroundColor, '#D5C6CA');
+
+    // 3. Diagonal ArrowKeys stay strictly inside unit disk (radius <= 34.1 < domeRing r=42)
+    for (let i = 0; i < 10; i++) {
+      domePad.dispatchEvent({ type: 'keydown', key: 'ArrowRight' });
+      domePad.dispatchEvent({ type: 'keydown', key: 'ArrowUp' });
+    }
+    h.stepFrame(48);
+    const px = Number(puck.getAttribute('cx'));
+    const py = Number(puck.getAttribute('cy'));
+    assert.ok(Math.hypot(px - 50, py - 50) <= 34.2, 'Diagonal puck must stay within unit-disk radius 34');
+
+    // 4. Flipping to Z− then dblclick resets zFlipBtn back to Z+
+    zFlipBtn.click();
+    assert.equal(zFlipBtn.textContent, 'Z−');
+    domePad.dispatchEvent({ type: 'dblclick' });
+    assert.equal(zFlipBtn.textContent, 'Z+');
+  } finally {
+    handle.destroy();
+  }
+});
