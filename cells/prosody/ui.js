@@ -8,8 +8,7 @@
   const BASE_FONT = 14;
   const MIN_SCALE = 0.45;
   const MAX_SCALE = 1.85;
-  const HOLD_THRESHOLD_MS = 300;
-  const MAX_RECORD_MS = 15000;
+  const MAX_MARQUEE_WORDS = 28;
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -28,19 +27,14 @@
     const state = {
       scale: 1.0,
       prevScale: null,
-      requestingMic: false,
-      recording: false,
-      processing: false,
-      pointerDownAt: 0,
-      startedByPointerDown: false,
-      recordCapTimer: null,
-      mediaRecorder: null,
+      connecting: false,
+      streaming: false,
+      liveSession: null,
       mediaStream: null,
-      audioChunks: [],
       audioCtx: null,
       analyser: null,
-      rafId: null,
-      abortController: null
+      processor: null,
+      rafId: null
     };
 
     container.textContent = '';
@@ -49,22 +43,27 @@
     const header = el('div', 'ps-header');
     const titleGroup = el('div', 'ps-title-group');
     titleGroup.appendChild(el('span', 'ps-index', '02'));
-    titleGroup.appendChild(el('span', 'ps-title', 'Voice Prosody Sizer'));
+    titleGroup.appendChild(el('span', 'ps-title', 'Live Prosody Sizer'));
 
     const headerActions = el('div', 'ps-header-actions');
     const modeBadge = el('button', 'ps-badge');
     modeBadge.type = 'button';
     modeBadge.setAttribute('aria-expanded', 'false');
-    modeBadge.title = 'Configure Gemini API key for live native audio prosody';
+    modeBadge.title = 'Configure Gemini API key for continuous Live API audio streaming';
     const badgeDot = el('span', 'ps-badge-dot');
-    const badgeLabel = el('span', '', '+ KEY');
+    const badgeLabel = el('span', '', 'SIM · +KEY');
     modeBadge.appendChild(badgeDot);
     modeBadge.appendChild(badgeLabel);
+
+    const sfxBtn = el('button', 'ps-icon-btn', 'SFX On');
+    sfxBtn.type = 'button';
+    sfxBtn.title = 'Toggle synthesized resize sound effects';
 
     const resetBtn = el('button', 'ps-icon-btn', 'Reset');
     resetBtn.type = 'button';
 
     headerActions.appendChild(modeBadge);
+    headerActions.appendChild(sfxBtn);
     headerActions.appendChild(resetBtn);
     header.appendChild(titleGroup);
     header.appendChild(headerActions);
@@ -73,12 +72,12 @@
     const keyPanel = el('div', 'ps-key-panel');
     keyPanel.setAttribute('role', 'dialog');
     keyPanel.setAttribute('aria-label', 'Gemini API Key');
-    keyPanel.appendChild(el('div', 'ps-key-panel-title', 'Gemini API Key (Native Audio)'));
+    keyPanel.appendChild(el('div', 'ps-key-panel-title', 'Gemini Live API Key'));
     keyPanel.appendChild(
       el(
         'div',
         'ps-key-panel-desc',
-        'Sends raw mic audio to gemini-3.8-flash so vocal stress & elongation map to button size. Saved to sessionStorage (shared with Cell 01).'
+        'Streams live 16kHz mic audio over WebSocket to Gemini Live API so vocal stress resizes the button in real time. Shared with Cell 01.'
       )
     );
     const keyInput = el('input', 'ps-key-input');
@@ -114,9 +113,18 @@
 
     buttonWrap.appendChild(targetBtn);
     buttonWrap.appendChild(ghostBtn);
+
+    // Live Word Marquee Ribbon at bottom of stage
+    const marqueeWrap = el('div', 'ps-marquee');
+    marqueeWrap.setAttribute('aria-live', 'polite');
+    const marqueeTrack = el('div', 'ps-marquee-track');
+    marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', 'Detected words stream here…'));
+    marqueeWrap.appendChild(marqueeTrack);
+
     stage.appendChild(metricsCorner);
     stage.appendChild(deltaPill);
     stage.appendChild(buttonWrap);
+    stage.appendChild(marqueeWrap);
 
     // --- Footer ---
     const footer = el('div', 'ps-footer');
@@ -125,7 +133,7 @@
     const micBtn = el('button', 'ps-mic-btn');
     micBtn.type = 'button';
     const micDot = el('span', 'ps-mic-dot');
-    const micLabel = el('span', '', 'Hold or Click to Speak');
+    const micLabel = el('span', '', 'Start Live Mic');
     micBtn.appendChild(micDot);
     micBtn.appendChild(micLabel);
 
@@ -136,7 +144,7 @@
     controlsRow.appendChild(waveCanvas);
 
     const readout = el('div', 'ps-readout');
-    const readoutText = el('div', 'ps-readout-text', 'Try stressing "liiiittle" vs. saying it flat.');
+    const readoutText = el('div', 'ps-readout-text', 'Stream live audio or tap a prosody demo chip.');
     readoutText.setAttribute('role', 'status');
     readoutText.setAttribute('aria-live', 'polite');
     readout.appendChild(readoutText);
@@ -146,6 +154,7 @@
       const chip = el('button', 'ps-demo-chip', preset.label);
       chip.type = 'button';
       chip.addEventListener('click', function () {
+        pushMarqueeWords(preset.transcript, preset.emphasized_word);
         applyProsodyResult(preset);
       });
       demosRow.appendChild(chip);
@@ -180,9 +189,48 @@
       if (restoreFocus) modeBadge.focus();
     }
 
+    function pushMarqueeWords(text, emphasizedWord) {
+      const words = String(text || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+      if (!words.length) return;
+
+      const placeholder = marqueeTrack.querySelector('.ps-marquee-placeholder');
+      if (placeholder) placeholder.remove();
+
+      const empLower = String(emphasizedWord || '').toLowerCase();
+      words.forEach(function (word) {
+        const clean = word.replace(/[^a-zA-Z0-9']/g, '').toLowerCase();
+        const isEmp = Boolean(empLower && clean && (clean === empLower || clean.indexOf(empLower) >= 0));
+        const span = el('span', isEmp ? 'ps-marquee-word ps-marquee-word--em' : 'ps-marquee-word', word);
+        marqueeTrack.appendChild(span);
+      });
+
+      while (marqueeTrack.children.length > MAX_MARQUEE_WORDS) {
+        marqueeTrack.removeChild(marqueeTrack.firstChild);
+      }
+
+      marqueeWrap.scrollLeft = marqueeWrap.scrollWidth;
+    }
+
+    function highlightLastEmphasizedWord(emphasizedWord) {
+      if (!emphasizedWord) return;
+      const empLower = emphasizedWord.toLowerCase();
+      const children = marqueeTrack.children;
+      for (let i = children.length - 1; i >= 0; i--) {
+        const node = children[i];
+        const clean = node.textContent.replace(/[^a-zA-Z0-9']/g, '').toLowerCase();
+        if (clean && (clean === empLower || clean.indexOf(empLower) >= 0)) {
+          node.classList.add('ps-marquee-word--em');
+          break;
+        }
+      }
+    }
+
     function computeButtonDims(scaleVal) {
       const maxW = stage.clientWidth > 60 ? stage.clientWidth - 24 : 252;
-      const maxH = stage.clientHeight > 60 ? stage.clientHeight - 38 : 82;
+      const maxH = stage.clientHeight > 80 ? stage.clientHeight - 62 : 76;
       const rawW = BASE_WIDTH * scaleVal;
       const rawH = BASE_HEIGHT * scaleVal;
       const fitRatio = Math.min(1, maxW / rawW, maxH / rawH);
@@ -212,32 +260,9 @@
       metricsCorner.textContent = Math.round(state.scale * 100) + '% · ' + dims.w + '×' + dims.h + 'px';
     }
 
-    function renderReadout(transcript, emphasizedWord, note, isError) {
-      readoutText.textContent = '';
+    function renderReadout(note, isError) {
+      readoutText.textContent = note || '';
       readoutText.classList.toggle('is-error', Boolean(isError));
-      if (transcript) {
-        readoutText.appendChild(document.createTextNode('"'));
-        if (emphasizedWord) {
-          const lower = transcript.toLowerCase();
-          const target = emphasizedWord.toLowerCase();
-          const idx = lower.indexOf(target);
-          if (idx >= 0) {
-            readoutText.appendChild(document.createTextNode(transcript.slice(0, idx)));
-            readoutText.appendChild(el('span', 'ps-emphasis', transcript.slice(idx, idx + emphasizedWord.length)));
-            readoutText.appendChild(document.createTextNode(transcript.slice(idx + emphasizedWord.length)));
-          } else {
-            readoutText.appendChild(document.createTextNode(transcript));
-          }
-        } else {
-          readoutText.appendChild(document.createTextNode(transcript));
-        }
-        readoutText.appendChild(document.createTextNode('"'));
-        if (note) {
-          readoutText.appendChild(document.createTextNode(' · ' + note));
-        }
-      } else if (note) {
-        readoutText.textContent = note;
-      }
       readoutText.title = readoutText.textContent;
     }
 
@@ -274,7 +299,7 @@
       const dpr = Math.min(2, global.devicePixelRatio || 1);
 
       function frame() {
-        if (!state.recording || !state.analyser) return;
+        if (!state.streaming || !state.analyser) return;
         state.analyser.getByteTimeDomainData(buf);
         const w = waveCanvas.width;
         const h = waveCanvas.height;
@@ -298,11 +323,15 @@
 
     function applyProsodyResult(res) {
       if (!res) return;
+      if (res.emphasized_word) {
+        highlightLastEmphasizedWord(res.emphasized_word);
+      }
       if (res.direction === 'reset') {
         state.prevScale = state.scale;
         state.scale = 1.0;
         deltaPill.textContent = 'RESET';
         deltaPill.classList.add('is-visible');
+        NS.Client.SoundFX.playResize('reset', 0);
       } else if (res.delta_percent !== 0) {
         const nextScale = clamp(state.scale * (1 + res.delta_percent / 100), MIN_SCALE, MAX_SCALE);
         if (Math.abs(nextScale - state.scale) < 0.002) {
@@ -313,6 +342,7 @@
           state.scale = nextScale;
           deltaPill.textContent = (res.delta_percent > 0 ? '+' : '') + res.delta_percent + '%';
           deltaPill.classList.add('is-visible');
+          NS.Client.SoundFX.playResize(res.direction, res.delta_percent);
         }
       } else {
         state.prevScale = state.scale;
@@ -320,17 +350,29 @@
         deltaPill.classList.add('is-visible');
       }
       renderButtonSize();
-      renderReadout(res.transcript, res.emphasized_word, res.prosody_note, false);
+      renderReadout(res.prosody_note || 'Applied ' + deltaPill.textContent, false);
     }
 
-    function stopMediaTracks() {
-      if (state.recordCapTimer) {
-        clearTimeout(state.recordCapTimer);
-        state.recordCapTimer = null;
-      }
+    function stopLiveStream(silent) {
+      const wasActive = state.streaming || state.connecting;
+      state.connecting = false;
+      state.streaming = false;
+
       if (state.rafId) {
         global.cancelAnimationFrame(state.rafId);
         state.rafId = null;
+      }
+      if (state.liveSession) {
+        state.liveSession.close();
+        state.liveSession = null;
+      }
+      if (state.processor) {
+        try {
+          state.processor.disconnect();
+        } catch (_e) {
+          // ignore
+        }
+        state.processor = null;
       }
       if (state.mediaStream) {
         state.mediaStream.getTracks().forEach(function (t) {
@@ -347,195 +389,126 @@
         state.audioCtx = null;
         state.analyser = null;
       }
-      state.recording = false;
-      state.mediaRecorder = null;
-      micBtn.classList.remove('is-recording');
+
+      micBtn.classList.remove('is-recording', 'is-processing');
+      micLabel.textContent = 'Start Live Mic';
       drawIdleWave();
+      if (wasActive && !silent) {
+        NS.Client.SoundFX.playStreamToggle(false);
+      }
     }
 
-    function startRecording() {
-      if (state.requestingMic || state.recording || state.processing) return;
+    function startLiveStream() {
+      if (state.connecting || state.streaming) return;
       syncBadge();
       const apiKey = NS.Client.KeyStore.get();
       if (!apiKey) {
         openKeyPanel();
-        renderReadout('', '', 'Add a Gemini API key for live mic prosody, or tap a demo chip below.', false);
+        renderReadout('Add a Gemini API key for live streaming, or tap a demo chip below.', false);
         return;
       }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        renderReadout('', '', 'Microphone capture is unavailable in this browser context.', true);
+        renderReadout('Microphone capture is unavailable in this browser context.', true);
         return;
       }
 
-      state.requestingMic = true;
+      state.connecting = true;
+      micBtn.classList.add('is-processing');
+      micLabel.textContent = 'Connecting…';
+      renderReadout('Opening Gemini Live WebSocket…', false);
+
       navigator.mediaDevices
-        .getUserMedia({ audio: true })
+        .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
         .then(function (stream) {
-          state.requestingMic = false;
+          if (!state.connecting) {
+            stream.getTracks().forEach(function (t) {
+              t.stop();
+            });
+            return;
+          }
           state.mediaStream = stream;
-          state.audioChunks = [];
-
-          const mime =
-            global.MediaRecorder && MediaRecorder.isTypeSupported('audio/webm')
-              ? 'audio/webm'
-              : global.MediaRecorder && MediaRecorder.isTypeSupported('audio/mp4')
-              ? 'audio/mp4'
-              : '';
-
-          const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-          state.mediaRecorder = recorder;
-
-          recorder.ondataavailable = function (ev) {
-            if (ev.data && ev.data.size > 0) state.audioChunks.push(ev.data);
-          };
-
-          recorder.onstop = function () {
-            const blob = new Blob(state.audioChunks, { type: recorder.mimeType || 'audio/webm' });
-            stopMediaTracks();
-            processRecordedAudio(blob);
-          };
-
-          recorder.start();
-          state.recording = true;
 
           const AudioCtx = global.AudioContext || global.webkitAudioContext;
-          if (AudioCtx) {
-            state.audioCtx = new AudioCtx();
-            if (state.audioCtx.state === 'suspended') {
-              state.audioCtx.resume().catch(function () {});
-            }
-            const source = state.audioCtx.createMediaStreamSource(stream);
-            state.analyser = state.audioCtx.createAnalyser();
-            state.analyser.fftSize = 256;
-            source.connect(state.analyser);
-            startWaveLoop();
+          state.audioCtx = new AudioCtx();
+          if (state.audioCtx.state === 'suspended') {
+            state.audioCtx.resume().catch(function () {});
           }
 
-          state.recordCapTimer = setTimeout(function () {
-            stopRecording();
-          }, MAX_RECORD_MS);
+          const source = state.audioCtx.createMediaStreamSource(stream);
+          state.analyser = state.audioCtx.createAnalyser();
+          state.analyser.fftSize = 256;
+          source.connect(state.analyser);
 
-          micBtn.classList.add('is-recording');
-          micLabel.textContent = 'Listening… Release or Click';
-          renderReadout('', '', 'Speak naturally — try stressing "liiiittle" or "MUCH".', false);
+          // Continuous PCM capture node (4096 samples ~85ms at 48kHz)
+          const processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
+          state.processor = processor;
+          source.connect(processor);
+          processor.connect(state.audioCtx.destination);
+
+          state.liveSession = NS.Client.createLiveSession(apiKey, {
+            onReady: function (modelName) {
+              state.connecting = false;
+              state.streaming = true;
+              micBtn.classList.remove('is-processing');
+              micBtn.classList.add('is-recording');
+              micLabel.textContent = 'Live · Click to Stop';
+              NS.Client.SoundFX.playStreamToggle(true);
+              renderReadout('Live streaming (' + modelName.replace('models/', '') + ') — speak naturally.', false);
+              startWaveLoop();
+            },
+            onTranscript: function (chunk) {
+              pushMarqueeWords(chunk, '');
+            },
+            onResize: function (res) {
+              applyProsodyResult(res);
+            },
+            onError: function (msg) {
+              renderReadout('Live stream error: ' + msg, true);
+            },
+            onClose: function (reason) {
+              const wasStreaming = state.streaming || state.connecting;
+              stopLiveStream(true);
+              if (wasStreaming) {
+                renderReadout('Live session ended: ' + reason, true);
+              }
+            }
+          });
+
+          processor.onaudioprocess = function (ev) {
+            if (!state.streaming || !state.liveSession) return;
+            const input = ev.inputBuffer.getChannelData(0);
+            state.liveSession.sendPCM(input, state.audioCtx.sampleRate);
+          };
         })
         .catch(function (err) {
-          state.requestingMic = false;
-          stopMediaTracks();
-          micLabel.textContent = 'Hold or Click to Speak';
-          renderReadout('', '', 'Mic error: ' + ((err && err.message) || 'check browser permissions.'), true);
-        });
-    }
-
-    function stopRecording() {
-      if (!state.recording) return;
-      state.recording = false;
-      micBtn.classList.remove('is-recording');
-      if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
-        state.mediaRecorder.stop();
-      } else {
-        stopMediaTracks();
-      }
-    }
-
-    function cancelProcessing() {
-      if (state.abortController) {
-        state.abortController.abort();
-        state.abortController = null;
-      }
-      state.processing = false;
-      micBtn.classList.remove('is-processing');
-      micLabel.textContent = 'Hold or Click to Speak';
-    }
-
-    function processRecordedAudio(blob) {
-      if (!blob || blob.size < 400) {
-        renderReadout('', '', 'Recording too short — speak a phrase and stop.', true);
-        micLabel.textContent = 'Hold or Click to Speak';
-        return;
-      }
-
-      if (state.abortController) state.abortController.abort();
-      const controller = new AbortController();
-      state.abortController = controller;
-      state.processing = true;
-      micBtn.classList.add('is-processing');
-      micLabel.textContent = 'Analyzing… (Click to Cancel)';
-
-      NS.Client.analyzeAudioLive(blob, NS.Client.KeyStore.get(), controller.signal)
-        .then(function (res) {
-          if (state.abortController !== controller) return;
-          applyProsodyResult(res);
-        })
-        .catch(function (err) {
-          if (state.abortController !== controller) return;
-          if (err && err.name === 'AbortError') return;
-          renderReadout('', '', 'Gemini audio error: ' + ((err && err.message) || 'request failed'), true);
-        })
-        .finally(function () {
-          if (state.abortController !== controller) return;
-          state.abortController = null;
-          state.processing = false;
-          micBtn.classList.remove('is-processing');
-          micLabel.textContent = 'Hold or Click to Speak';
+          stopLiveStream(true);
+          renderReadout('Mic error: ' + ((err && err.message) || 'check browser permissions.'), true);
         });
     }
 
     // --- Event Wiring ---
-    // Support both Press-and-Hold (>=300ms) and Click-to-Toggle.
-    micBtn.addEventListener('pointerdown', function (ev) {
-      if (ev.button !== 0) return;
-      if (state.processing) {
-        cancelProcessing();
-        renderReadout('', '', 'Canceled audio analysis.', false);
-        return;
-      }
-      if (!state.recording && !state.requestingMic) {
-        state.pointerDownAt = Date.now();
-        state.startedByPointerDown = true;
-        startRecording();
+    micBtn.addEventListener('click', function () {
+      if (state.streaming || state.connecting) {
+        stopLiveStream(false);
+        renderReadout('Live stream stopped.', false);
       } else {
-        state.startedByPointerDown = false;
+        startLiveStream();
       }
     });
 
-    micBtn.addEventListener('pointerup', function () {
-      if (state.startedByPointerDown && state.recording) {
-        const heldMs = Date.now() - state.pointerDownAt;
-        if (heldMs >= HOLD_THRESHOLD_MS) {
-          stopRecording();
-        }
-      }
-      state.startedByPointerDown = false;
-    });
-
-    micBtn.addEventListener('pointercancel', function () {
-      state.startedByPointerDown = false;
-    });
-
-    micBtn.addEventListener('click', function (ev) {
-      // Ignore synthetic click immediately after pointerdown started recording
-      if (ev.detail > 0 && state.pointerDownAt && Date.now() - state.pointerDownAt < HOLD_THRESHOLD_MS && state.recording) {
-        return;
-      }
-      if (state.processing) {
-        cancelProcessing();
-        renderReadout('', '', 'Canceled audio analysis.', false);
-        return;
-      }
-      if (state.recording) stopRecording();
-      else startRecording();
+    sfxBtn.addEventListener('click', function () {
+      const muted = NS.Client.SoundFX.toggleMute();
+      sfxBtn.textContent = muted ? 'SFX Off' : 'SFX On';
     });
 
     resetBtn.addEventListener('click', function () {
-      cancelProcessing();
-      if (state.recording) stopRecording();
       state.prevScale = null;
       state.scale = 1.0;
       deltaPill.classList.remove('is-visible');
       renderButtonSize();
-      renderReadout('', '', 'Reset to 100% (136×44px).', false);
+      NS.Client.SoundFX.playResize('reset', 0);
+      renderReadout('Reset to 100% (136×44px).', false);
     });
 
     modeBadge.addEventListener('click', function () {
@@ -555,9 +528,7 @@
       closeKeyPanel(true);
       syncBadge();
       renderReadout(
-        '',
-        '',
-        NS.Client.KeyStore.get() ? 'Live Gemini audio ready — hold or click mic to speak.' : 'Key cleared (Demo mode).',
+        NS.Client.KeyStore.get() ? 'Live Gemini key saved — click Start Live Mic.' : 'Key cleared (Demo mode).',
         false
       );
     }
@@ -590,7 +561,7 @@
     global.addEventListener('focus', syncBadge);
     global.addEventListener('resize', function () {
       renderButtonSize();
-      if (!state.recording) drawIdleWave();
+      if (!state.streaming) drawIdleWave();
     });
 
     // Initial render

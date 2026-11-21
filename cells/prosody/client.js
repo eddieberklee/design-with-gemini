@@ -3,9 +3,11 @@
 
   const NS = (global.GeminiProsody = global.GeminiProsody || {});
 
-  const MODEL = 'gemini-3.8-flash';
-  const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent';
-  const REQUEST_TIMEOUT_MS = 25000;
+  const LIVE_MODELS = [
+    'models/gemini-3.8-live',
+    'models/gemini-2.5-flash-native-audio-preview-12-2025'
+  ];
+  const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
   // Share the same storage keys as Cell #1 so a key entered once works across the grid.
   const SESSION_KEY = 'dc_gemini_api_key_session';
@@ -74,176 +76,318 @@
     }
   };
 
-  const SYSTEM_INSTRUCTION = [
-    'You are a vocal prosody and emphasis interpreter controlling the size of a UI button.',
-    'Listen carefully to the raw audio: word stress, vowel elongation, pitch contour, volume, and speaking rate.',
-    'Map BOTH the words AND how they are spoken to a signed percentage delta (delta_percent) between -40 and +40:',
-    '- Neutral "make it a little smaller" -> delta_percent around -12.',
-    '- Emphasized or elongated "make it a LIIIITTLE smaller" or "just a TINY bit smaller" (cautious/stressed qualifier) -> micro-nudge, delta_percent around -2 to -4.',
-    '- Emphasized "make it MUCH smaller" or loud/sharp "smaller!" -> larger step, delta_percent around -25 to -35.',
-    '- Same symmetry for bigger/larger: neutral "a little bigger" -> +12; stressed "a liiiittle bigger" -> +2 to +4; "much bigger" -> +25 to +35.',
-    '- If the speaker asks to reset / default / normal size -> direction "reset", delta_percent 0.',
-    '- If speech is unrelated or silent -> direction "none", delta_percent 0.',
-    'Return strict JSON matching the schema.'
-  ].join(' ');
+  // --- Synthesized Tactile Web Audio Sound Feedback ---
+  const SoundFX = (function () {
+    let ctx = null;
+    let muted = false;
 
-  const RESPONSE_SCHEMA = {
-    type: 'OBJECT',
-    properties: {
-      transcript: { type: 'STRING' },
-      direction: { type: 'STRING', enum: ['bigger', 'smaller', 'reset', 'none'] },
-      delta_percent: { type: 'INTEGER' },
-      emphasized_word: { type: 'STRING' },
-      prosody_note: { type: 'STRING' }
-    },
-    required: ['transcript', 'direction', 'delta_percent', 'emphasized_word', 'prosody_note']
-  };
+    function getCtx() {
+      if (muted) return null;
+      const AudioCtx = global.AudioContext || global.webkitAudioContext;
+      if (!AudioCtx) return null;
+      if (!ctx) ctx = new AudioCtx();
+      if (ctx.state === 'suspended') {
+        ctx.resume().catch(function () {});
+      }
+      return ctx;
+    }
 
-  function blobToBase64(blob) {
-    return new Promise(function (resolve, reject) {
-      const reader = new FileReader();
-      reader.onloadend = function () {
-        const res = String(reader.result || '');
-        const idx = res.indexOf(',');
-        resolve(idx >= 0 ? res.slice(idx + 1) : res);
-      };
-      reader.onerror = function () {
-        reject(new Error('Failed to read recorded audio.'));
-      };
-      reader.readAsDataURL(blob);
-    });
+    function playTone(audioCtx, freq, startOffset, duration, type, peakGain, endFreq) {
+      const now = audioCtx.currentTime + startOffset;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type || 'sine';
+      osc.frequency.setValueAtTime(freq, now);
+      if (endFreq) {
+        osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration);
+      }
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(peakGain, now + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(now);
+      osc.stop(now + duration + 0.02);
+    }
+
+    return {
+      isMuted: function () {
+        return muted;
+      },
+      toggleMute: function () {
+        muted = !muted;
+        return muted;
+      },
+      playStreamToggle: function (starting) {
+        const c = getCtx();
+        if (!c) return;
+        if (starting) {
+          playTone(c, 520, 0, 0.08, 'sine', 0.06, 680);
+        } else {
+          playTone(c, 560, 0, 0.09, 'sine', 0.05, 380);
+        }
+      },
+      playResize: function (direction, deltaPercent) {
+        const c = getCtx();
+        if (!c) return;
+        if (direction === 'reset') {
+          playTone(c, 440, 0, 0.14, 'triangle', 0.08);
+          playTone(c, 659.25, 0.06, 0.18, 'sine', 0.07);
+          return;
+        }
+        const mag = Math.abs(deltaPercent || 0);
+        if (mag === 0) return;
+        const growing = deltaPercent > 0;
+
+        if (mag <= 6) {
+          // Micro-nudge ("liiiittle"): crisp, delicate detented tick
+          const base = growing ? 740 : 540;
+          const end = growing ? 880 : 440;
+          playTone(c, base, 0, 0.065, 'sine', 0.08, end);
+          playTone(c, base * 2, 0, 0.035, 'triangle', 0.03);
+        } else if (mag < 20) {
+          // Standard step: warm marimba-like two-note interval
+          const f1 = growing ? 440 : 493.88;
+          const f2 = growing ? 554.37 : 392.0;
+          playTone(c, f1, 0, 0.11, 'triangle', 0.09);
+          playTone(c, f2, 0.055, 0.15, 'sine', 0.09);
+        } else {
+          // Bold jump ("MUCH"): resonant chord + subtle sub-thump
+          const root = growing ? 330 : 392;
+          const fifth = growing ? 495 : 261.63;
+          const octave = growing ? 660 : 196;
+          playTone(c, root, 0, 0.22, 'triangle', 0.11, fifth);
+          playTone(c, fifth, 0.04, 0.24, 'sine', 0.09);
+          playTone(c, octave, 0.07, 0.26, 'sine', 0.07);
+        }
+      }
+    };
+  })();
+
+  // --- PCM 16kHz Helpers for Gemini Live API ---
+  function downsampleTo16k(float32Buf, inputSampleRate) {
+    if (inputSampleRate === 16000) {
+      return float32Buf;
+    }
+    const ratio = inputSampleRate / 16000;
+    const outLength = Math.max(1, Math.round(float32Buf.length / ratio));
+    const result = new Float32Array(outLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < float32Buf.length; i++) {
+        accum += float32Buf[i];
+        count++;
+      }
+      result[offsetResult] = count > 0 ? accum / count : 0;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return result;
   }
 
-  function normalizeResult(result) {
-    const dirRaw = String((result && result.direction) || 'none').toLowerCase();
+  function floatTo16BitPCMBase64(float32Buf) {
+    const buffer = new ArrayBuffer(float32Buf.length * 2);
+    const view = new DataView(buffer);
+    for (let i = 0; i < float32Buf.length; i++) {
+      const s = Math.max(-1, Math.min(1, float32Buf[i]));
+      view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return global.btoa(binary);
+  }
+
+  function normalizeToolArgs(args) {
+    const dirRaw = String((args && args.direction) || 'none').toLowerCase();
     const direction = ['bigger', 'smaller', 'reset', 'none'].indexOf(dirRaw) >= 0 ? dirRaw : 'none';
-    const rawDelta = Math.round(Number(result && result.delta_percent) || 0);
+    const rawDelta = Math.round(Number(args && args.delta_percent) || 0);
     const clampedMag = Math.min(40, Math.abs(rawDelta));
     let delta = 0;
     if (direction === 'smaller') delta = -clampedMag;
     else if (direction === 'bigger') delta = clampedMag;
 
     return {
-      mode: 'live',
-      transcript: String((result && result.transcript) || '').trim(),
       direction: direction,
       delta_percent: delta,
-      emphasized_word: String((result && result.emphasized_word) || '').trim(),
-      prosody_note: String((result && result.prosody_note) || '').trim()
+      emphasized_word: String((args && args.emphasized_word) || '').trim(),
+      prosody_note: String((args && args.prosody_note) || '').trim()
     };
   }
 
-  function analyzeAudioLive(audioBlob, apiKey, externalSignal) {
-    const key = String(apiKey || '').trim();
-    if (!key) {
-      return Promise.reject(new Error('Missing Gemini API key.'));
-    }
+  const LIVE_SYSTEM_INSTRUCTION = [
+    'You are a real-time vocal prosody controller listening to a continuous audio stream to resize a UI button.',
+    'Do NOT speak back or converse. ONLY call the adjust_button_size tool whenever the user asks to make the button bigger, smaller, or reset.',
+    'Pay close attention to HOW words are spoken: word stress, vowel elongation, pitch, and volume.',
+    '- Neutral "a little smaller" -> direction: "smaller", delta_percent: -12.',
+    '- Emphasized/elongated "a LIIIITTLE smaller" or "just a TINY bit smaller" -> micro-nudge, delta_percent: -3, emphasized_word: "little" (or the stressed word).',
+    '- Emphasized "MUCH smaller" or sharp/loud "smaller!" -> delta_percent: -28.',
+    '- Same symmetry for bigger/larger: neutral +12, stressed "liiiittle" +3, "MUCH" +28.',
+    '- "reset" / "normal size" -> direction: "reset", delta_percent: 0.',
+    'React quickly as soon as a sizing phrase is heard.'
+  ].join(' ');
 
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(function () {
-      timedOut = true;
-      controller.abort();
-    }, REQUEST_TIMEOUT_MS);
+  function createLiveSession(apiKey, callbacks) {
+    const cb = callbacks || {};
+    let ws = null;
+    let closed = false;
+    let setupDone = false;
+    let modelIdx = 0;
 
-    function onExternalAbort() {
-      controller.abort();
-    }
-    if (externalSignal) {
-      if (externalSignal.aborted) {
-        clearTimeout(timer);
-        return Promise.reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
-      }
-      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-    }
+    function connect() {
+      if (closed) return;
+      const modelName = LIVE_MODELS[modelIdx] || LIVE_MODELS[0];
+      const url = WS_BASE + '?key=' + encodeURIComponent(apiKey);
+      ws = new WebSocket(url);
 
-    const mimeType = (audioBlob && audioBlob.type ? audioBlob.type.split(';')[0] : '') || 'audio/webm';
-
-    return blobToBase64(audioBlob)
-      .then(function (base64Data) {
-        const payload = {
-          systemInstruction: {
-            parts: [{ text: SYSTEM_INSTRUCTION }]
-          },
-          contents: [
-            {
-              role: 'user',
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: mimeType,
-                    data: base64Data
+      ws.onopen = function () {
+        if (closed) {
+          ws.close();
+          return;
+        }
+        const setupMsg = {
+          setup: {
+            model: modelName,
+            generationConfig: {
+              responseModalities: ['AUDIO'],
+              temperature: 0.2
+            },
+            inputAudioTranscription: {},
+            systemInstruction: {
+              parts: [{ text: LIVE_SYSTEM_INSTRUCTION }]
+            },
+            tools: [
+              {
+                functionDeclarations: [
+                  {
+                    name: 'adjust_button_size',
+                    description: 'Adjust the centered UI button size based on spoken command and vocal emphasis/prosody.',
+                    parameters: {
+                      type: 'OBJECT',
+                      properties: {
+                        direction: { type: 'STRING', enum: ['bigger', 'smaller', 'reset'] },
+                        delta_percent: { type: 'INTEGER', description: 'Signed percentage delta from -40 to +40' },
+                        emphasized_word: { type: 'STRING', description: 'The word with strongest vocal stress, if any' },
+                        prosody_note: { type: 'STRING', description: 'Short 4-8 word note on how it was spoken' }
+                      },
+                      required: ['direction', 'delta_percent', 'emphasized_word', 'prosody_note']
+                    }
                   }
-                },
-                {
-                  text: 'Analyze the vocal emphasis and prosody in this audio command and output the button size adjustment JSON.'
-                }
-              ]
+                ]
+              }
+            ]
+          }
+        };
+        ws.send(JSON.stringify(setupMsg));
+      };
+
+      ws.onmessage = function (event) {
+        if (closed) return;
+        const handleText = function (rawText) {
+          let msg = null;
+          try {
+            msg = JSON.parse(rawText);
+          } catch (_e) {
+            return;
+          }
+          if (msg.setupComplete) {
+            setupDone = true;
+            if (cb.onReady) cb.onReady(modelName);
+          }
+          // Live input transcription (either top-level or inside serverContent)
+          const tx =
+            (msg.inputTranscription && msg.inputTranscription.text) ||
+            (msg.serverContent && msg.serverContent.inputTranscription && msg.serverContent.inputTranscription.text);
+          if (tx && cb.onTranscript) {
+            cb.onTranscript(String(tx));
+          }
+          // Live tool calls for button resize
+          if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls)) {
+            const responses = [];
+            msg.toolCall.functionCalls.forEach(function (call) {
+              if (call && call.name === 'adjust_button_size') {
+                const normalized = normalizeToolArgs(call.args || {});
+                if (cb.onResize) cb.onResize(normalized);
+                responses.push({
+                  id: call.id,
+                  name: call.name,
+                  response: { output: { ok: true, applied: normalized.delta_percent } }
+                });
+              }
+            });
+            if (responses.length && ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ toolResponse: { functionResponses: responses } }));
             }
-          ],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: RESPONSE_SCHEMA,
-            temperature: 0.2
           }
         };
 
-        return fetch(ENDPOINT, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': key
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal
-        });
-      })
-      .then(function (resp) {
-        return resp.text().then(function (text) {
-          let parsed = null;
-          try {
-            parsed = text ? JSON.parse(text) : null;
-          } catch (_e) {
-            parsed = null;
-          }
-          if (!resp.ok) {
-            const msg = (parsed && parsed.error && parsed.error.message) || ('HTTP ' + resp.status);
-            throw new Error(msg);
-          }
-          const blockReason = parsed && parsed.promptFeedback && parsed.promptFeedback.blockReason;
-          if (blockReason) {
-            throw new Error('Audio blocked by Gemini safety filter (' + blockReason + ').');
-          }
-          const candidate = parsed && parsed.candidates && parsed.candidates[0];
-          const parts = (candidate && candidate.content && Array.isArray(candidate.content.parts)) ? candidate.content.parts : [];
-          const textPart = parts.find(function (p) {
-            return p && !p.thought && typeof p.text === 'string' && p.text.trim();
-          });
-          if (!textPart) {
-            const finish = candidate && candidate.finishReason ? ' (' + candidate.finishReason + ')' : '';
-            throw new Error('Empty response from Gemini audio model' + finish + '.');
-          }
-          let result;
-          try {
-            result = JSON.parse(textPart.text);
-          } catch (_e) {
-            throw new Error('Malformed JSON returned by Gemini audio model.');
-          }
-          return normalizeResult(result);
-        });
-      })
-      .catch(function (err) {
-        if (err && err.name === 'AbortError' && timedOut) {
-          throw new Error('Request timed out after 25s.');
+        if (event.data instanceof Blob) {
+          event.data.text().then(handleText).catch(function () {});
+        } else if (typeof event.data === 'string') {
+          handleText(event.data);
         }
-        throw err;
-      })
-      .finally(function () {
-        clearTimeout(timer);
-        if (externalSignal) {
-          externalSignal.removeEventListener('abort', onExternalAbort);
+      };
+
+      ws.onerror = function () {
+        if (!closed && cb.onError && setupDone) {
+          cb.onError('Live WebSocket connection error.');
         }
-      });
+      };
+
+      ws.onclose = function (ev) {
+        if (closed) return;
+        // If server rejected the first model before setupComplete, try fallback model
+        if (!setupDone && modelIdx + 1 < LIVE_MODELS.length) {
+          modelIdx += 1;
+          connect();
+          return;
+        }
+        closed = true;
+        if (cb.onClose) {
+          cb.onClose(ev.reason || ('Closed (code ' + ev.code + ')'));
+        }
+      };
+    }
+
+    connect();
+
+    return {
+      sendPCM: function (float32Samples, sampleRate) {
+        if (closed || !setupDone || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const pcm16k = downsampleTo16k(float32Samples, sampleRate);
+        const base64 = floatTo16BitPCMBase64(pcm16k);
+        ws.send(
+          JSON.stringify({
+            realtimeInput: {
+              mediaChunks: [
+                {
+                  mimeType: 'audio/pcm;rate=16000',
+                  data: base64
+                }
+              ]
+            }
+          })
+        );
+      },
+      close: function () {
+        closed = true;
+        if (ws) {
+          try {
+            ws.close();
+          } catch (_e) {
+            // ignore
+          }
+          ws = null;
+        }
+      }
+    };
   }
 
   // Preset prosody demos so the cell is immediately testable even without a live API key.
@@ -278,9 +422,10 @@
   ];
 
   NS.Client = {
-    MODEL: MODEL,
+    LIVE_MODELS: LIVE_MODELS,
     KeyStore: KeyStore,
+    SoundFX: SoundFX,
     DEMO_PRESETS: DEMO_PRESETS,
-    analyzeAudioLive: analyzeAudioLive
+    createLiveSession: createLiveSession
   };
 })(window);
