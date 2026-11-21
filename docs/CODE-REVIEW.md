@@ -111,6 +111,6 @@ Every newly landed commit is audited across four orthogonal lenses before proact
 2. **Design, UX & Visual Craft Critic**: Scoped CSS isolation (never leaking rules into `.grid` or sibling `.cell` tiles), `@container` / responsive 4:3 card ergonomics, keyboard focus & ARIA semantics, contrast, tabular numerals, and honest simulated vs live telemetry.
 3. **Architecture, Living Docs & Security Reviewer**: Zero API key leakage (`x-goog-api-key` headers, redacted `cURL`, no `innerHTML` XSS with untrusted input), clean module boundaries, and zero drift between shipped symbols and co-located `NOTES.md` / `README.md`.
 4. **Live Execution Verifier**:
-   - JavaScript syntax gate: `node --check <file.js>` across all modified `.js` files
-   - Unit/DSP suites where present: `timeout 60 node --test tests/*.test.js`
+   - Whole-repo gate: `bash scripts/check.sh` (page wiring, `node --check` on every `.js` / `.mjs`, the `index.html` scripts parsed as one shared-global-scope program, and every Node suite; see `README.md` § Verify)
+   - One cell's suites while iterating: `timeout 120 node --test cells/<slug>/` (suites are co-located as `cells/<slug>/*.test.js` / `*.test.mjs`; there is no top-level `tests/` directory)
    - Headless DOM/CSS/runtime smoke verification where applicable

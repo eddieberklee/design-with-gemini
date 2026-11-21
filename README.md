@@ -16,6 +16,16 @@ Interactive 3×3 grid of focused Gemini capability prototypes. Open [`index.html
 | **08** | **Webcam Hand & Spatial Gesture Cursor** (`@mediapipe/tasks-vision@1.2.3`) — raise an open palm (`200 ms` dwell) to engage a zero-GC spatial cursor across the main grid or its 9-cell `#hand-gesture` Studio (`1€` 2D filter oscilloscope, zero-slip metacarpal pinch click/drag, unwrapped wrist-twist rotary dial, 2-hand zoom/steer, vertical pinch-scrub fader, and Two-Finger `V-Scroll` momentum tape) | [`cells/hand-gesture/`](cells/hand-gesture/) · [`NOTES.md`](cells/hand-gesture/NOTES.md) |
 | **09** | **Freehand Drawing Sketchpad** — zero-chrome full-bleed drawing sheet for laptop trackpad, desktop cursor, phone touch, and stylus with $C^1$ quadratic midpoint ink splines, tap-to-dot, lossless HiDPI vector replay across `MotionGrid` resizes, and strictly one floating `Clear` button | [`cells/draw/`](cells/draw/) · [`NOTES.md`](cells/draw/NOTES.md) |
 
+## Verify
+
+```sh
+bash scripts/check.sh
+```
+
+One command, no dependencies beyond Node 22 and `timeout`. It checks that every script and stylesheet a page references exists (and that no cell script or stylesheet is left unwired), that every `.js` / `.mjs` file parses, that the `index.html` scripts parse as **one** program (they are classic `<script defer>` files sharing one global scope, so a duplicate top-level `const` / `let` / `class` across cells is a load-time error no per-file check can see), and that every Node suite under `cells/*/` passes. Exit `0` means all four hold.
+
+It does not open a browser. Interaction, layout, and hardware paths (microphone, camera, phone sensors, Web Serial / BLE, a Gemini API key) need a manual pass in the page; each cell's `NOTES.md` lists what to exercise.
+
 ## License
 
 Released under the [MIT No Attribution (`MIT-0`)](LICENSE) license — free to use, copy, modify, build on, redistribute, and use commercially in any way, with no attribution required.
