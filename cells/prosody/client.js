@@ -385,6 +385,7 @@
     else if (direction === 'bigger') delta = clampedMag;
 
     return {
+      transcript: String((args && args.transcript) || '').trim(),
       direction: direction,
       delta_percent: delta,
       emphasized_word: String((args && args.emphasized_word) || '').trim(),
@@ -394,14 +395,14 @@
 
   const LIVE_SYSTEM_INSTRUCTION = [
     'You are a real-time vocal prosody controller listening to a continuous audio stream to resize a UI button.',
-    'Do NOT speak back or converse. ONLY call the adjust_button_size tool whenever the user asks to make the button bigger, smaller, or reset.',
+    'Whenever the user asks to make the button bigger, smaller, larger, tinier, or reset, immediately call the adjust_button_size tool.',
     'Pay close attention to HOW words are spoken: word stress, vowel elongation, pitch, and volume.',
     '- Neutral "a little smaller" -> direction: "smaller", delta_percent: -12.',
     '- Emphasized/elongated "a LIIIITTLE smaller" or "just a TINY bit smaller" -> micro-nudge, delta_percent: -3, emphasized_word: "little" (or the stressed word).',
     '- Emphasized "MUCH smaller" or sharp/loud "smaller!" -> delta_percent: -28.',
     '- Same symmetry for bigger/larger: neutral +12, stressed "liiiittle" +3, "MUCH" +28.',
     '- "reset" / "normal size" -> direction: "reset", delta_percent: 0.',
-    'React quickly as soon as a sizing phrase is heard.'
+    'Keep spoken replies minimal or silent; prioritize calling adjust_button_size quickly.'
   ].join(' ');
 
   function createLiveSession(apiKey, callbacks) {
@@ -524,12 +525,13 @@
                     parameters: {
                       type: 'OBJECT',
                       properties: {
+                        transcript: { type: 'STRING', description: 'Exact phrase spoken by the user' },
                         direction: { type: 'STRING', enum: ['bigger', 'smaller', 'reset'] },
                         delta_percent: { type: 'INTEGER', description: 'Signed percentage delta from -40 to +40' },
                         emphasized_word: { type: 'STRING', description: 'The word with strongest vocal stress, if any' },
                         prosody_note: { type: 'STRING', description: 'Short 4-8 word note on how it was spoken' }
                       },
-                      required: ['direction', 'delta_percent', 'emphasized_word', 'prosody_note']
+                      required: ['transcript', 'direction', 'delta_percent', 'emphasized_word', 'prosody_note']
                     }
                   }
                 ]
@@ -554,6 +556,10 @@
             return;
           }
           if (!msg || typeof msg !== 'object') return;
+          if (cb.onServerEvent) cb.onServerEvent(msg);
+          if (typeof console !== 'undefined' && console.debug) {
+            console.debug('[ProsodyLive]', Object.keys(msg), msg);
+          }
 
           if (msg.error && (setupDone || modelIdx + 1 >= LIVE_MODELS.length)) {
             if (cb.onError) {

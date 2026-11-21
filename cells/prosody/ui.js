@@ -383,6 +383,18 @@
         }
         state.rafId = null;
       }
+      if (state.speechRec) {
+        const rec = state.speechRec;
+        state.speechRec = null;
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        try {
+          rec.stop();
+        } catch (_e) {
+          // ignore
+        }
+      }
       if (state.liveSession) {
         const sess = state.liveSession;
         state.liveSession = null;
@@ -536,21 +548,82 @@
           processor.connect(silentGain);
           silentGain.connect(state.audioCtx.destination);
 
+          let hasGeminiTx = false;
+          let txCount = 0;
+          let rxCount = 0;
+          let activeModel = '';
+          let lastActivityAt = 0;
+
+          function startLocalSpeechMirror() {
+            const SpeechRec = global.SpeechRecognition || global.webkitSpeechRecognition;
+            if (typeof SpeechRec !== 'function') return;
+            try {
+              const rec = new SpeechRec();
+              rec.continuous = true;
+              rec.interimResults = true;
+              rec.lang = 'en-US';
+              rec.onresult = function (ev) {
+                if (unmounted || myEpoch !== sessionEpoch || !state.streaming || hasGeminiTx) return;
+                let interim = '';
+                for (let i = ev.resultIndex; i < ev.results.length; i++) {
+                  const res = ev.results[i];
+                  const text = res && res[0] ? String(res[0].transcript || '').trim() : '';
+                  if (!text) continue;
+                  if (res.isFinal) {
+                    lastActivityAt = Date.now();
+                    pushMarqueeWords(text, '');
+                  } else {
+                    interim += (interim ? ' ' : '') + text;
+                  }
+                }
+                if (interim) {
+                  lastActivityAt = Date.now();
+                  renderReadout('Hearing: "' + interim + '"', false);
+                }
+              };
+              rec.onerror = function () {
+                // Non-fatal: Gemini Live stream remains primary
+              };
+              rec.onend = function () {
+                if (unmounted || myEpoch !== sessionEpoch || !state.streaming || hasGeminiTx || state.speechRec !== rec) {
+                  return;
+                }
+                try {
+                  rec.start();
+                } catch (_e) {
+                  // ignore restart race
+                }
+              };
+              state.speechRec = rec;
+              rec.start();
+            } catch (_e) {
+              // ignore if unavailable
+            }
+          }
+
           state.liveSession = NS.Client.createLiveSession(apiKey, {
             onReady: function (modelName) {
               if (unmounted || myEpoch !== sessionEpoch) return;
               state.connecting = false;
               state.streaming = true;
+              activeModel = modelName.replace('models/', '');
               micBtn.classList.remove('is-processing');
               micBtn.classList.add('is-recording');
               micBtn.setAttribute('aria-pressed', 'true');
               micLabel.textContent = 'Live · Click to Stop';
               NS.Client.SoundFX.playStreamToggle(true);
-              renderReadout('Live streaming (' + modelName.replace('models/', '') + ') — speak naturally.', false);
+              renderReadout('Live (' + activeModel + ') — speak naturally.', false);
               startWaveLoop();
+              startLocalSpeechMirror();
+            },
+            onServerEvent: function () {
+              if (unmounted || myEpoch !== sessionEpoch) return;
+              rxCount += 1;
             },
             onTranscript: function (chunk, isInterim) {
               if (unmounted || myEpoch !== sessionEpoch) return;
+              hasGeminiTx = true;
+              lastActivityAt = Date.now();
               if (isInterim) {
                 renderReadout('Hearing: "' + chunk.trim() + '"', false);
               } else {
@@ -559,6 +632,10 @@
             },
             onResize: function (res) {
               if (unmounted || myEpoch !== sessionEpoch) return;
+              lastActivityAt = Date.now();
+              if (res && res.transcript && !hasGeminiTx && !state.speechRec) {
+                pushMarqueeWords(res.transcript, res.emphasized_word);
+              }
               applyProsodyResult(res);
             },
             onError: function (msg) {
@@ -581,6 +658,10 @@
             }
             const input = ev.inputBuffer.getChannelData(0);
             state.liveSession.sendPCM(input, state.audioCtx.sampleRate);
+            txCount += 1;
+            if (txCount % 15 === 0 && Date.now() - lastActivityAt > 3500) {
+              renderReadout('Live (' + activeModel + ') · TX ' + txCount + ' · RX ' + rxCount + ' — listening…', false);
+            }
           };
         })
         .catch(function (err) {
