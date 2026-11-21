@@ -29,7 +29,9 @@
 
   const params = new URLSearchParams(root.location ? root.location.search : '');
   const rawSid = String(params.get('s') || '').trim().toUpperCase();
-  const sessionId = Transport && Transport.isValidSessionId(rawSid) ? rawSid : rawSid || 'DL000000';
+  const sessionId = Transport && typeof Transport.isValidSessionId === 'function'
+    ? (Transport.isValidSessionId(rawSid) ? rawSid : 'DL000000')
+    : (/^[A-Z0-9]{6,16}$/.test(rawSid) ? rawSid : 'DL000000');
   const transportParam = String(params.get('t') || 'mqtt').trim().toLowerCase();
   const clientInstanceId = Transport && typeof Transport.generateSessionId === 'function'
     ? Transport.generateSessionId(6)
@@ -121,7 +123,7 @@
     try {
       const Ctx = root.AudioContext || root.webkitAudioContext;
       if (!Ctx) return;
-      if (!audioCtx) audioCtx = new Ctx();
+      if (!audioCtx || audioCtx.state === 'closed') audioCtx = new Ctx();
       if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(function () {});
       }
@@ -231,7 +233,6 @@
           const tag = info && info.transport === 'local-ws' ? 'LIVE · WS' : 'LIVE · WSS';
           refs.statusText.textContent = tag;
           link.send({ t: 'hello', v: 1, cid: clientInstanceId, kind: 'rotary-dial' });
-          if (tracker) transmitDialState(tracker.getState(), true);
         } else {
           refs.statusText.textContent = 'LINKING';
         }
@@ -464,6 +465,25 @@
     transmitDialState(st, true);
     if (link) link.send({ t: 'act', cmd: 'reset' });
   });
+
+  function cleanupPhonePage() {
+    if (inertiaRaf) {
+      cancelAnimationFrame(inertiaRaf);
+      inertiaRaf = 0;
+    }
+    if (link) {
+      try { link.close(); } catch (_e) {}
+      link = null;
+    }
+    if (audioCtx) {
+      try { audioCtx.close(); } catch (_e) {}
+      audioCtx = null;
+    }
+  }
+
+  if (typeof root.addEventListener === 'function') {
+    root.addEventListener('pagehide', cleanupPhonePage);
+  }
 
   if (tracker) {
     renderPhoneUi(tracker.getState());

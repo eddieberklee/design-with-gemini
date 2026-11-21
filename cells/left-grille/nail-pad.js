@@ -328,11 +328,22 @@
       this.quietHoldQuanta = 0;
       this.cooldownQuanta = 0;
 
+      // Sustained elevated broadband floor tracker (independent of activeBurst reset)
+      this.sustainedHotQuanta = 0;
+      this.sustainedQuietQuanta = 0;
+      this.hotFrameDbEma = -68.0;
+      this.hotLfDbEma = -72.0;
+      this.hotHfDbEma = -74.0;
+
       this.smoothLfLevel = 0;
       this.smoothHfLevel = 0;
       this.smoothCentroidKhz = 0;
       this.lastEvent = null;
       this.lastVetoReason = null;
+    }
+
+    reset() {
+      this.resetState();
     }
 
     setCalibration(cal = {}) {
@@ -567,9 +578,58 @@
         }
       }
 
-      const snrDb = frameDb - this.noiseFloorDb;
-      const lfSnrDb = Math.max(0, lfDb - this.lfFloorDb);
-      const hfSnrDb = Math.max(0, hfDb - this.hfFloorDb);
+      const onsetGateDb = this.thresholdDb;
+      const sustainGateDb = Math.max(4.5, this.thresholdDb - 4.2);
+      const maxScratchQuanta = Math.round(0.65 / this.dtQuantum); // ~650 ms finite scratch cap
+      const reanchorQuanta = Math.round(1.2 / this.dtQuantum); // 1.2 s steady fan/HVAC floor re-anchor
+
+      let snrDb = frameDb - this.noiseFloorDb;
+      let lfSnrDb = Math.max(0, lfDb - this.lfFloorDb);
+      let hfSnrDb = Math.max(0, hfDb - this.hfFloorDb);
+
+      // Track continuous elevated energy independently of activeBurst reset so steady
+      // broadband fan/HVAC step-ups re-anchor cleanly instead of looping false scratches.
+      if (this.floorInit) {
+        if (snrDb >= sustainGateDb) {
+          this.sustainedHotQuanta++;
+          this.sustainedQuietQuanta = 0;
+          if (this.sustainedHotQuanta === 1) {
+            this.hotFrameDbEma = frameDb;
+            this.hotLfDbEma = lfDb;
+            this.hotHfDbEma = hfDb;
+          } else {
+            this.hotFrameDbEma = lerp(this.hotFrameDbEma, frameDb, 0.08);
+            this.hotLfDbEma = lerp(this.hotLfDbEma, lfDb, 0.08);
+            this.hotHfDbEma = lerp(this.hotHfDbEma, hfDb, 0.08);
+          }
+
+          if (this.sustainedHotQuanta >= reanchorQuanta) {
+            this.noiseFloorDb = this.hotFrameDbEma;
+            this.lfFloorDb = this.hotLfDbEma;
+            this.hfFloorDb = this.hotHfDbEma;
+            this.activeBurst = null;
+            this.quietHoldQuanta = 0;
+            this.sustainedHotQuanta = 0;
+            this.sustainedQuietQuanta = 0;
+            this.cooldownQuanta = Math.max(
+              this.cooldownQuanta,
+              Math.round(0.06 / this.dtQuantum)
+            );
+            this.lastVetoReason = 'sustained';
+            snrDb = frameDb - this.noiseFloorDb;
+            lfSnrDb = Math.max(0, lfDb - this.lfFloorDb);
+            hfSnrDb = Math.max(0, hfDb - this.hfFloorDb);
+          }
+        } else {
+          this.sustainedQuietQuanta++;
+          if (this.sustainedQuietQuanta >= 4) {
+            this.sustainedHotQuanta = 0;
+            if (this.lastVetoReason === 'sustained') {
+              this.lastVetoReason = null;
+            }
+          }
+        }
+      }
 
       const frameSummary = {
         qIndex: this.quantaProcessed,
@@ -603,13 +663,16 @@
       }
 
       let committedEvent = null;
-      const onsetGateDb = this.thresholdDb;
-      const sustainGateDb = Math.max(4.5, this.thresholdDb - 4.2);
 
       // 4. Burst Segmentation State Machine
       if (!this.activeBurst) {
-        if (this.cooldownQuanta === 0 && snrDb >= onsetGateDb && this.quantaProcessed >= 4) {
-          // Include 1 lookback quantum if it already started rising (> sustainGateDb * 0.7)
+        if (
+          this.cooldownQuanta === 0 &&
+          this.sustainedHotQuanta < maxScratchQuanta &&
+          snrDb >= onsetGateDb &&
+          this.quantaProcessed >= 4
+        ) {
+          // Include 1 lookback quantum if it already started rising (> sustainGateDb * 0.65)
           const frames = [];
           if (this.preRing.length >= 2) {
             const prev = this.preRing[this.preRing.length - 2];
@@ -652,19 +715,20 @@
         }
 
         const totalQuanta = b.frames.length;
-        const maxScratchQuanta = Math.round(0.68 / this.dtQuantum); // ~680 ms commit cap
-        const stuckStepQuanta = Math.round(2.2 / this.dtQuantum); // 2.2 s HVAC safety reset
 
-        if (totalQuanta >= stuckStepQuanta) {
-          // Continuous background step-up recovery
-          this.noiseFloorDb = frameDb - 2.0;
-          this.activeBurst = null;
-          this.quietHoldQuanta = 0;
-        } else if (this.quietHoldQuanta >= 4 || totalQuanta >= maxScratchQuanta) {
+        if (this.quietHoldQuanta >= 4) {
           committedEvent = this._classifyAndCommitBurst(b);
           this.activeBurst = null;
           this.quietHoldQuanta = 0;
           this.cooldownQuanta = 3;
+        } else if (totalQuanta >= maxScratchQuanta) {
+          // Continuous elevated energy >= 0.65 s with no baseline drop (e.g. HVAC / fan step-up):
+          // abort without emitting a false 'nail-scratch' and wait for quiet return or 1.2 s re-anchor.
+          this.activeBurst = null;
+          this.quietHoldQuanta = 0;
+          this.sustainedHotQuanta = Math.max(this.sustainedHotQuanta, maxScratchQuanta);
+          this.cooldownQuanta = 3;
+          this.lastVetoReason = 'sustained';
         }
       }
 
@@ -1288,8 +1352,10 @@
     const getBus = () => passedBus || (global.LeftGrilleLab && global.LeftGrilleLab.bus) || null;
 
     let simTimer = null;
+    let announceTimer = null;
     let simSeedCounter = 1;
     let trimOpen = false;
+    let busState = { state: 'idle', sampleRate: 48000 };
     const recentHistory = [];
 
     const classifier = new NailPadClassifier({
@@ -1307,7 +1373,9 @@
 
     function announce(msg) {
       srLive.textContent = '';
-      setTimeout(() => {
+      if (announceTimer !== null) clearTimeout(announceTimer);
+      announceTimer = setTimeout(() => {
+        announceTimer = null;
         srLive.textContent = msg;
       }, 18);
     }
@@ -1327,7 +1395,18 @@
         title: 'Arm shared 48 kHz microphone bus (< 16 kHz passband)',
         onClick: () => {
           const b = getBus();
-          if (b && typeof b.requestArm === 'function') {
+          if (!b) {
+            runSyntheticWaveform('nail-tap');
+            return;
+          }
+          const isActive =
+            busState.state === 'listening' ||
+            busState.state === 'requesting' ||
+            b.state === 'listening' ||
+            b.state === 'requesting';
+          if (isActive && typeof b.stopAll === 'function') {
+            b.stopAll({ dispatchClose: false });
+          } else if (typeof b.requestArm === 'function') {
             b.requestArm();
           } else {
             runSyntheticWaveform('nail-tap');
@@ -1382,7 +1461,7 @@
         className: 'np-mini-btn np-btn--trim',
         'aria-expanded': 'false',
         title: 'Adjust SNR threshold & HF/LF bias trim (dwg.nailPadCal.v1)',
-        onClick: () => toggleTrimPopover()
+        onClick: () => toggleTrimPopover(undefined, true)
       },
       ['Trim']
     );
@@ -1576,7 +1655,7 @@
             {
               type: 'button',
               className: 'np-mini-btn',
-              onClick: () => toggleTrimPopover(false)
+              onClick: () => toggleTrimPopover(false, true)
             },
             ['Done']
           )
@@ -1594,10 +1673,20 @@
       ])
     ]);
 
-    function toggleTrimPopover(forceState) {
+    function toggleTrimPopover(forceState, restoreFocus = false) {
+      const wasOpen = trimOpen;
       trimOpen = typeof forceState === 'boolean' ? forceState : !trimOpen;
       trimOverlay.hidden = !trimOpen;
       trimBtn.setAttribute('aria-expanded', trimOpen ? 'true' : 'false');
+      if (trimOpen && !wasOpen) {
+        if (typeof threshInput.focus === 'function') {
+          threshInput.focus();
+        }
+      } else if (!trimOpen && wasOpen && restoreFocus) {
+        if (typeof trimBtn.focus === 'function') {
+          trimBtn.focus();
+        }
+      }
     }
 
     const stage = h('div', { className: 'np-stage' }, [
@@ -1786,6 +1875,10 @@
       if (typeof b.onStateChange === 'function' && !unsubState) {
         unsubState = b.onStateChange((st) => {
           if (!st) return;
+          busState = st;
+          if (st.state === 'idle') {
+            classifier.reset();
+          }
           const isArmed = st.state === 'listening' || st.state === 'requesting';
           armBtn.dataset.armed = isArmed ? 'true' : 'false';
           armBtn.setAttribute('aria-pressed', isArmed ? 'true' : 'false');
@@ -1806,14 +1899,28 @@
 
     attachBus(getBus());
 
+    function onDocKeyDown(e) {
+      if (trimOpen && e && e.key === 'Escape') {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+        toggleTrimPopover(false, true);
+      }
+    }
+
+    function onSecondaryClose() {
+      if (simTimer !== null) {
+        clearInterval(simTimer);
+        simTimer = null;
+      }
+      toggleTrimPopover(false, false);
+      classifier.reset();
+    }
+
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-      window.addEventListener('lg-secondary-close', () => {
-        if (simTimer !== null) {
-          clearInterval(simTimer);
-          simTimer = null;
-        }
-        toggleTrimPopover(false);
-      });
+      window.addEventListener('lg-secondary-close', onSecondaryClose);
+    }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('keydown', onDocKeyDown, true);
     }
 
     return {
@@ -1825,8 +1932,18 @@
           clearInterval(simTimer);
           simTimer = null;
         }
+        if (announceTimer !== null) {
+          clearTimeout(announceTimer);
+          announceTimer = null;
+        }
         if (typeof unsubAudio === 'function') unsubAudio();
         if (typeof unsubState === 'function') unsubState();
+        if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('lg-secondary-close', onSecondaryClose);
+        }
+        if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', onDocKeyDown, true);
+        }
       }
     };
   }

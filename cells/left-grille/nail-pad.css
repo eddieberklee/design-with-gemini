@@ -735,10 +735,10 @@
   .np-stage {
     grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
   }
+  .np-status,
   .np-footer,
   .np-hero-meta,
-  .np-pill--int,
-  .np-btn--trim {
+  .np-pill--int {
     display: none;
   }
   .np-zone {
@@ -747,7 +747,6 @@
 }
 
 @container (max-width: 225px) {
-  .np-status,
   .np-tactile-well,
   .np-split-tag {
     display: none;
@@ -757,5 +756,22 @@
   }
   .np-badge {
     font-size: clamp(9.5px, 5cqw, 13px);
+  }
+  .np-trim-row {
+    grid-template-columns: 48px minmax(0, 1fr) 38px;
+    gap: 4px;
+    font-size: 8.5px;
+  }
+}
+
+@container (max-width: 185px) {
+  .np-stage {
+    padding: 4px;
+  }
+  .np-mini-btn {
+    padding: 0 3px;
+  }
+  .np-btn--trim {
+    display: none;
   }
 }

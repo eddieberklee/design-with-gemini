@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const http = require('node:http');
+const net = require('node:net');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 
@@ -11,8 +12,10 @@ const {
   F_START_HZ,
   F_END_HZ,
   STORAGE_KEY,
+  computePeriodForSampleRate,
   fftRadix2,
   buildLidPingWaveform,
+  buildChirpPiggybackWaveform,
   generateLidPingBlock,
   computeReflectionIndex,
   LidCalibration,
@@ -20,6 +23,8 @@ const {
   LidSonarEstimator,
   synthesizeScreenBounceFrame
 } = require('./lid-angle.js');
+
+const { StereoChirpGenerator } = require('./chirp-sonar.js');
 
 function createMockStorage() {
   const map = new Map();
@@ -57,14 +62,14 @@ function measureSettledAngle(angleDeg, opts = {}) {
       noiseStd: opts.noiseStd !== undefined ? opts.noiseStd : 0.00035,
       seed: 1000 + i * 37
     });
-    // Push in realistic 512-sample shared-bus chunks
-    const halfA = frame.subarray(0, 512);
-    const halfB = frame.subarray(512, 1024);
-    const r1 = est.pushSamples(halfA, sr, txMode);
-    assert.equal(r1.length, 0);
-    const r2 = est.pushSamples(halfB, sr, txMode);
-    assert.equal(r2.length, 1);
-    last = r2[0];
+    // Push in realistic 512-sample shared-bus chunks (2 chunks @ 44.1/48 kHz, 4 chunks @ 96 kHz)
+    let emitted = [];
+    for (let off = 0; off < frame.length; off += 512) {
+      const r = est.pushSamples(frame.subarray(off, off + 512), sr, txMode);
+      emitted = emitted.concat(r);
+    }
+    assert.equal(emitted.length, 1);
+    last = emitted[0];
   }
   return last;
 }
@@ -194,17 +199,119 @@ test('Direct-path CLEAN cancels pure direct path and stays invariant to speaker 
   assert.equal(silentRes.signalPresent, false);
 });
 
-test('Passively piggybacking on Cell 04 chirp TX mode preserves monotonic 35° < 75° < 120°', () => {
-  const c35 = measureSettledAngle(35, { txMode: 'chirp' });
-  const c75 = measureSettledAngle(75, { txMode: 'chirp' });
-  const c120 = measureSettledAngle(120, { txMode: 'chirp' });
+test('Passively piggybacking on REAL Cell 04 StereoChirpGenerator preserves monotonic 35° < 75° < 120° at 48 kHz and 96 kHz', () => {
+  function applyPeriodicFracDelay(sig, delaySamp) {
+    const N = sig.length;
+    const re = new Float64Array(N);
+    const im = new Float64Array(N);
+    for (let i = 0; i < N; i++) re[i] = sig[i];
+    fftRadix2(re, im, false);
+    const oRe = new Float64Array(N);
+    const oIm = new Float64Array(N);
+    for (let b = 0; b <= N >> 1; b++) {
+      const ang = (-2 * Math.PI * b * delaySamp) / N;
+      const c = Math.cos(ang);
+      const s = Math.sin(ang);
+      const nr = re[b] * c - im[b] * s;
+      const ni = re[b] * s + im[b] * c;
+      oRe[b] = nr;
+      oIm[b] = ni;
+      if (b > 0 && b < N >> 1) {
+        oRe[N - b] = nr;
+        oIm[N - b] = -ni;
+      }
+    }
+    fftRadix2(oRe, oIm, true);
+    return oRe;
+  }
 
-  assert.equal(c35.signalPresent, true);
-  assert.equal(c75.signalPresent, true);
-  assert.equal(c120.signalPresent, true);
-  assert.equal(c75.txMode, 'chirp');
-  assert.ok(c35.angleDeg < c75.angleDeg - 15, `chirp 35° (${c35.angleDeg}) vs 75° (${c75.angleDeg})`);
-  assert.ok(c75.angleDeg < c120.angleDeg - 15, `chirp 75° (${c75.angleDeg}) vs 120° (${c120.angleDeg})`);
+  for (const sr of [44100, 48000, 96000]) {
+    const gen = new StereoChirpGenerator({ gain: 0.04 });
+    const tables = gen.getTables(sr);
+    const pig = buildChirpPiggybackWaveform(sr);
+    assert.equal(pig.length, tables.period, `period mismatch at ${sr} Hz`);
+    for (let i = 0; i < tables.period; i++) {
+      assert.ok(
+        Math.abs(pig[i] - tables.refL[i]) < 1e-6,
+        `waveform mismatch at ${sr} Hz sample ${i}: ${pig[i]} vs ${tables.refL[i]}`
+      );
+    }
+
+    // Generate actual stereo TX via StereoChirpGenerator.fillBuffers (128-sample AudioWorklet chunks)
+    const txL = new Float32Array(tables.period);
+    const txR = new Float32Array(tables.period);
+    for (let off = 0; off < tables.period; off += 128) {
+      gen.fillBuffers(txL.subarray(off, off + 128), txR.subarray(off, off + 128), sr, off);
+    }
+
+    const results = {};
+    for (const angleDeg of [35, 75, 120]) {
+      const est = new LidSonarEstimator({ sampleRate: sr, txMode: 'chirp' });
+      assert.equal(est.period, tables.period);
+      const u = (angleDeg - 25) / (135 - 25);
+      const echoRel = Math.pow(10, (-4.2 - 22.8 * u) / 20);
+      const echoLagMs = 0.40 + 1.42 * u;
+      const directDelay = 137.4 * (sr / 48000);
+      // Include BOTH Left chirp direct+lid-bounce AND Right chirp cross-keyboard arrival (+0.73 ms)
+      const dL = applyPeriodicFracDelay(txL, directDelay);
+      const eL = applyPeriodicFracDelay(txL, directDelay + (echoLagMs * sr) / 1000);
+      const dR = applyPeriodicFracDelay(txR, directDelay + (0.73 * sr) / 1000);
+      const eR = applyPeriodicFracDelay(txR, directDelay + ((0.73 + echoLagMs) * sr) / 1000);
+
+      let seed = (2026 + sr + angleDeg * 17) >>> 0;
+      const nextNoise = () => {
+        seed = (seed + 0x6d2b79f5) >>> 0;
+        let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+        t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+        return (((t ^ (t >>> 14)) >>> 0) / 4294967296 - 0.5) * 0.0005;
+      };
+
+      let last = null;
+      for (let f = 0; f < 12; f++) {
+        const frame = new Float32Array(tables.period);
+        for (let i = 0; i < tables.period; i++) {
+          frame[i] =
+            0.42 * (dL[i] + echoRel * eL[i]) +
+            0.35 * (dR[i] + echoRel * eR[i]) +
+            nextNoise();
+        }
+        for (let off = 0; off < frame.length; off += 512) {
+          const out = est.pushSamples(frame.subarray(off, off + 512), sr, 'chirp');
+          if (out.length) last = out[out.length - 1];
+        }
+      }
+      assert.ok(last, `expected frame output at ${sr} Hz / ${angleDeg}°`);
+      assert.equal(last.signalPresent, true, `signalPresent false at ${sr} Hz / ${angleDeg}°`);
+      assert.equal(last.txMode, 'chirp');
+      results[angleDeg] = last;
+    }
+
+    assert.ok(
+      results[35].angleDeg < results[75].angleDeg - 15,
+      `real chirp ${sr} Hz: 35° (${results[35].angleDeg.toFixed(1)}°) vs 75° (${results[75].angleDeg.toFixed(1)}°)`
+    );
+    assert.ok(
+      results[75].angleDeg < results[120].angleDeg - 15,
+      `real chirp ${sr} Hz: 75° (${results[75].angleDeg.toFixed(1)}°) vs 120° (${results[120].angleDeg.toFixed(1)}°)`
+    );
+  }
+});
+
+test('Infinity / NaN inputs are sanitized in LidSonarEstimator without leaking NaN directSnrDb', () => {
+  const est = new LidSonarEstimator({ sampleRate: 48000 });
+  const badFrame = new Float32Array(CHIRP_PERIOD);
+  badFrame[5] = Number.POSITIVE_INFINITY;
+  badFrame[17] = Number.NEGATIVE_INFINITY;
+  badFrame[42] = Number.NaN;
+  const res = est.processFrame(badFrame, 48000, 'lid-ping');
+  assert.equal(Number.isFinite(res.directSnrDb), true, `directSnrDb must stay finite, got ${res.directSnrDb}`);
+  assert.equal(Number.isFinite(res.angleDeg), true, `angleDeg must stay finite, got ${res.angleDeg}`);
+  assert.equal(res.signalPresent, false);
+
+  // Pushing non-finite samples via pushSamples also stays finite
+  const r2 = est.pushSamples(badFrame, 48000, 'lid-ping');
+  assert.equal(r2.length, 1);
+  assert.equal(Number.isFinite(r2[0].directSnrDb), true);
 });
 
 test('Multi-rate compatibility (44.1 kHz, 96 kHz, and safe 16 kHz reject)', () => {
@@ -301,9 +408,11 @@ test('lid-bridge.mjs passes node --check and serves CORS JSON /angle + SSE /even
 
   // Spin up ephemeral bridge server (hardware disabled for deterministic CI test)
   const bridge = mod.createBridgeServer({ host: '127.0.0.1', port: 0, disableHardware: true });
-  await bridge.start();
+  const started = await bridge.start();
   const addr = bridge.server.address();
-  const baseUrl = `http://127.0.0.1:${addr.port}`;
+  assert.ok(started.port > 0, `start() must resolve actual bound port, got ${started.port}`);
+  assert.equal(started.port, addr.port);
+  const baseUrl = `http://127.0.0.1:${started.port}`;
 
   try {
     const angleRes = await fetch(`${baseUrl}/angle`);
@@ -316,6 +425,26 @@ test('lid-bridge.mjs passes node --check and serves CORS JSON /angle + SSE /even
     const optRes = await fetch(`${baseUrl}/angle`, { method: 'OPTIONS' });
     assert.equal(optRes.status, 204);
     assert.equal(optRes.headers.get('access-control-allow-origin'), '*');
+
+    // Malformed request target must return 400 JSON without crashing the server
+    const badStatus = await new Promise((resolve, reject) => {
+      const sock = net.connect(started.port, '127.0.0.1', () => {
+        sock.write('GET //[::1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      });
+      let buf = '';
+      sock.setEncoding('utf8');
+      sock.on('data', (c) => {
+        buf += c;
+      });
+      sock.on('end', () => resolve(buf));
+      sock.on('error', reject);
+    });
+    assert.match(badStatus, /^HTTP\/1\.1 400 /);
+    assert.match(badStatus, /Malformed request URL/);
+
+    // Verify server stays healthy after malformed request
+    const healthRes = await fetch(`${baseUrl}/health`);
+    assert.equal(healthRes.status, 200);
 
     // Verify SSE /events emits initial `event: angle` frame with CORS header
     const sseChunk = await new Promise((resolve, reject) => {
@@ -535,6 +664,16 @@ test('mountLidAngleCell wires shared bus, updates SVG lid, probes HID SSE, and c
     assert.ok(Number(angleEl.textContent) >= 35 && Number(angleEl.textContent) <= 75);
     assert.match(lidGroup.getAttribute('transform'), /^rotate\(-\d+\.\d+ 86 112\)$/);
 
+    // Verify ARIA live region attributes on calNote
+    const calNote = findByClass(cellEl, 'la-cal-note')[0];
+    assert.equal(calNote.getAttribute('role'), 'status');
+    assert.equal(calNote.getAttribute('aria-live'), 'polite');
+
+    // Verify < 40 kHz warning is preserved (not overwritten by refreshDefaultNote)
+    stateCb({ state: 'listening', sampleRate: 16000, txMode: 'lid-ping' });
+    assert.equal(calNote.textContent, 'Needs >= 40 kHz mic (disable BT HFP)');
+    stateCb({ state: 'listening', sampleRate: 48000, txMode: 'lid-ping' });
+
     // Probe live HID bridge -> switches to HW HID · LIVE with exact 0.1° readout
     const okHid = await handle.probeHidBridge({ userInitiated: true });
     assert.equal(okHid, true);
@@ -557,5 +696,177 @@ test('mountLidAngleCell wires shared bus, updates SVG lid, probes HID SSE, and c
     global.window = prevWin;
     global.EventSource = prevES;
     global.fetch = prevFetch;
+  }
+});
+
+test('mountLidAngleCell skips eager hidden mount probe, wakes on lg-secondary-open, and prevents EventSource leak on mid-probe close', async () => {
+  const { mountLidAngleCell } = require('./lid-angle.js');
+
+  function makeNode(tag, ns, isHiddenAncestor) {
+    const attrs = new Map();
+    const listeners = new Map();
+    const classes = new Set();
+    return {
+      tagName: tag.toUpperCase(),
+      namespaceURI: ns || null,
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      textContent: '',
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      set className(v) {
+        classes.clear();
+        String(v || '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .forEach((c) => classes.add(c));
+      },
+      classList: {
+        add(...cs) {
+          cs.forEach((c) => classes.add(c));
+        },
+        contains(c) {
+          return classes.has(c);
+        }
+      },
+      closest(sel) {
+        return sel === '[hidden]' && isHiddenAncestor ? { hidden: true } : null;
+      },
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        const i = this.children.indexOf(c);
+        if (i >= 0) this.children.splice(i, 1);
+        return c;
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+        if (k === 'class') this.className = v;
+      },
+      getAttribute(k) {
+        return attrs.has(k) ? attrs.get(k) : null;
+      },
+      addEventListener(t, fn) {
+        if (!listeners.has(t)) listeners.set(t, new Set());
+        listeners.get(t).add(fn);
+      },
+      removeEventListener(t, fn) {
+        if (listeners.has(t)) listeners.get(t).delete(fn);
+      },
+      dispatchEvent(ev) {
+        const set = listeners.get(ev.type);
+        if (set) set.forEach((fn) => fn(ev));
+      },
+      focus() {},
+      getBoundingClientRect() {
+        return { left: 0, top: 0, width: 212, height: 134 };
+      }
+    };
+  }
+
+  const winListeners = new Map();
+  const prevDoc = global.document;
+  const prevWin = global.window;
+  const prevES = global.EventSource;
+  const prevFetch = global.fetch;
+  const prevLab = global.LeftGrilleLab;
+
+  let fetchCalls = 0;
+  let esCreated = 0;
+  let esClosed = 0;
+  let resolveJson = null;
+
+  class TrackedES {
+    constructor(url) {
+      this.url = url;
+      this.closed = false;
+      esCreated++;
+    }
+    addEventListener() {}
+    close() {
+      if (!this.closed) {
+        this.closed = true;
+        esClosed++;
+      }
+    }
+  }
+
+  global.document = {
+    createElement: (tag) => makeNode(tag, null, false),
+    createElementNS: (ns, tag) => makeNode(tag, ns, false),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) })
+  };
+  global.window = {
+    addEventListener(type, fn) {
+      if (!winListeners.has(type)) winListeners.set(type, new Set());
+      winListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      if (winListeners.has(type)) winListeners.get(type).delete(fn);
+    },
+    dispatchEvent(ev) {
+      const set = winListeners.get(ev.type);
+      if (set) set.forEach((fn) => fn(ev));
+    }
+  };
+  global.EventSource = TrackedES;
+  global.LeftGrilleLab = { isSecondaryOpen: () => false };
+  global.fetch = async () => {
+    fetchCalls++;
+    return {
+      ok: true,
+      json: () =>
+        new Promise((resolve) => {
+          resolveJson = resolve;
+        })
+    };
+  };
+
+  try {
+    const hiddenCell = makeNode('section', null, true);
+    const handle = mountLidAngleCell(hiddenCell, null, { storage: createMockStorage() });
+
+    // 1. No eager fetch when mounted hidden on main grid
+    assert.equal(fetchCalls, 0, 'must not eagerly probe HID bridge while hidden on main grid');
+
+    // 2. Opening Cell 05 via lg-secondary-open triggers probe
+    global.window.dispatchEvent({ type: 'lg-secondary-open' });
+    await Promise.resolve();
+    assert.equal(fetchCalls, 1, 'lg-secondary-open must wake up and probe HID bridge');
+    assert.equal(typeof resolveJson, 'function');
+
+    // 3. Closing Cell 05 mid-res.json() increments hidEpoch -> resolving JSON MUST NOT leak EventSource
+    global.window.dispatchEvent({ type: 'lg-secondary-close' });
+    resolveJson({ available: true, angleDeg: 101.2, source: 'iohid' });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(esCreated, 0, 'mid-probe lg-secondary-close must prevent EventSource creation');
+    assert.equal(esClosed, 0);
+
+    // 4. Re-opening via lg-secondary-open probes cleanly and connects when not closed mid-flight
+    resolveJson = null;
+    global.window.dispatchEvent({ type: 'lg-secondary-open' });
+    await Promise.resolve();
+    assert.equal(fetchCalls, 2);
+    resolveJson({ available: true, angleDeg: 99.8, source: 'iohid' });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(esCreated, 1, 'open probe should connect EventSource');
+    assert.equal(esClosed, 0);
+
+    handle.destroy();
+    assert.equal(esClosed, 1);
+  } finally {
+    global.document = prevDoc;
+    global.window = prevWin;
+    global.EventSource = prevES;
+    global.fetch = prevFetch;
+    global.LeftGrilleLab = prevLab;
   }
 });

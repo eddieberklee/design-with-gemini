@@ -342,3 +342,218 @@ test('9. Secondary Slot 3 registration & DOM mount integration with shared bus a
     delete globalThis.document;
   }
 });
+
+test('10. Sustained +20 dB broadband fan/HVAC step-up (3.5 s) emits 0 false nail-scratch events and recovers noiseFloorDb', () => {
+  const sr = 48000;
+  const clf = new NailPadClassifier({ sampleRate: sr });
+
+  // Deterministic PRNG for steady broadband ambient + fan step-up
+  let seed = 0x51a7c0de;
+  function nextNorm() {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    const u1 = Math.max(1e-9, ((t ^ (t >>> 14)) >>> 0) / 4294967296);
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    const u2 = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  }
+
+  // 1. Quiet baseline room noise (0.30 s at amp = 0.0004)
+  const quiet = new Float32Array(Math.floor(0.3 * sr));
+  for (let i = 0; i < quiet.length; i++) quiet[i] = nextNorm() * 0.0004;
+  for (let off = 0; off < quiet.length; off += 512) {
+    clf.processSamples(quiet.subarray(off, Math.min(quiet.length, off + 512)), sr);
+  }
+  const baselineFloorDb = clf.noiseFloorDb;
+
+  // 2. Sudden steady +20 dB broadband fan/HVAC step-up for 3.5 s (amp = 0.004 = +20 dB)
+  const fan = new Float32Array(Math.floor(3.5 * sr));
+  for (let i = 0; i < fan.length; i++) fan[i] = nextNorm() * 0.004;
+  const fanEvents = [];
+  for (let off = 0; off < fan.length; off += 512) {
+    const evs = clf.processSamples(fan.subarray(off, Math.min(fan.length, off + 512)), sr);
+    fanEvents.push(...evs);
+  }
+
+  assert.equal(
+    fanEvents.length,
+    0,
+    `Expected 0 false gesture events during 3.5 s +20 dB steady fan, got ${JSON.stringify(fanEvents)}`
+  );
+  assert.ok(
+    clf.noiseFloorDb >= baselineFloorDb + 14.0,
+    `Expected noiseFloorDb to recover by >= +14 dB (baseline=${baselineFloorDb.toFixed(1)}, now=${clf.noiseFloorDb.toFixed(1)})`
+  );
+
+  // 3. Genuine long finite nail scratch (560 ms) still detects cleanly on a fresh quiet stream
+  const scratchClf = new NailPadClassifier({ sampleRate: sr });
+  const longScratch = synthesizeNailScratch({ sampleRate: sr, durationMs: 560, seed: 808 });
+  const scratchEvents = scratchClf.processSamples(longScratch, sr);
+  assert.equal(scratchEvents.length, 1, 'Genuine 560 ms finite nail scratch must still be detected');
+  assert.equal(scratchEvents[0].gesture, 'nail-scratch');
+});
+
+test('11. UI lifecycle: [Trim] Escape + focus handoff, [LIVE] disarm toggle, idle classifier reset & listener cleanup', () => {
+  let focusedEl = null;
+
+  class MockNode {
+    constructor(tag) {
+      this.tagName = tag.toUpperCase();
+      this.className = '';
+      this.textContent = '';
+      this.hidden = false;
+      this.style = {};
+      this.dataset = {};
+      this.attrs = {};
+      this.children = [];
+      this.listeners = {};
+      this.classList = {
+        add: (c) => {
+          this.className = `${this.className} ${c}`.trim();
+        }
+      };
+    }
+    get firstChild() {
+      return this.children[0] || null;
+    }
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    }
+    removeChild(child) {
+      const idx = this.children.indexOf(child);
+      if (idx >= 0) this.children.splice(idx, 1);
+    }
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+    }
+    getAttribute(k) {
+      return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null;
+    }
+    addEventListener(type, fn) {
+      this.listeners[type] = fn;
+    }
+    focus() {
+      focusedEl = this;
+    }
+  }
+
+  function findAll(node, pred, acc = []) {
+    if (pred(node)) acc.push(node);
+    for (const c of node.children || []) findAll(c, pred, acc);
+    return acc;
+  }
+
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const docKeyListeners = [];
+  const winCloseListeners = [];
+
+  globalThis.document = {
+    head: new MockNode('head'),
+    querySelector: () => true,
+    createElement: (tag) => new MockNode(tag),
+    createElementNS: (_ns, tag) => new MockNode(tag),
+    createTextNode: (txt) => ({ nodeType: 3, textContent: String(txt), children: [] }),
+    addEventListener(type, fn, capture) {
+      if (type === 'keydown') docKeyListeners.push({ fn, capture: Boolean(capture) });
+    },
+    removeEventListener(type, fn, capture) {
+      if (type === 'keydown') {
+        const idx = docKeyListeners.findIndex((l) => l.fn === fn && l.capture === Boolean(capture));
+        if (idx >= 0) docKeyListeners.splice(idx, 1);
+      }
+    }
+  };
+  globalThis.window = {
+    addEventListener(type, fn) {
+      if (type === 'lg-secondary-close') winCloseListeners.push(fn);
+    },
+    removeEventListener(type, fn) {
+      if (type === 'lg-secondary-close') {
+        const idx = winCloseListeners.indexOf(fn);
+        if (idx >= 0) winCloseListeners.splice(idx, 1);
+      }
+    }
+  };
+
+  try {
+    let stateSub = null;
+    const stopCalls = [];
+    const mockBus = {
+      state: 'idle',
+      subscribeAudio() {
+        return () => {};
+      },
+      onStateChange(fn) {
+        stateSub = fn;
+        fn({ state: 'idle', sampleRate: 48000 });
+        return () => {
+          stateSub = null;
+        };
+      },
+      requestArm() {
+        this.state = 'listening';
+        stateSub({ state: 'listening', sampleRate: 48000 });
+        return Promise.resolve(true);
+      },
+      stopAll(opts) {
+        stopCalls.push(opts);
+        this.state = 'idle';
+        stateSub({ state: 'idle', sampleRate: 48000 });
+      }
+    };
+
+    const cellEl = new MockNode('section');
+    const mounted = mountNailPadCell(cellEl, mockBus);
+
+    const armBtn = findAll(cellEl, (n) => n.className && n.className.includes('np-btn--arm'))[0];
+    const trimBtn = findAll(cellEl, (n) => n.className && n.className.includes('np-btn--trim'))[0];
+    const trimOverlay = findAll(cellEl, (n) => n.className && n.className.includes('np-trim-overlay'))[0];
+    const threshInput = findAll(trimOverlay, (n) => n.tagName === 'INPUT')[0];
+
+    // 1. Open [Trim] -> focuses threshInput; capture-phase Escape closes & restores focus to trimBtn
+    assert.equal(docKeyListeners.length, 1);
+    assert.equal(docKeyListeners[0].capture, true);
+    trimBtn.listeners.click();
+    assert.equal(trimOverlay.hidden, false);
+    assert.equal(focusedEl, threshInput, 'Opening [Trim] must focus threshInput');
+
+    let prevented = false;
+    let stopped = false;
+    docKeyListeners[0].fn({
+      key: 'Escape',
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {
+        stopped = true;
+      }
+    });
+    assert.equal(prevented, true);
+    assert.equal(stopped, true);
+    assert.equal(trimOverlay.hidden, true);
+    assert.equal(focusedEl, trimBtn, 'Escape must restore focus to trimBtn');
+
+    // 2. Arm -> seed activeBurst -> clicking [LIVE] calls stopAll({ dispatchClose: false }) and idle resets classifier
+    armBtn.listeners.click();
+    assert.equal(mockBus.state, 'listening');
+    mounted.classifier.activeBurst = { startQ: 1, frames: [] };
+    armBtn.listeners.click();
+    assert.equal(stopCalls.length, 1);
+    assert.deepEqual(stopCalls[0], { dispatchClose: false });
+    assert.equal(mounted.classifier.activeBurst, null, 'Idle state transition must reset classifier');
+
+    // 3. destroy() removes named lg-secondary-close and capture-phase Escape listeners
+    assert.equal(winCloseListeners.length, 1);
+    mounted.destroy();
+    assert.equal(winCloseListeners.length, 0);
+    assert.equal(docKeyListeners.length, 0);
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+  }
+});

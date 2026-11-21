@@ -419,6 +419,7 @@
     }
 
     resetClutter() {
+      this._frameFill = 0;
       this.framesProcessed = 0;
       this._bgLRe.fill(0);
       this._bgLIm.fill(0);
@@ -433,6 +434,7 @@
       this._dropoutFrames = 0;
       this._cooldownFrames = 0;
       this._stationaryFrames = 0;
+      this._prevRawRangeCm = null;
       this.smoothedRangeCm = null;
       this.rangeCm = null;
       this.handPresent = false;
@@ -1671,6 +1673,7 @@
       }
       simActive = false;
       simKind = null;
+      engine.setAutoAlignDirectPath(true);
       updateStatusPill();
     }
 
@@ -1889,6 +1892,10 @@
 
     function handleSecondaryClose() {
       stopSim();
+      if (rafId && typeof global.cancelAnimationFrame === 'function') {
+        global.cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
     }
     if (typeof global.addEventListener === 'function') {
       global.addEventListener('lg-secondary-close', handleSecondaryClose);

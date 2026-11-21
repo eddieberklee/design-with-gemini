@@ -321,6 +321,30 @@ test('Multi-sample-rate (44.1k, 96k, 16k) classification and NaN/Infinity input 
   const afterNan = feedBlocks(nanEng, followTap, 48000, 512).filter((e) => e.type === 'tap');
   assert.equal(afterNan.length, 1, 'Detector must recover cleanly after NaN/Infinity block');
   assert.equal(afterNan[0].zone, 'trackpad-rim');
+
+  // Extreme finite overflow spike (1e308) must reset BiquadFilter state instead of permanently bricking TapBandFilter
+  const band = new TapZones.TapBandFilter(48000);
+  const spikeOut = band.process(1e308);
+  assert.equal(Number.isFinite(spikeOut), true, '1e308 spike output must stay finite');
+  assert.equal(band.hpf.z1, 0, 'HPF z1 must reset on overflow');
+  assert.equal(band.hpf.z2, 0, 'HPF z2 must reset on overflow');
+  let recoveredNonZero = false;
+  for (let i = 0; i < 16; i++) {
+    const y = band.process(0.1);
+    assert.equal(Number.isFinite(y), true);
+    if (Math.abs(y) > 1e-6) recoveredNonZero = true;
+  }
+  assert.equal(recoveredNonZero, true, 'TapBandFilter must produce non-zero finite output after 1e308 spike');
+
+  const overflowEng = new TapZones.TapZoneEngine({ sampleRate: 48000 });
+  const overflowBlock = new Float64Array(512);
+  overflowBlock[12] = 1e308;
+  overflowBlock[13] = -1e308;
+  overflowEng.processBlock(overflowBlock, 48000, 0);
+  const postOverflowTap = TapZones.synthesizeZoneTap('top-left', { sampleRate: 48000, seed: 91, preSec: 0.08 });
+  const afterOverflow = feedBlocks(overflowEng, postOverflowTap, 48000, 512).filter((e) => e.type === 'tap');
+  assert.equal(afterOverflow.length, 1, 'TapZoneEngine must recover cleanly after 1e308 overflow spike');
+  assert.equal(afterOverflow[0].zone, 'top-left');
 });
 
 test('Browser slot 2 registration contract (immediate & _pending) and zero innerHTML audit', () => {
@@ -516,6 +540,197 @@ test('mountTapZonesCell renders 4:3 stage, SVG chassis map, bus wiring, simulati
     handle.destroy();
     assert.equal(audioUnsubbed, true);
     assert.equal(stateUnsubbed, true);
+    assert.equal((winListeners['lg-secondary-close'] || []).length, 0);
+  } finally {
+    global.document = prevDoc;
+    global.window = prevWin;
+  }
+});
+
+test('mountTapZonesCell [CAL 4Z] capture-phase Escape cancel, focus handoff/restore, and lg-secondary-close timer cleanup', () => {
+  let focusedEl = null;
+
+  function createMockEl(tag) {
+    const attrs = {};
+    const listeners = {};
+    const classes = new Set();
+    const el = {
+      tagName: tag.toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      _text: '',
+      get textContent() {
+        return this._text;
+      },
+      set textContent(v) {
+        this._text = String(v);
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      set className(v) {
+        classes.clear();
+        String(v)
+          .split(/\s+/)
+          .filter(Boolean)
+          .forEach((c) => classes.add(c));
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        contains: (c) => classes.has(c)
+      },
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+        return child;
+      },
+      setAttribute(k, v) {
+        attrs[k] = String(v);
+        if (k === 'class') this.className = v;
+      },
+      getAttribute(k) {
+        return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null;
+      },
+      addEventListener(type, fn) {
+        (listeners[type] = listeners[type] || []).push(fn);
+      },
+      dispatch(type, ev = {}) {
+        (listeners[type] || []).forEach((fn) => fn(Object.assign({ preventDefault() {}, stopPropagation() {} }, ev)));
+      },
+      focus() {
+        focusedEl = el;
+      },
+      getBoundingClientRect() {
+        return { width: 320, height: 240 };
+      }
+    };
+    return el;
+  }
+
+  function findAll(node, pred, acc = []) {
+    if (pred(node)) acc.push(node);
+    for (const c of node.children || []) findAll(c, pred, acc);
+    return acc;
+  }
+
+  const prevDoc = global.document;
+  const prevWin = global.window;
+  const docCaptureListeners = [];
+  const winListeners = {};
+
+  global.document = {
+    createElement: (tag) => createMockEl(tag),
+    createElementNS: (_ns, tag) => createMockEl(tag),
+    createTextNode: (txt) => ({ nodeType: 3, textContent: String(txt), children: [] }),
+    addEventListener(type, fn, capture) {
+      if (type === 'keydown') docCaptureListeners.push({ fn, capture: Boolean(capture) });
+    },
+    removeEventListener(type, fn, capture) {
+      if (type === 'keydown') {
+        const idx = docCaptureListeners.findIndex((l) => l.fn === fn && l.capture === Boolean(capture));
+        if (idx >= 0) docCaptureListeners.splice(idx, 1);
+      }
+    }
+  };
+  global.window = {
+    addEventListener(t, fn) {
+      (winListeners[t] = winListeners[t] || []).push(fn);
+    },
+    removeEventListener(t, fn) {
+      if (!winListeners[t]) return;
+      winListeners[t] = winListeners[t].filter((x) => x !== fn);
+    }
+  };
+
+  try {
+    const cellEl = createMockEl('section');
+    const bus = {
+      subscribeAudio() {
+        return () => {};
+      },
+      onStateChange(fn) {
+        fn({ state: 'idle', sampleRate: 48000, txMode: 'off', error: '' });
+        return () => {};
+      },
+      requestArm() {
+        return Promise.resolve(true);
+      }
+    };
+
+    const handle = TapZones.mountTapZonesCell(cellEl, bus);
+    assert.equal(docCaptureListeners.length, 1);
+    assert.equal(docCaptureListeners[0].capture, true, 'Escape listener must be registered in capture phase');
+
+    const calBtn = findAll(cellEl, (n) => n.classList && n.classList.contains('tz-btn--cal'))[0];
+    const calBar = findAll(cellEl, (n) => n.classList && n.classList.contains('tz-cal-bar'))[0];
+    const calCancelBtn = findAll(calBar, (n) => n.tagName === 'BUTTON')[1];
+    assert.ok(calBtn && calBar && calCancelBtn);
+
+    // Opening [CAL 4Z] shows bar and moves focus to calCancelBtn
+    calBtn.dispatch('click');
+    assert.equal(calBar.hidden, false);
+    assert.equal(calBtn.getAttribute('aria-expanded'), 'true');
+    assert.equal(focusedEl, calCancelBtn, 'Focus must move to calCancelBtn when opening calibration');
+
+    // Pressing Escape intercepts in capture phase, hides bar, and restores focus to calBtn
+    let prevented = false;
+    let stopped = false;
+    docCaptureListeners[0].fn({
+      key: 'Escape',
+      preventDefault() {
+        prevented = true;
+      },
+      stopPropagation() {
+        stopped = true;
+      }
+    });
+    assert.equal(prevented, true);
+    assert.equal(stopped, true);
+    assert.equal(calBar.hidden, true);
+    assert.equal(calBtn.getAttribute('aria-expanded'), 'false');
+    assert.equal(focusedEl, calBtn, 'Escape must restore focus to calBtn');
+
+    // Completing all 4 calibration zones also restores focus to calBtn
+    calBtn.dispatch('click');
+    assert.equal(focusedEl, calCancelBtn);
+    const zoneNodes = findAll(cellEl, (n) => n.getAttribute && n.getAttribute('data-zone'));
+    for (const zNode of zoneNodes) {
+      zNode.dispatch('click');
+    }
+    assert.equal(calBar.hidden, true);
+    assert.equal(focusedEl, calBtn, 'Calibration completion must restore focus to calBtn');
+
+    // Triggering lg-secondary-close clears pending activePulseTimer/vetoFlashTimer cleanly
+    const origClearTimeout = global.clearTimeout;
+    let clearedOnClose = 0;
+    global.clearTimeout = (id) => {
+      clearedOnClose++;
+      return origClearTimeout(id);
+    };
+    try {
+      zoneNodes[0].dispatch('click');
+      const beforeCloseClears = clearedOnClose;
+      (winListeners['lg-secondary-close'] || []).forEach((fn) => fn());
+      assert.ok(
+        clearedOnClose > beforeCloseClears,
+        'lg-secondary-close must clear pending activePulseTimer/vetoFlashTimer'
+      );
+    } finally {
+      global.clearTimeout = origClearTimeout;
+    }
+
+    handle.destroy();
+    assert.equal(docCaptureListeners.length, 0, 'destroy() must remove capture-phase keydown listener');
     assert.equal((winListeners['lg-secondary-close'] || []).length, 0);
   } finally {
     global.document = prevDoc;

@@ -351,3 +351,142 @@ test('LeftGrilleLab Slot 5 registration and DOM mount + Sim Puff/Blow smoke chec
     globalThis.document = prevDoc;
   }
 });
+
+test('Disarm calls stopAll({ dispatchClose: false }), idle resets DSP cooldown across t=120s -> t=0s rearm, and bezel renders 05 kicker', () => {
+  function makeMockEl(tag) {
+    const el = {
+      tagName: String(tag).toUpperCase(),
+      className: '',
+      children: [],
+      attributes: {},
+      dataset: {},
+      style: {},
+      listeners: {},
+      _text: '',
+      classList: {
+        _set: new Set(),
+        add(...cls) {
+          cls.forEach((c) => this._set.add(c));
+          el.className = Array.from(this._set).join(' ');
+        }
+      },
+      setAttribute(k, v) {
+        this.attributes[k] = String(v);
+        if (k === 'class') this.className = String(v);
+      },
+      getAttribute(k) {
+        return this.attributes[k];
+      },
+      addEventListener(type, fn) {
+        (this.listeners[type] = this.listeners[type] || []).push(fn);
+      },
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+      },
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      set textContent(v) {
+        this._text = String(v);
+      },
+      get textContent() {
+        if (this.children.length === 0) return this._text;
+        return this._text + this.children.map((c) => c.textContent || '').join(' ');
+      }
+    };
+    return el;
+  }
+
+  function findAll(node, pred, acc = []) {
+    if (pred(node)) acc.push(node);
+    for (const c of node.children || []) findAll(c, pred, acc);
+    return acc;
+  }
+
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    createElement: (t) => makeMockEl(t),
+    createElementNS: (_ns, t) => makeMockEl(t),
+    createTextNode: (txt) => ({ textContent: String(txt), children: [] })
+  };
+
+  try {
+    const cellEl = makeMockEl('div');
+    let audioCb = null;
+    let stateCb = null;
+    const stopAllCalls = [];
+    const bus = {
+      subscribeAudio(cb) {
+        audioCb = cb;
+        return () => {
+          audioCb = null;
+        };
+      },
+      requestArm() {
+        stateCb({ state: 'listening', sampleRate: 48000, txMode: 'off', micLabel: 'Built-in', error: '' });
+        return Promise.resolve(true);
+      },
+      stopAll(opts) {
+        stopAllCalls.push(opts);
+        stateCb({ state: 'idle', sampleRate: 48000, txMode: 'off', micLabel: 'Built-in', error: '' });
+      },
+      onStateChange(cb) {
+        stateCb = cb;
+        cb({ state: 'listening', sampleRate: 48000, txMode: 'off', micLabel: 'Built-in', error: '' });
+        return () => {
+          stateCb = null;
+        };
+      }
+    };
+
+    const inst = mountBreathPuffCell(cellEl, bus);
+
+    // 1. Slot 05 kicker badge present in .bp-bezel
+    const kicker = findAll(cellEl, (n) => n.className && n.className.includes('bp-kicker'))[0];
+    assert.ok(kicker, 'Expected .bp-kicker badge in .bp-bezel');
+    assert.equal(kicker.textContent, '05');
+
+    const armBtn = findAll(cellEl, (n) => n.className && n.className.includes('bp-btn--arm'))[0];
+    const heroBadge = findAll(cellEl, (n) => n.className && n.className.includes('bp-hero-badge'))[0];
+    const srLive = findAll(cellEl, (n) => n.className && n.className.includes('bp-sr-only'))[0];
+
+    // 2. Detect sustained blow at t = 120 s (sets dsp.cooldownUntilSec > 120 s)
+    const blowWave = synthesizeBreathWaveform('blow', { sampleRate: 48000, seed: 9103 });
+    for (let i = 0; i < blowWave.length; i += 512) {
+      audioCb({
+        samples: blowWave.subarray(i, Math.min(blowWave.length, i + 512)),
+        sampleRate: 48000,
+        timeSec: 120 + i / 48000
+      });
+    }
+    assert.equal(heroBadge.textContent, 'SUSTAINED BLOW');
+
+    // 3. Disarming via LIVE button must pass { dispatchClose: false } and reset DSP on idle
+    armBtn.listeners.click[0]();
+    assert.equal(stopAllCalls.length, 1);
+    assert.deepEqual(stopAllCalls[0], { dispatchClose: false });
+
+    // 4. Re-arm with bus timeSec restarting at 0 s -> immediate puff around t = 0.3 s must detect!
+    armBtn.listeners.click[0]();
+    srLive.textContent = '';
+    const puffWave = synthesizeBreathWaveform('puff', { sampleRate: 48000, preSec: 0.2, seed: 7331 });
+    for (let i = 0; i < puffWave.length; i += 512) {
+      audioCb({
+        samples: puffWave.subarray(i, Math.min(puffWave.length, i + 512)),
+        sampleRate: 48000,
+        timeSec: i / 48000
+      });
+    }
+    assert.equal(heroBadge.textContent, 'SHARP PUFF', 'Puff at t=0.3s after disarm/rearm must detect immediately');
+    assert.ok(srLive.textContent.includes('SHARP PUFF'));
+
+    inst.destroy();
+  } finally {
+    globalThis.document = prevDoc;
+  }
+});

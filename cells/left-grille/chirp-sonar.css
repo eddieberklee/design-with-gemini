@@ -332,7 +332,7 @@
   font-family: var(--cs-mono);
   font-size: clamp(7px, 1.8cqw, 8.5px);
   font-weight: 600;
-  color: rgba(20, 20, 19, 0.55);
+  color: var(--cs-ink-muted);
   pointer-events: none;
   font-variant-numeric: tabular-nums;
 }

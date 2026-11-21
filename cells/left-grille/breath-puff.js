@@ -148,9 +148,15 @@
     }
 
     process(x) {
-      const y = this.b0 * x + this.z1;
-      this.z1 = this.b1 * x - this.a1 * y + this.z2;
-      this.z2 = this.b2 * x - this.a2 * y;
+      const s = Number.isFinite(x) ? x : 0;
+      const y = this.b0 * s + this.z1;
+      this.z1 = this.b1 * s - this.a1 * y + this.z2;
+      this.z2 = this.b2 * s - this.a2 * y;
+      if (!Number.isFinite(y) || !Number.isFinite(this.z1) || !Number.isFinite(this.z2)) {
+        this.z1 = 0;
+        this.z2 = 0;
+        return 0;
+      }
       return y;
     }
 
@@ -1199,8 +1205,15 @@
       ['Sim Blow']
     );
 
+    const slotKicker = h('span', {
+      className: 'bp-kicker',
+      style:
+        'font-family:var(--bp-mono);font-size:clamp(8px,2.1cqw,10.5px);font-weight:700;color:var(--bp-ink-muted);font-variant-numeric:tabular-nums;letter-spacing:0.03em;flex:0 0 auto;',
+      textContent: '05'
+    });
+
     const bezel = h('div', { className: 'bp-bezel' }, [
-      h('div', { className: 'bp-bezel-group' }, [armBtn, statusPill]),
+      h('div', { className: 'bp-bezel-group' }, [slotKicker, armBtn, statusPill]),
       h('div', { className: 'bp-bezel-group bp-sim-group' }, [simPuffBtn, simBlowBtn])
     ]);
 
@@ -1449,6 +1462,9 @@
 
     function updateStateUi(st) {
       busState = st || { state: 'idle', sampleRate: 48000, error: '' };
+      if (busState.state === 'idle') {
+        dsp.reset();
+      }
       const armed = busState.state === 'listening' || busState.state === 'requesting';
       armBtn.dataset.armed = armed ? 'true' : 'false';
       armBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
@@ -1479,7 +1495,7 @@
     function handleArmClick() {
       if (!bus) return;
       if (busState.state === 'listening' || busState.state === 'requesting') {
-        if (typeof bus.stopAll === 'function') bus.stopAll();
+        if (typeof bus.stopAll === 'function') bus.stopAll({ dispatchClose: false });
       } else if (typeof bus.requestArm === 'function') {
         bus.requestArm();
       }

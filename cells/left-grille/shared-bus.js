@@ -197,6 +197,7 @@
       this.micSource = null;
       this.scriptNode = null;
       this.workletNode = null;
+      this._workletPushTx = null;
 
       const doc =
         (this._root && this._root.document) ||
@@ -345,12 +346,98 @@
 
     setHiddenMuted(hidden) {
       const next = Boolean(hidden);
+      if (next && this.workletNode && this.workletNode.port) {
+        try {
+          this.workletNode.port.postMessage({ type: 'flushTx' });
+        } catch (_) {}
+      }
       if (this._hiddenMuted === next) return;
       this._hiddenMuted = next;
       if (next) {
         this._activeTxPhase = 0;
         this._fadingModes.clear();
+      } else if (
+        this._state === 'listening' &&
+        typeof this._workletPushTx === 'function' &&
+        !isDocumentHidden(false, this._root)
+      ) {
+        this._workletPushTx();
+        this._workletPushTx();
       }
+    }
+
+    _resetTxStateToOff() {
+      this._txMode = 'off';
+      this._activeTxMode = 'off';
+      this._activeTxPhase = 0;
+      this._fadingModes.clear();
+    }
+
+    /**
+     * Captures a self-contained stereo 15 ms raised-cosine ramp-out buffer in
+     * exact `BLOCK_SIZE` chunks without advancing live `_txSampleOffset` or
+     * retaining any reference to live bus state during `stopAll()`.
+     */
+    _snapshotFadeTail(sampleRate) {
+      const sr = Number.isFinite(sampleRate) && sampleRate > 0 ? sampleRate : this._sampleRate;
+      if (sr < MIN_SONAR_SAMPLE_RATE || isDocumentHidden(this._hiddenMuted, this._root)) {
+        return null;
+      }
+
+      const fadingEntries = new Map();
+      for (const [fMode, ph] of this._fadingModes.entries()) {
+        if (ph > 0 && this._txGenerators.has(fMode)) {
+          fadingEntries.set(fMode, ph);
+        }
+      }
+      if (
+        this._activeTxMode !== 'off' &&
+        this._activeTxPhase > 0 &&
+        this._txGenerators.has(this._activeTxMode)
+      ) {
+        const prev = fadingEntries.get(this._activeTxMode) || 0;
+        fadingEntries.set(this._activeTxMode, Math.max(prev, this._activeTxPhase));
+      }
+      if (fadingEntries.size === 0) {
+        return null;
+      }
+
+      const rampSamples = Math.max(1, Math.round(RAMP_DURATION_SEC * sr));
+      const rampStep = 1 / rampSamples;
+      const totalSamples = Math.ceil(rampSamples / BLOCK_SIZE) * BLOCK_SIZE;
+      const snapL = new Float32Array(totalSamples);
+      const snapR = new Float32Array(totalSamples);
+      const tmpL = new Float32Array(BLOCK_SIZE);
+      const tmpR = new Float32Array(BLOCK_SIZE);
+      const baseOffset = this._txSampleOffset;
+
+      for (const [fMode, startPhase] of fadingEntries.entries()) {
+        const fn = this._txGenerators.get(fMode);
+        if (!fn || startPhase <= 0) continue;
+        let ph = startPhase;
+        for (let blockOffset = 0; blockOffset < totalSamples && ph > 0; blockOffset += BLOCK_SIZE) {
+          tmpL.fill(0);
+          tmpR.fill(0);
+          try {
+            fn(tmpL, tmpR, sr, baseOffset + blockOffset);
+          } catch (_) {
+            break;
+          }
+          for (let i = 0; i < BLOCK_SIZE; i++) {
+            ph = Math.max(0, ph - rampStep);
+            if (ph <= 0) break;
+            const gOut = 0.5 - 0.5 * Math.cos(Math.PI * ph);
+            snapL[blockOffset + i] += clampSample(tmpL[i]) * gOut;
+            snapR[blockOffset + i] += clampSample(tmpR[i]) * gOut;
+          }
+        }
+      }
+
+      for (let i = 0; i < totalSamples; i++) {
+        snapL[i] = clampSample(snapL[i]);
+        snapR[i] = clampSample(snapR[i]);
+      }
+      return { left: snapL, right: snapR };
     }
 
     _ensureScratchCapacity(len) {
@@ -623,6 +710,7 @@
         (typeof location !== 'undefined' ? location : null);
 
       if (!nav || !nav.mediaDevices || typeof nav.mediaDevices.getUserMedia !== 'function') {
+        this._resetTxStateToOff();
         const isFile = Boolean(loc && loc.protocol === 'file:');
         this._emitState('error', {
           error: isFile
@@ -637,7 +725,8 @@
         audioCtx: null,
         micSource: null,
         scriptNode: null,
-        workletNode: null
+        workletNode: null,
+        workletPushTx: null
       };
 
       try {
@@ -689,6 +778,7 @@
 
         if (typeof AudioCtx !== 'function') {
           disposeAudioHandles(local);
+          this._resetTxStateToOff();
           this._emitState('error', { error: 'Web Audio API unavailable in this environment.' });
           return false;
         }
@@ -772,6 +862,14 @@
               });
               const pushTxBlockToWorklet = () => {
                 if (myEpoch !== this._sessionEpoch) return;
+                if (isDocumentHidden(this._hiddenMuted, this._root)) {
+                  this._activeTxPhase = 0;
+                  this._fadingModes.clear();
+                  try {
+                    node.port.postMessage({ type: 'flushTx' });
+                  } catch (_) {}
+                  return;
+                }
                 const left = new Float32Array(BLOCK_SIZE);
                 const right = new Float32Array(BLOCK_SIZE);
                 this._renderTxBlock(left, right, sr);
@@ -792,6 +890,7 @@
               local.micSource.connect(node);
               node.connect(ctx.destination);
               local.workletNode = node;
+              local.workletPushTx = pushTxBlockToWorklet;
               connected = true;
             }
           } catch (_) {
@@ -825,6 +924,7 @@
 
         if (!connected) {
           disposeAudioHandles(local);
+          this._resetTxStateToOff();
           this._emitState('error', { error: 'Audio processor initialization failed.' });
           return false;
         }
@@ -835,6 +935,7 @@
         this.micSource = local.micSource;
         this.scriptNode = local.scriptNode;
         this.workletNode = local.workletNode;
+        this._workletPushTx = local.workletPushTx;
 
         this._emitState('listening', {
           error: '',
@@ -847,6 +948,7 @@
         const aborted = myEpoch !== this._sessionEpoch;
         disposeAudioHandles(local);
         if (aborted) return false;
+        this._resetTxStateToOff();
         const msg =
           err && err.name === 'NotAllowedError'
             ? 'Mic permission denied — allow microphone access or use Sim controls.'
@@ -873,28 +975,19 @@
       this.micSource = null;
       this.stream = null;
       this.audioCtx = null;
+      this._workletPushTx = null;
 
-      const wasEmittingTx =
-        this._sampleRate >= MIN_SONAR_SAMPLE_RATE &&
-        ((this._activeTxMode !== 'off' &&
-          this._activeTxPhase > 0 &&
-          this._txGenerators.has(this._activeTxMode)) ||
-          this._fadingModes.size > 0);
+      const canFadeScriptNode = Boolean(
+        !options.immediate &&
+          detached.scriptNode &&
+          detached.audioCtx &&
+          detached.audioCtx.state === 'running'
+      );
+      const fadeSr =
+        (detached.audioCtx && detached.audioCtx.sampleRate) || this._sampleRate || 48000;
+      const fadeSnapshot = canFadeScriptNode ? this._snapshotFadeTail(fadeSr) : null;
 
-      if (
-        this._activeTxMode !== 'off' &&
-        this._activeTxPhase > 0 &&
-        this._txGenerators.has(this._activeTxMode)
-      ) {
-        const prev = this._fadingModes.get(this._activeTxMode) || 0;
-        this._fadingModes.set(this._activeTxMode, Math.max(prev, this._activeTxPhase));
-      } else if (!wasEmittingTx) {
-        this._fadingModes.clear();
-      }
-
-      this._txMode = 'off';
-      this._activeTxMode = 'off';
-      this._activeTxPhase = 0;
+      this._resetTxStateToOff();
       this._rxStageFill = 0;
 
       this._emitState('idle', { error: '' });
@@ -933,21 +1026,36 @@
         } catch (_) {}
       }
 
-      // Allow a 20 ms ramp-down window when active ultrasonic TX was running on ScriptProcessor
-      if (
-        wasEmittingTx &&
-        detached.scriptNode &&
-        detached.audioCtx &&
-        detached.audioCtx.state === 'running' &&
-        !options.immediate
-      ) {
-        const sr = detached.audioCtx.sampleRate || this._sampleRate || 48000;
+      // Allow a 20 ms ramp-down window from pre-snapshotted samples when active ultrasonic TX
+      // was running on ScriptProcessor — never touches live `this` state or new TX generators!
+      if (fadeSnapshot && detached.scriptNode) {
+        let readPos = 0;
+        const snapL = fadeSnapshot.left;
+        const snapR = fadeSnapshot.right;
         detached.scriptNode.onaudioprocess = (audioEv) => {
           const outBuf = audioEv.outputBuffer;
           const outL = outBuf ? outBuf.getChannelData(0) : null;
           const outR =
             outBuf && outBuf.numberOfChannels > 1 ? outBuf.getChannelData(1) : null;
-          this._renderTxBlock(outL, outR, sr);
+          const len = outL ? outL.length : outR ? outR.length : 0;
+          if (outL) outL.fill(0);
+          if (outR) outR.fill(0);
+          if (
+            len <= 0 ||
+            readPos >= snapL.length ||
+            isDocumentHidden(this._hiddenMuted, this._root)
+          ) {
+            readPos = snapL.length;
+            return;
+          }
+          const copyLen = Math.min(len, snapL.length - readPos);
+          if (outL) {
+            for (let i = 0; i < copyLen; i++) outL[i] = snapL[readPos + i];
+          }
+          if (outR) {
+            for (let i = 0; i < copyLen; i++) outR[i] = snapR[readPos + i];
+          }
+          readPos += copyLen;
         };
         await new Promise((r) => setTimeout(r, 20));
       }

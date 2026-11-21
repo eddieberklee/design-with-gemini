@@ -322,9 +322,15 @@
     }
 
     process(x) {
-      const y = this.b0 * x + this.z1;
-      this.z1 = this.b1 * x - this.a1 * y + this.z2;
-      this.z2 = this.b2 * x - this.a2 * y;
+      const s = Number.isFinite(x) ? x : 0;
+      const y = this.b0 * s + this.z1;
+      this.z1 = this.b1 * s - this.a1 * y + this.z2;
+      this.z2 = this.b2 * s - this.a2 * y;
+      if (!Number.isFinite(y) || !Number.isFinite(this.z1) || !Number.isFinite(this.z2)) {
+        this.z1 = 0;
+        this.z2 = 0;
+        return 0;
+      }
       return y;
     }
   }
@@ -1880,7 +1886,7 @@
       {
         type: 'button',
         className: 'tz-mini-btn',
-        onClick: () => cancelCalibration()
+        onClick: () => cancelCalibration(true)
       },
       ['Done']
     );
@@ -2034,7 +2040,7 @@
 
     async function toggleCalibration() {
       if (calActive) {
-        cancelCalibration();
+        cancelCalibration(true);
         return;
       }
       calActive = true;
@@ -2046,13 +2052,19 @@
       }
       localPaused = false;
       renderCalPrompt();
+      if (typeof calCancelBtn.focus === 'function') {
+        calCancelBtn.focus();
+      }
       announce(`Calibration started. Tap ${ZONES[ZONE_ORDER[0]].label}.`);
     }
 
-    function cancelCalibration() {
+    function cancelCalibration(restoreFocus = false) {
       calActive = false;
       calCaptured = {};
       renderCalPrompt();
+      if (restoreFocus && typeof calBtn.focus === 'function') {
+        calBtn.focus();
+      }
     }
 
     function resetCalibration() {
@@ -2061,6 +2073,9 @@
       calActive = false;
       calCaptured = {};
       renderCalPrompt();
+      if (typeof calBtn.focus === 'function') {
+        calBtn.focus();
+      }
       zoneSub.textContent = 'Factory MBP centroids';
       announce('Tap zone calibration reset to factory defaults.');
     }
@@ -2077,6 +2092,9 @@
         calActive = false;
         calCaptured = {};
         renderCalPrompt();
+        if (typeof calBtn.focus === 'function') {
+          calBtn.focus();
+        }
         zoneSub.textContent = '4-Zone Cal Locked';
         announce('4-zone chassis tap calibration saved.');
       } else {
@@ -2117,6 +2135,7 @@
 
       if (activePulseTimer) clearTimeout(activePulseTimer);
       activePulseTimer = setTimeout(() => {
+        activePulseTimer = null;
         activeGrp.classList.remove('tz-zone--pulse');
         chassisMap.propRay.setAttribute('opacity', '0.18');
       }, 900);
@@ -2144,6 +2163,7 @@
           updateStatusLine(msg, true);
           if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
           vetoFlashTimer = setTimeout(() => {
+            vetoFlashTimer = null;
             updateStatusLine();
           }, 850);
           continue;
@@ -2172,7 +2192,10 @@
         const expected = ZONES[ZONE_ORDER[calStepIdx]];
         updateStatusLine(`TAP ${expected.code} NEXT`, true);
         if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
-        vetoFlashTimer = setTimeout(() => updateStatusLine(), 900);
+        vetoFlashTimer = setTimeout(() => {
+          vetoFlashTimer = null;
+          updateStatusLine();
+        }, 900);
         return;
       }
       const sr = 48000;
@@ -2236,14 +2259,33 @@
       unsubState = bus.onStateChange((st) => updateBusUi(st));
     }
 
+    function onDocKeyDown(e) {
+      if (calActive && e && e.key === 'Escape') {
+        if (typeof e.preventDefault === 'function') e.preventDefault();
+        if (typeof e.stopPropagation === 'function') e.stopPropagation();
+        cancelCalibration(true);
+      }
+    }
+
     function onSecondaryClose() {
-      if (calActive) cancelCalibration();
+      if (activePulseTimer) {
+        clearTimeout(activePulseTimer);
+        activePulseTimer = null;
+      }
+      if (vetoFlashTimer) {
+        clearTimeout(vetoFlashTimer);
+        vetoFlashTimer = null;
+      }
+      if (calActive) cancelCalibration(false);
       localPaused = false;
       engine.reset();
     }
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       window.addEventListener('lg-secondary-close', onSecondaryClose);
+    }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('keydown', onDocKeyDown, true);
     }
 
     refreshCalBadges();
@@ -2252,13 +2294,25 @@
       engine,
       simulateZoneTap: runSimulatedZoneTap,
       destroy() {
-        if (activePulseTimer) clearTimeout(activePulseTimer);
-        if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
-        if (announceTimer) clearTimeout(announceTimer);
+        if (activePulseTimer) {
+          clearTimeout(activePulseTimer);
+          activePulseTimer = null;
+        }
+        if (vetoFlashTimer) {
+          clearTimeout(vetoFlashTimer);
+          vetoFlashTimer = null;
+        }
+        if (announceTimer) {
+          clearTimeout(announceTimer);
+          announceTimer = null;
+        }
         if (typeof unsubAudio === 'function') unsubAudio();
         if (typeof unsubState === 'function') unsubState();
         if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
           window.removeEventListener('lg-secondary-close', onSecondaryClose);
+        }
+        if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('keydown', onDocKeyDown, true);
         }
       }
     };

@@ -289,3 +289,421 @@ test('8. Compass / DeviceOrientation fusion when flat and magnetic spike rejecti
   assert.ok(Math.abs(st2.cumulativeDeg - (3.62 + 1.8)) < 1e-4, 'Magnetic spike must be ignored');
 });
 
+test('9. Omitted rot.alpha ({beta:0,gamma:90}), W3C {x,y,z} linear acceleration subtraction & iOS faceUp', () => {
+  // (a) Omitted rot.alpha must not zero out gamma when gravity lies along +Y
+  const trackerY = new RotaryDialTracker({ enableBiasEstimation: false });
+  const stY = trackerY.ingestMotion({
+    beta: 0,
+    gamma: 90,
+    gx: 0,
+    gy: 9.81,
+    gz: 0,
+    dt: 0.1
+  });
+  assert.ok(Math.abs(stY.rawDegPerSec - 90) < 1e-5, `Expected 90 deg/s when alpha omitted, got ${stY.rawDegPerSec}`);
+  assert.ok(Math.abs(stY.cumulativeDeg - 9) < 1e-5, `Expected +9 deg cumulative, got ${stY.cumulativeDeg}`);
+
+  // (b) W3C accelerationIncludingGravity {x,y,z} minus acceleration {x,y,z} yields 0 deg tilt on flat desk
+  const trackerLin = new RotaryDialTracker({ enableBiasEstimation: false });
+  const stLin = trackerLin.ingestMotion({
+    rotationRate: { alpha: 90, beta: 0, gamma: 0 },
+    accelerationIncludingGravity: { x: 0, y: 5.0, z: 9.81 },
+    acceleration: { x: 0, y: 5.0, z: 0 },
+    dt: 0.02
+  });
+  assert.ok(stLin.tiltDeg < 0.01, `Expected 0 deg tilt after W3C acceleration subtraction, got ${stLin.tiltDeg}`);
+
+  // (c) Real iOS Safari face-up (gz = -9.81, alpha = -90) reports faceUp: true and clockwise +90 deg/s
+  const iosTracker = new RotaryDialTracker({ enableBiasEstimation: false, iosGravity: true });
+  const stIosUp = iosTracker.ingestMotion({
+    alpha: -90,
+    beta: 0,
+    gamma: 0,
+    gx: 0,
+    gy: 0,
+    gz: -9.81,
+    dt: 0.1
+  });
+  assert.equal(stIosUp.faceUp, true, 'iOS Safari face-up (gz = -9.81) must report faceUp: true');
+  assert.ok(Math.abs(stIosUp.cumulativeDeg - 9) < 1e-5, `Expected +9 deg CW on iOS face-up, got ${stIosUp.cumulativeDeg}`);
+});
+
+test('10. Lifecycle: zero main-grid leak, lg-secondary-open activation, and lg-secondary-close teardown + BLE race abort', async () => {
+  const { mountIphoneDialCell } = Dial;
+
+  function makeElem(tag) {
+    const attrs = {};
+    const listeners = {};
+    const classes = new Set();
+    return {
+      tagName: String(tag || 'div').toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      parentNode: null,
+      textContent: '',
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        toggle: (c, force) => (force ? classes.add(c) : classes.delete(c)),
+        contains: (c) => classes.has(c)
+      },
+      appendChild(child) {
+        if (child && typeof child === 'object') child.parentNode = this;
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+        return child;
+      },
+      setAttribute(k, v) {
+        attrs[k] = String(v);
+        if (k === 'hidden') this.hidden = true;
+      },
+      getAttribute(k) {
+        return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null;
+      },
+      hasAttribute(k) {
+        return Object.prototype.hasOwnProperty.call(attrs, k);
+      },
+      closest(sel) {
+        if (sel === '[hidden]') {
+          let cur = this;
+          while (cur) {
+            if (cur.hidden === true || (cur.hasAttribute && cur.hasAttribute('hidden'))) return cur;
+            cur = cur.parentNode;
+          }
+        }
+        return null;
+      },
+      addEventListener(type, fn) {
+        (listeners[type] = listeners[type] || []).push(fn);
+      },
+      removeEventListener(type, fn) {
+        if (!listeners[type]) return;
+        listeners[type] = listeners[type].filter((f) => f !== fn);
+      },
+      dispatchEvent(ev) {
+        (listeners[ev.type] || []).slice().forEach((fn) => fn(ev));
+      },
+      focus() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 160, height: 160 })
+    };
+  }
+
+  const prevDoc = globalThis.document;
+  const prevWin = globalThis.window;
+  const prevMG = globalThis.MotionGrid;
+  const prevNav = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const prevSetInterval = globalThis.setInterval;
+  const prevClearInterval = globalThis.clearInterval;
+
+  const activeIntervals = new Set();
+  let nextTimerId = 500;
+  globalThis.setInterval = (fn, ms) => {
+    const id = ++nextTimerId;
+    activeIntervals.add(id);
+    return id;
+  };
+  globalThis.clearInterval = (id) => {
+    activeIntervals.delete(id);
+  };
+
+  let createdLinks = 0;
+  let closedLinks = 0;
+  globalThis.MotionGrid = {
+    Transport: {
+      isValidSessionId: (s) => /^[A-Z0-9]{6,16}$/.test(String(s || '')),
+      generateSessionId: () => '8492K7',
+      createLink() {
+        createdLinks++;
+        return {
+          start() {},
+          send() {},
+          close() {
+            closedLinks++;
+          }
+        };
+      }
+    }
+  };
+
+  let gattConnectResolve = null;
+  let gattDisconnectCalls = 0;
+  let notificationsStarted = 0;
+  let gattListeners = [];
+  const mockBleDevice = {
+    addEventListener(type, fn) {
+      if (type === 'gattserverdisconnected') gattListeners.push(fn);
+    },
+    removeEventListener(type, fn) {
+      if (type === 'gattserverdisconnected') {
+        gattListeners = gattListeners.filter((f) => f !== fn);
+      }
+    },
+    gatt: {
+      connected: false,
+      connect() {
+        return new Promise((resolve) => {
+          gattConnectResolve = () => {
+            mockBleDevice.gatt.connected = true;
+            resolve({
+              async getPrimaryService() {
+                return {
+                  async getCharacteristic() {
+                    return {
+                      async startNotifications() {
+                        notificationsStarted++;
+                      },
+                      addEventListener() {},
+                      removeEventListener() {}
+                    };
+                  }
+                };
+              }
+            });
+          };
+        });
+      },
+      disconnect() {
+        gattDisconnectCalls++;
+        mockBleDevice.gatt.connected = false;
+      }
+    }
+  };
+
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      bluetooth: {
+        async requestDevice() {
+          return mockBleDevice;
+        }
+      }
+    }
+  });
+
+  const hiddenPage = makeElem('div');
+  hiddenPage.hidden = true;
+  const cellEl = makeElem('section');
+  hiddenPage.appendChild(cellEl);
+
+  const winListeners = {};
+  globalThis.document = {
+    createElement: (t) => makeElem(t),
+    createElementNS: (_ns, t) => makeElem(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+    getElementById: (id) => (id === 'left-grille-page' ? hiddenPage : null),
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  globalThis.window = globalThis;
+  const origAddEv = globalThis.addEventListener;
+  const origRemEv = globalThis.removeEventListener;
+  globalThis.addEventListener = (type, fn) => {
+    (winListeners[type] = winListeners[type] || []).push(fn);
+  };
+  globalThis.removeEventListener = (type, fn) => {
+    if (!winListeners[type]) return;
+    winListeners[type] = winListeners[type].filter((f) => f !== fn);
+  };
+  const emitWin = (type) => {
+    (winListeners[type] || []).slice().forEach((fn) => fn({ type }));
+  };
+
+  try {
+    // 1. Mount while #left-grille-page is hidden on the main grid -> ZERO timers, ZERO transport links
+    const instance = mountIphoneDialCell(cellEl);
+    assert.equal(activeIntervals.size, 0, 'Must not start heartbeatTimer while hidden on main grid');
+    assert.equal(createdLinks, 0, 'Must not open MQTT/WS transport while hidden on main grid');
+
+    // 2. Open secondary grid (`lg-secondary-open`) -> starts heartbeatTimer & transport link
+    hiddenPage.hidden = false;
+    emitWin('lg-secondary-open');
+    assert.equal(activeIntervals.size, 1, 'Expected 1 heartbeatTimer after lg-secondary-open');
+    assert.equal(createdLinks, 1, 'Expected 1 transport link after lg-secondary-open');
+
+    // 3. Start BLE pairing (`handleBleClick`) and fire `lg-secondary-close` mid-flight during `gatt.connect()`
+    const blePromise = instance.handleBleClick();
+    await Promise.resolve(); // allow requestDevice() to resolve and enter gatt.connect()
+    assert.equal(typeof gattConnectResolve, 'function', 'gatt.connect should be pending');
+    assert.equal(gattListeners.length, 1, 'gattserverdisconnected listener attached during connect');
+
+    // Close secondary view while gatt.connect() is still in flight
+    emitWin('lg-secondary-close');
+    assert.equal(activeIntervals.size, 0, 'lg-secondary-close must clear heartbeatTimer');
+    assert.equal(closedLinks, 1, 'lg-secondary-close must close active transport link');
+    assert.equal(gattListeners.length, 0, 'lg-secondary-close must remove gattserverdisconnected listener');
+
+    // Now resolve the late gatt.connect() -> must immediately disconnect and never start notifications
+    gattConnectResolve();
+    await blePromise;
+    assert.equal(notificationsStarted, 0, 'Aborted mid-flight BLE connect must not start notifications');
+    assert.equal(mockBleDevice.gatt.connected, false, 'Late GATT connection must be disconnected immediately');
+    assert.ok(gattDisconnectCalls >= 1, 'gatt.disconnect() must be called on stale mid-flight connect');
+
+    instance.unmount();
+  } finally {
+    globalThis.document = prevDoc;
+    globalThis.window = prevWin;
+    globalThis.MotionGrid = prevMG;
+    globalThis.setInterval = prevSetInterval;
+    globalThis.clearInterval = prevClearInterval;
+    if (origAddEv) globalThis.addEventListener = origAddEv;
+    else delete globalThis.addEventListener;
+    if (origRemEv) globalThis.removeEventListener = origRemEv;
+    else delete globalThis.removeEventListener;
+    if (prevNav) Object.defineProperty(globalThis, 'navigator', prevNav);
+  }
+});
+
+test('11. dial-phone.js invalid ?s=BAD! fallback, hello state handshake without overwrite, and pagehide cleanup', () => {
+  const phoneJsPath = path.join(__dirname, 'dial-phone.js');
+  const code = fs.readFileSync(phoneJsPath, 'utf8');
+
+  function makePhoneNode() {
+    const attrs = {};
+    const listeners = {};
+    return {
+      dataset: {},
+      style: {},
+      hidden: false,
+      textContent: '',
+      appendChild() {},
+      setAttribute(k, v) {
+        attrs[k] = String(v);
+      },
+      getAttribute(k) {
+        return attrs[k] || null;
+      },
+      addEventListener(type, fn) {
+        (listeners[type] = listeners[type] || []).push(fn);
+      },
+      trigger(type, ev) {
+        (listeners[type] || []).forEach((fn) => fn(ev || {}));
+      },
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 240, height: 240 })
+    };
+  }
+
+  const elements = {};
+  const sentPackets = [];
+  let capturedLinkOpts = null;
+  let linkClosed = 0;
+  let audioClosed = 0;
+  const pageListeners = {};
+
+  const sandbox = {
+    URLSearchParams,
+    Math,
+    Number,
+    String,
+    Boolean,
+    Object,
+    Array,
+    Date,
+    Promise,
+    performance: { now: () => 1000 },
+    location: {
+      search: '?s=BAD!&t=mqtt',
+      protocol: 'https:',
+      host: 'localhost:8443',
+      origin: 'https://localhost:8443'
+    },
+    navigator: {},
+    LeftGrilleDial: Dial,
+    MotionGrid: {
+      Transport: {
+        isValidSessionId: (s) => /^[A-Z0-9]{6,16}$/.test(String(s || '')),
+        generateSessionId: () => 'PH1234',
+        createLink(opts) {
+          if (!/^[A-Z0-9]{6,16}$/.test(opts.sessionId)) {
+            throw new Error('Invalid sessionId for MQTT transport');
+          }
+          capturedLinkOpts = opts;
+          return {
+            start() {
+              opts.onStatus('ready', { transport: 'mqtt' });
+            },
+            send(pkt) {
+              sentPackets.push(pkt);
+            },
+            close() {
+              linkClosed++;
+            }
+          };
+        }
+      }
+    },
+    AudioContext: class {
+      constructor() {
+        this.state = 'running';
+        this.currentTime = 0;
+        this.destination = {};
+      }
+      createOscillator() {
+        return {
+          type: 'triangle',
+          frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+          connect() {},
+          start() {},
+          stop() {}
+        };
+      }
+      createGain() {
+        return {
+          gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+          connect() {}
+        };
+      }
+      close() {
+        this.state = 'closed';
+        audioClosed++;
+      }
+    },
+    document: {
+      body: makePhoneNode(),
+      getElementById(id) {
+        if (!elements[id]) elements[id] = makePhoneNode();
+        return elements[id];
+      },
+      createElementNS: () => makePhoneNode()
+    },
+    addEventListener(type, fn) {
+      (pageListeners[type] = pageListeners[type] || []).push(fn);
+    },
+    cancelAnimationFrame() {}
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  const script = new vm.Script(code, { filename: 'dial-phone.js' });
+  script.runInNewContext(sandbox);
+
+  // 1. Invalid `?s=BAD!` must fall back to `'DL000000'` without throwing
+  assert.ok(capturedLinkOpts, 'Transport.createLink must be called');
+  assert.equal(capturedLinkOpts.sessionId, 'DL000000', 'Invalid ?s=BAD! must fall back to DL000000');
+
+  // 2. On connect (`ready`), phone sends ONLY `{ t: 'hello' }` and does NOT blast `{ t: 'm', dialValue: 50 }`
+  assert.equal(sentPackets.length, 1, 'Connect must send only hello without overwriting desktop state');
+  assert.equal(sentPackets[0].t, 'hello');
+
+  // 3. Receiving desktop `{ t: 'state', dialValue: 82.5, fineMode: true }` syncs phone UI
+  capturedLinkOpts.onMessage({ t: 'state', dialValue: 82.5, fineMode: true });
+  assert.equal(elements['dp-value'].textContent, 'VAL 82.5');
+  assert.equal(elements['dp-fine-btn'].textContent, '0.25× Fine');
+
+  // 4. Triggering audio tick + `pagehide` closes both link and AudioContext
+  elements['dp-touch-only-btn'].trigger('click');
+  (pageListeners.pagehide || []).forEach((fn) => fn());
+  assert.equal(linkClosed, 1, 'pagehide must close active Transport link');
+  assert.equal(audioClosed, 1, 'pagehide must close active AudioContext');
+});
+
+

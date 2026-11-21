@@ -330,6 +330,8 @@ body:has(main.grid[hidden]) .mg-hud {
   font-family: var(--lg-sans);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
   cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
 }

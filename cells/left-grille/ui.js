@@ -17,7 +17,9 @@
  * 4. Secondary Cells 2–9 (`#lg-sec-cell-2` .. `#lg-sec-cell-9`): Registered dynamically via
  *    `window.LeftGrilleLab.registerCell(slotNumber, spec)` and coordinated with Cell 1 so
  *    arming `LeftGrilleLab.bus` stops Cell 1's standalone mic (and vice versa), while closing
- *    the secondary view calls `LeftGrilleLab.bus.stopAll()`.
+ *    the secondary view calls `LeftGrilleLab.bus.stopAll()`. Exposes
+ *    `LeftGrilleLab.isSecondaryOpen()` and dispatches `CustomEvent('lg-secondary-open')`
+ *    whenever `#left-grille-page` transitions from hidden to open.
  */
 (function (global) {
   'use strict';
@@ -182,6 +184,8 @@
     let isSecondaryOpen = false;
     let enteredFromMainGrid = false;
     let vtSeq = 0;
+
+    lab.isSecondaryOpen = () => isSecondaryOpen;
 
     let calWizardActive = false;
     let overlayReturnFocusEl = null;
@@ -597,6 +601,7 @@
 
     function bindSharedLab(labObj) {
       if (!labObj || typeof labObj !== 'object') return;
+      labObj.isSecondaryOpen = () => isSecondaryOpen;
       labObj._slotElements = secondarySlotMap;
       if (typeof labObj.attachSecondarySlots === 'function') {
         labObj.attachSecondarySlots(secondarySlotMap);
@@ -1190,12 +1195,23 @@
     }
 
     function applyDomState(openNow, restorePortalFocus) {
+      const wasOpen = isSecondaryOpen;
       if (openNow) {
         mainGrid.hidden = true;
         secondaryPage.hidden = false;
         isSecondaryOpen = true;
         syncCanvasSize();
         backBtn.focus({ preventScroll: true });
+        if (!wasOpen) {
+          const CustomEvt =
+            (global && typeof global.CustomEvent === 'function' && global.CustomEvent) ||
+            (typeof CustomEvent === 'function' ? CustomEvent : null);
+          if (CustomEvt && global && typeof global.dispatchEvent === 'function') {
+            try {
+              global.dispatchEvent(new CustomEvt('lg-secondary-open'));
+            } catch (_) {}
+          }
+        }
       } else {
         secondaryPage.hidden = true;
         mainGrid.hidden = false;
@@ -1327,6 +1343,7 @@
     }
 
     document.addEventListener('keydown', (e) => {
+      if (!e || e.defaultPrevented) return;
       if (e.key === 'Escape' && targetOpen) {
         e.preventDefault();
         if (calWizardActive || !inlineOverlay.hidden) {

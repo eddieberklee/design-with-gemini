@@ -309,6 +309,181 @@ test('Sample-rate resilience (44.1 kHz, 96 kHz, 16 kHz disable) and NaN/Infinity
   assert.equal(resAfterNan.events.length, 1);
   assert.equal(resAfterNan.events[0].type, 'pull');
   assert.ok(Number.isFinite(engNan.noiseFloorL) && Number.isFinite(engNan.balance));
+
+  // resetClutter() clears partial _frameFill so stale half-frames never bleed across resets
+  const engHalf = new ChirpSonarEngine({ sampleRate: 48000, autoAlignDirectPath: false });
+  const halfOut = engHalf.processBlock(new Float32Array(512).fill(0.05), 48000, 0.01);
+  assert.equal(halfOut, null);
+  assert.equal(engHalf._frameFill, 512);
+  engHalf.resetClutter();
+  assert.equal(engHalf._frameFill, 0);
+  const afterResetHalf = engHalf.processBlock(new Float32Array(512), 48000, 0.02);
+  assert.equal(afterResetHalf, null);
+  assert.equal(engHalf._frameFill, 512);
+});
+
+test('mountChirpSonarCell restores autoAlignDirectPath on stopSim/[Zero] and cancels rAF on lg-secondary-close', () => {
+  const { mountChirpSonarCell } = require('./chirp-sonar.js');
+
+  function makeMockNode(tag) {
+    const attrs = new Map();
+    const listeners = new Map();
+    const classes = new Set();
+    return {
+      tagName: tag.toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      width: 0,
+      height: 0,
+      textContent: '',
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      set className(v) {
+        classes.clear();
+        String(v || '')
+          .split(/\s+/)
+          .filter(Boolean)
+          .forEach((c) => classes.add(c));
+      },
+      classList: {
+        add(...cs) {
+          cs.forEach((c) => classes.add(c));
+        },
+        contains(c) {
+          return classes.has(c);
+        }
+      },
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const i = this.children.indexOf(child);
+        if (i >= 0) this.children.splice(i, 1);
+        return child;
+      },
+      setAttribute(k, v) {
+        attrs.set(k, String(v));
+      },
+      getAttribute(k) {
+        return attrs.has(k) ? attrs.get(k) : null;
+      },
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type).add(fn);
+      },
+      dispatchEvent(ev) {
+        const set = listeners.get(ev.type);
+        if (set) set.forEach((fn) => fn(ev));
+      },
+      getContext() {
+        return {
+          fillRect() {},
+          beginPath() {},
+          moveTo() {},
+          lineTo() {},
+          stroke() {},
+          arc() {},
+          fill() {}
+        };
+      },
+      getBoundingClientRect() {
+        return { width: 240, height: 120 };
+      }
+    };
+  }
+
+  function findByClass(root, cls) {
+    const out = [];
+    (function walk(n) {
+      if (!n) return;
+      if (n.classList && n.classList.contains(cls)) out.push(n);
+      if (n.children) n.children.forEach(walk);
+    })(root);
+    return out;
+  }
+
+  const prevDoc = global.document;
+  const prevRaf = global.requestAnimationFrame;
+  const prevCancelRaf = global.cancelAnimationFrame;
+  const prevAdd = global.addEventListener;
+  const prevRem = global.removeEventListener;
+
+  const globalListeners = new Map();
+  let nextRafId = 1;
+  const pendingRafs = new Set();
+  const canceledRafs = [];
+
+  global.document = {
+    createElement: (tag) => makeMockNode(tag),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) })
+  };
+  global.requestAnimationFrame = () => {
+    const id = nextRafId++;
+    pendingRafs.add(id);
+    return id;
+  };
+  global.cancelAnimationFrame = (id) => {
+    pendingRafs.delete(id);
+    canceledRafs.push(id);
+  };
+  global.addEventListener = (type, fn) => {
+    if (!globalListeners.has(type)) globalListeners.set(type, new Set());
+    globalListeners.get(type).add(fn);
+  };
+  global.removeEventListener = (type, fn) => {
+    if (globalListeners.has(type)) globalListeners.get(type).delete(fn);
+  };
+
+  try {
+    let stateCb = null;
+    const mockBus = {
+      registerTxGenerator() {},
+      subscribeAudio() {
+        return () => {};
+      },
+      onStateChange(fn) {
+        stateCb = fn;
+        fn({ state: 'listening', sampleRate: 48000, txMode: 'chirp' });
+        return () => {};
+      }
+    };
+
+    const cellEl = makeMockNode('section');
+    const handle = mountChirpSonarCell(cellEl, mockBus);
+    assert.equal(handle.engine.autoAlignDirectPath, true);
+    assert.ok(pendingRafs.size >= 1, 'initial draw should schedule a rAF');
+
+    // Run sim -> temporarily disables autoAlignDirectPath
+    handle.runSim('push');
+    assert.equal(handle.engine.autoAlignDirectPath, false);
+
+    // Click [Zero] mid-sim while live sonar is armed -> stopSim() restores autoAlignDirectPath
+    const zeroBtn = findByClass(cellEl, 'cs-mini-btn--zero')[0];
+    assert.ok(zeroBtn, 'Zero button must exist');
+    zeroBtn.dispatchEvent({ type: 'click' });
+    assert.equal(handle.engine.autoAlignDirectPath, true);
+
+    // lg-secondary-close cancels any pending rAF
+    const closeListeners = globalListeners.get('lg-secondary-close');
+    assert.ok(closeListeners && closeListeners.size === 1);
+    closeListeners.forEach((fn) => fn({ type: 'lg-secondary-close' }));
+    assert.equal(pendingRafs.size, 0, 'lg-secondary-close must cancel pending rAF');
+    assert.ok(canceledRafs.length >= 1, 'cancelAnimationFrame should be invoked on close');
+
+    handle.destroy();
+  } finally {
+    global.document = prevDoc;
+    global.requestAnimationFrame = prevRaf;
+    global.cancelAnimationFrame = prevCancelRaf;
+    global.addEventListener = prevAdd;
+    global.removeEventListener = prevRem;
+  }
 });
 
 test('Browser slot 4 registration (pending + live registerCell) and zero innerHTML hygiene', () => {

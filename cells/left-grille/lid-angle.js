@@ -5,9 +5,11 @@
  *
  * 1. Mode A — Pure-Browser Acoustic Screen-Bounce Sonar (`18.2–20.4 kHz`):
  *    - Registers `'lid-ping'` TX generator on the shared 48 kHz acoustic bus (512-sample
- *      Hann-windowed linear FM chirp inside a 1024-sample period on the upward-firing left
- *      channel so cross-keyboard right-speaker direct arrival at ~0.73 ms cannot masquerade
- *      as a lid bounce). Also passively piggybacks when `bus.getTxMode() === 'chirp'`.
+ *      Hann-windowed linear FM chirp inside a 1024-sample period @ 44.1/48 kHz, scaled to
+ *      2048 @ 88.2/96 kHz, on the upward-firing left channel so cross-keyboard right-speaker
+ *      direct arrival at ~0.73 ms cannot masquerade as a lid bounce). Also passively
+ *      piggybacks when `bus.getTxMode() === 'chirp'` using Cell 04's exact left-channel
+ *      384/1024 (768/2048 @ 96 kHz) Hann-windowed cosine chirp (`18.00–19.15 kHz`).
  *    - Applies passband-restricted analytic Wiener deconvolution + exact sub-sample direct-path
  *      CLEAN subtraction to isolate early glass-lid specular reflections (`0.35–2.20 ms` lag,
  *      `~6–38 cm` bounce path), normalized to the direct-path peak so readings are invariant
@@ -17,8 +19,9 @@
  *      `localStorage['dwg.lidAngleCal.v1']`), and smooths with a 1D adaptive Kalman filter.
  *
  * 2. Mode B — Optional Exact Hardware IOHIDManager Bridge (`cells/left-grille/lid-bridge.mjs`):
- *    - Quietly probes `http://127.0.0.1:8791/angle` (600 ms timeout, zero console noise) on
- *      mount and on `[HID]` click. When live, streams exact `0.1°` Apple `LidAngleSensor`
+ *    - Quietly probes `http://127.0.0.1:8791/angle` (600 ms timeout) when Cell 05 is open
+ *      (`lg-secondary-open` / `#left-grille`) or on `[HID]` click, never eagerly on the
+ *      hidden main grid. When live, streams exact `0.1°` Apple `LidAngleSensor`
  *      (`0x05AC:0x8104`, UsagePage `0x0020`, Usage `0x008A`) readings over SSE `/events`.
  *
  * 3. Interactive Hinge Drag Fallback:
@@ -40,6 +43,10 @@
   // Acoustic Sonar Constants
   const CHIRP_PERIOD = 1024;
   const CHIRP_ACTIVE_LEN = 512;
+  const CHIRP_PIGGYBACK_ACTIVE_LEN = 384; // Matches Cell 04 StereoChirpGenerator (384 / 1024 duty)
+  const CHIRP_PIGGYBACK_F0_HZ = 18000;
+  const CHIRP_PIGGYBACK_F1_HZ = 19150;
+  const CHIRP_PIGGYBACK_TX_GAIN = 0.04;
   const F_START_HZ = 18200;
   const F_END_HZ = 20400;
   const CHIRP_GAIN = 0.052;
@@ -132,13 +139,20 @@
     }
   }
 
+  function computePeriodForSampleRate(sampleRate) {
+    if (!Number.isFinite(sampleRate) || sampleRate < 80000) return CHIRP_PERIOD;
+    if (sampleRate < 160000) return CHIRP_PERIOD * 2;
+    return CHIRP_PERIOD * 4;
+  }
+
   /**
-   * Builds one `CHIRP_PERIOD` (1024-sample) template of the `18.2–20.4 kHz` Hann-windowed
-   * upward-chirp ping (`512`-sample active burst + `512`-sample listen guard).
+   * Builds one period template (`1024` @ 44.1/48 kHz, `2048` @ 88.2/96 kHz) of the
+   * `18.2–20.4 kHz` Hann-windowed upward-chirp ping (50% active burst + 50% listen guard).
    */
   function buildLidPingWaveform(sampleRate = 48000, opts = {}) {
-    const period = opts.period || CHIRP_PERIOD;
-    const activeLen = Math.min(period, opts.activeLen || CHIRP_ACTIVE_LEN);
+    const period = opts.period || computePeriodForSampleRate(sampleRate);
+    const defaultActiveLen = Math.round((period * CHIRP_ACTIVE_LEN) / CHIRP_PERIOD);
+    const activeLen = Math.min(period, opts.activeLen || defaultActiveLen);
     const f0 = opts.f0 !== undefined ? opts.f0 : F_START_HZ;
     const f1 = opts.f1 !== undefined ? opts.f1 : F_END_HZ;
     const gain = opts.gain !== undefined ? opts.gain : 1.0;
@@ -161,30 +175,27 @@
   }
 
   /**
-   * Builds a left-channel `18.00–19.15 kHz` Tukey-tapered 1024-sample chirp reference for
-   * passively piggybacking when Cell 04 (`chirp`) owns the bus transmitter.
+   * Builds the exact Cell 04 (`StereoChirpGenerator`) left-channel `18.00–19.15 kHz`
+   * Hann-windowed cosine chirp (`384/1024` duty: `384` active inside `1024` @ 44.1/48 kHz,
+   * `768` active inside `2048` @ 88.2/96 kHz) for passively piggybacking on `'chirp'` TX.
    */
-  function buildChirpPiggybackWaveform(sampleRate = 48000) {
-    const period = CHIRP_PERIOD;
+  function buildChirpPiggybackWaveform(sampleRate = 48000, opts = {}) {
+    const period = opts.period || computePeriodForSampleRate(sampleRate);
+    const defaultActiveLen = Math.round((period * CHIRP_PIGGYBACK_ACTIVE_LEN) / CHIRP_PERIOD);
+    const activeLen = Math.min(period, opts.activeLen || defaultActiveLen);
+    const f0 = opts.f0 !== undefined ? opts.f0 : CHIRP_PIGGYBACK_F0_HZ;
+    const f1 = opts.f1 !== undefined ? opts.f1 : CHIRP_PIGGYBACK_F1_HZ;
+    const gain = opts.gain !== undefined ? opts.gain : 1.0;
     const out = new Float32Array(period);
     if (!Number.isFinite(sampleRate) || sampleRate < MIN_ULTRASONIC_SR) return out;
-    const f0 = 18000;
-    const f1 = 19150;
-    const durSec = period / sampleRate;
-    const df = f1 - f0;
-    const alpha = 0.25;
-    const denom = period - 1;
-    for (let n = 0; n < period; n++) {
-      const u = n / denom;
-      let win = 1;
-      if (u < alpha * 0.5) {
-        win = 0.5 * (1 - Math.cos((2 * Math.PI * u) / alpha));
-      } else if (u > 1 - alpha * 0.5) {
-        win = 0.5 * (1 - Math.cos((2 * Math.PI * (1 - u)) / alpha));
-      }
+    const durSec = activeLen / sampleRate;
+    const sweepRate = (f1 - f0) / durSec;
+    const denom = Math.max(1, activeLen - 1);
+    for (let n = 0; n < activeLen; n++) {
       const t = n / sampleRate;
-      const phase = 2 * Math.PI * (f0 * t + (0.5 * df * t * t) / durSec);
-      out[n] = win * Math.sin(phase);
+      const win = 0.5 * (1 - Math.cos((2 * Math.PI * n) / denom));
+      const phase = 2 * Math.PI * (f0 * t + 0.5 * sweepRate * t * t);
+      out[n] = gain * win * Math.cos(phase);
     }
     return out;
   }
@@ -489,7 +500,7 @@
   class LidSonarEstimator {
     constructor(opts = {}) {
       this.sampleRate = opts.sampleRate || 48000;
-      this.period = CHIRP_PERIOD;
+      this.period = computePeriodForSampleRate(this.sampleRate);
       this.activeTxMode = opts.txMode === 'chirp' ? 'chirp' : 'lid-ping';
       this.calibration =
         opts.calibration instanceof LidCalibration
@@ -497,29 +508,36 @@
           : new LidCalibration(opts.calibration || null);
       this.kalman = new LidAngleKalman(opts.kalman || {});
 
-      this._stageBuf = new Float32Array(this.period);
-      this._stageFill = 0;
-
       // Smoothed acoustic metrics for rock-solid calibration snapshots
       this._emaEchoGainDb = null;
       this._emaPeakLagMs = null;
       this._emaRefIndex = null;
       this._lastEstimate = null;
 
-      // Reusable FFT scratch buffers (zero per-frame allocations)
-      this._rRe = new Float64Array(this.period);
-      this._rIm = new Float64Array(this.period);
-      this._hRe = new Float64Array(this.period);
-      this._hIm = new Float64Array(this.period);
-      this._tRe = new Float64Array(this.period);
-      this._tIm = new Float64Array(this.period);
-      this._eRe = new Float64Array(this.period);
-      this._eIm = new Float64Array(this.period);
-
+      this._allocateBuffers(this.period);
       this._buildFilterTables(this.sampleRate, this.activeTxMode);
     }
 
+    _allocateBuffers(period) {
+      this.period = period;
+      this._stageBuf = new Float32Array(period);
+      this._stageFill = 0;
+      // Reusable FFT scratch buffers (zero per-frame allocations)
+      this._rRe = new Float64Array(period);
+      this._rIm = new Float64Array(period);
+      this._hRe = new Float64Array(period);
+      this._hIm = new Float64Array(period);
+      this._tRe = new Float64Array(period);
+      this._tIm = new Float64Array(period);
+      this._eRe = new Float64Array(period);
+      this._eIm = new Float64Array(period);
+    }
+
     _buildFilterTables(sampleRate, txMode) {
+      const nextPeriod = computePeriodForSampleRate(sampleRate);
+      if (nextPeriod !== this.period || !this._stageBuf || this._stageBuf.length !== nextPeriod) {
+        this._allocateBuffers(nextPeriod);
+      }
       const N = this.period;
       this.sampleRate = sampleRate;
       this.activeTxMode = txMode === 'chirp' ? 'chirp' : 'lid-ping';
@@ -536,16 +554,17 @@
 
       const ref =
         this.activeTxMode === 'chirp'
-          ? buildChirpPiggybackWaveform(sampleRate)
-          : buildLidPingWaveform(sampleRate, { gain: 1.0 });
+          ? buildChirpPiggybackWaveform(sampleRate, { period: N, gain: 1.0 })
+          : buildLidPingWaveform(sampleRate, { period: N, gain: 1.0 });
 
       const txRe = new Float64Array(N);
       const txIm = new Float64Array(N);
       for (let i = 0; i < N; i++) txRe[i] = ref[i];
       fftRadix2(txRe, txIm, false);
 
-      const fLo = this.activeTxMode === 'chirp' ? 17800 : 17900;
-      const fHi = this.activeTxMode === 'chirp' ? 19350 : 20700;
+      const isChirpPiggyback = this.activeTxMode === 'chirp';
+      const fLo = isChirpPiggyback ? 17650 : 17900;
+      const fHi = isChirpPiggyback ? 19300 : 20700;
       const nyqBin = (N >> 1) - 1;
       const bLo = clamp(Math.floor((fLo * N) / sampleRate), 2, nyqBin - 4);
       const bHi = clamp(Math.ceil((fHi * N) / sampleRate), bLo + 4, nyqBin);
@@ -557,9 +576,11 @@
         const p = txRe[b] * txRe[b] + txIm[b] * txIm[b];
         if (p > maxPow) maxPow = p;
       }
-      const reg = Math.max(1e-12, maxPow * 0.03);
+      // Narrower 1.15 kHz Cell 04 left chirp uses lighter Wiener regularization & taper
+      // to preserve sharp sub-millisecond early-bounce separation while staying below 19.35 kHz R band.
+      const reg = Math.max(1e-12, maxPow * (isChirpPiggyback ? 0.006 : 0.03));
       const span = Math.max(1, bHi - bLo);
-      const tukeyAlpha = 0.35;
+      const tukeyAlpha = isChirpPiggyback ? 0.2 : 0.35;
       let psf0 = 0;
 
       for (let b = bLo; b <= bHi; b++) {
@@ -610,7 +631,8 @@
       while (offset < samples.length) {
         const take = Math.min(this.period - this._stageFill, samples.length - offset);
         for (let i = 0; i < take; i++) {
-          this._stageBuf[this._stageFill + i] = samples[offset + i];
+          const s = samples[offset + i];
+          this._stageBuf[this._stageFill + i] = Number.isFinite(s) ? s : 0;
         }
         this._stageFill += take;
         offset += take;
@@ -623,8 +645,8 @@
     }
 
     /**
-     * Analyzes one exact `1024`-sample frame via passband Wiener deconvolution +
-     * sub-sample direct-path CLEAN subtraction.
+     * Analyzes one exact period-length frame (`1024` @ 44.1/48 kHz, `2048` @ 88.2/96 kHz)
+     * via passband Wiener deconvolution + sub-sample direct-path CLEAN subtraction.
      */
     processFrame(frame, sampleRate = this.sampleRate, txMode = this.activeTxMode) {
       const mode = txMode === 'chirp' ? 'chirp' : 'lid-ping';
@@ -651,8 +673,10 @@
       const N = this.period;
       const rRe = this._rRe;
       const rIm = this._rIm;
+      const frameLen = frame ? frame.length : 0;
       for (let i = 0; i < N; i++) {
-        rRe[i] = frame[i] || 0;
+        const v = i < frameLen ? frame[i] : 0;
+        rRe[i] = Number.isFinite(v) ? v : 0;
         rIm[i] = 0;
       }
       fftRadix2(rRe, rIm, false);
@@ -887,11 +911,11 @@
       opts.echoRatio !== undefined ? opts.echoRatio : Math.pow(10, defaultEchoDb / 20);
     const echoLagMs = opts.echoLagMs !== undefined ? opts.echoLagMs : 0.40 + 1.42 * u;
 
-    const N = CHIRP_PERIOD;
+    const N = computePeriodForSampleRate(sampleRate);
     const baseTx =
       txMode === 'chirp'
-        ? buildChirpPiggybackWaveform(sampleRate)
-        : buildLidPingWaveform(sampleRate, { gain: CHIRP_GAIN });
+        ? buildChirpPiggybackWaveform(sampleRate, { period: N, gain: CHIRP_PIGGYBACK_TX_GAIN })
+        : buildLidPingWaveform(sampleRate, { period: N, gain: CHIRP_GAIN });
 
     const txRe = new Float64Array(N);
     const txIm = new Float64Array(N);
@@ -1256,6 +1280,9 @@
     let hidReconnectTimer = null;
     let hidReconnectTried = false;
     let hidWantedOnReopen = false;
+    let hidEpoch = 0;
+    let hidProbing = false;
+    let hidUserDisconnected = false;
 
     let busState = { state: 'idle', sampleRate: 48000, txMode: 'off' };
     let sonarSignalPresent = false;
@@ -1404,6 +1431,8 @@
 
     const calNote = h('span', {
       className: 'la-cal-note',
+      role: 'status',
+      'aria-live': 'polite',
       textContent: calibration.isCalibrated ? 'Calibrated · 18.2–20.4k' : '18.2–20.4 kHz screen bounce'
     });
 
@@ -1437,9 +1466,16 @@
       }
     }
 
-    function refreshDefaultNote() {
+    function refreshDefaultNote(force = false) {
+      if (!force && noteTimer) return;
       if (hidLive) {
         calNote.textContent = 'Apple IOHID 0x8104 · 0.1°';
+      } else if (
+        busState.state === 'listening' &&
+        (busState.txMode === 'lid-ping' || busState.txMode === 'chirp') &&
+        busState.sampleRate < MIN_ULTRASONIC_SR
+      ) {
+        calNote.textContent = 'Needs >= 40 kHz mic (disable BT HFP)';
       } else if (busState.state === 'listening' && busState.txMode === 'chirp') {
         calNote.textContent = 'Piggybacking Cell 04 chirp';
       } else if (busState.state === 'listening' && busState.txMode === 'lid-ping') {
@@ -1697,6 +1733,8 @@
     // 5. Mode B — Local Hardware IOHIDManager Bridge (`127.0.0.1:8791`)
     // -------------------------------------------------------------------------
     function closeHidBridge(optsClose = {}) {
+      hidEpoch++;
+      hidProbing = false;
       if (hidProbeAbort) {
         try {
           hidProbeAbort.abort();
@@ -1723,7 +1761,7 @@
           (busState.txMode === 'lid-ping' || busState.txMode === 'chirp');
         sourceMode = sonarOn ? 'sonar' : 'idle';
       }
-      refreshDefaultNote();
+      refreshDefaultNote(true);
       updateVisuals();
     }
 
@@ -1733,11 +1771,15 @@
         hidLive = true;
         hidAvailableReason = '';
         hidReconnectTried = false;
+        if (noteTimer) {
+          clearTimeout(noteTimer);
+          noteTimer = null;
+        }
         if (!isDragging) {
           sourceMode = 'hid';
           currentAngle = clamp(data.angleDeg, ANGLE_MIN_UI, ANGLE_MAX_UI);
         }
-        refreshDefaultNote();
+        refreshDefaultNote(true);
         updateVisuals();
       } else {
         hidAvailableReason = data.reason || 'LidAngleSensor unavailable';
@@ -1747,8 +1789,9 @@
       }
     }
 
-    function connectHidEvents() {
-      if (destroyed || typeof EventSource === 'undefined') return;
+    function connectHidEvents(expectedEpoch) {
+      const myEpoch = expectedEpoch !== undefined ? expectedEpoch : hidEpoch;
+      if (destroyed || myEpoch !== hidEpoch || typeof EventSource === 'undefined') return;
       if (hidEventSource) {
         try {
           hidEventSource.close();
@@ -1760,6 +1803,7 @@
         hidEventSource = es;
 
         const onAngleData = (ev) => {
+          if (destroyed || myEpoch !== hidEpoch || hidEventSource !== es) return;
           try {
             applyHidPayload(JSON.parse(ev.data));
           } catch (_) {}
@@ -1768,7 +1812,7 @@
         es.onmessage = onAngleData;
 
         es.onerror = () => {
-          if (hidEventSource !== es) return;
+          if (hidEventSource !== es || myEpoch !== hidEpoch) return;
           try {
             es.close();
           } catch (_) {}
@@ -1783,10 +1827,11 @@
           }
           updateVisuals();
           // Single bounded retry to avoid noisy reconnect loops
-          if (!hidReconnectTried && !destroyed) {
+          if (!hidReconnectTried && !destroyed && myEpoch === hidEpoch) {
             hidReconnectTried = true;
             hidReconnectTimer = setTimeout(() => {
               hidReconnectTimer = null;
+              if (destroyed || myEpoch !== hidEpoch) return;
               probeHidBridge({ userInitiated: false });
             }, 2500);
           }
@@ -1800,6 +1845,12 @@
         if (userInitiated) setNote('Run: node cells/left-grille/lid-bridge.mjs', 3600);
         return false;
       }
+      if (hidReconnectTimer) {
+        clearTimeout(hidReconnectTimer);
+        hidReconnectTimer = null;
+      }
+      const myHidEpoch = ++hidEpoch;
+      hidProbing = true;
       if (hidProbeAbort) {
         try {
           hidProbeAbort.abort();
@@ -1818,13 +1869,14 @@
         });
         if (timer) clearTimeout(timer);
         if (hidProbeAbort === ac) hidProbeAbort = null;
+        if (destroyed || myHidEpoch !== hidEpoch) return false;
         if (!res || !res.ok) throw new Error('bridge_status');
         const data = await res.json();
-        if (destroyed) return false;
+        if (destroyed || myHidEpoch !== hidEpoch) return false;
 
         if (data && data.available && Number.isFinite(data.angleDeg)) {
           applyHidPayload(data);
-          connectHidEvents();
+          connectHidEvents(myHidEpoch);
           return true;
         }
         hidAvailableReason = (data && data.reason) || 'HID sensor unavailable';
@@ -1835,20 +1887,30 @@
       } catch (_) {
         if (timer) clearTimeout(timer);
         if (hidProbeAbort === ac) hidProbeAbort = null;
-        if (userInitiated && !destroyed) {
+        if (userInitiated && !destroyed && myHidEpoch === hidEpoch) {
           setNote('Start: node cells/left-grille/lid-bridge.mjs', 3800);
         }
         return false;
+      } finally {
+        if (myHidEpoch === hidEpoch) {
+          hidProbing = false;
+        }
       }
     }
 
     function handleHidButtonClick() {
+      if (hidReconnectTimer) {
+        clearTimeout(hidReconnectTimer);
+        hidReconnectTimer = null;
+      }
       if (hidLive || hidEventSource) {
+        hidUserDisconnected = true;
         hidWantedOnReopen = false;
         closeHidBridge();
         setNote('HID bridge disconnected', 2000);
         return;
       }
+      hidUserDisconnected = false;
       hidReconnectTried = false;
       probeHidBridge({ userInitiated: true });
     }
@@ -1965,26 +2027,41 @@
       dragPointerId = null;
     }
 
+    function onSecondaryOpen() {
+      if (destroyed || opts.autoProbeHid === false) return;
+      if (hidUserDisconnected || hidLive || hidEventSource || hidProbing) return;
+      hidWantedOnReopen = false;
+      probeHidBridge({ userInitiated: false });
+    }
+
     function onHashReopen() {
-      if (destroyed || !hidWantedOnReopen) return;
-      if (typeof location !== 'undefined' && location.hash === '#left-grille') {
-        hidWantedOnReopen = false;
-        probeHidBridge({ userInitiated: false });
+      if (destroyed) return;
+      if (typeof location !== 'undefined' && location && location.hash === '#left-grille') {
+        onSecondaryOpen();
       }
     }
 
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+      window.addEventListener('lg-secondary-open', onSecondaryOpen);
       window.addEventListener('lg-secondary-close', onSecondaryClose);
       window.addEventListener('pagehide', onSecondaryClose);
       window.addEventListener('hashchange', onHashReopen);
     }
 
     updateCalButtons();
-    refreshDefaultNote();
+    refreshDefaultNote(true);
     updateVisuals();
 
-    // Quiet mount probe for optional local IOHIDManager bridge (600 ms timeout)
-    if (opts.autoProbeHid !== false) {
+    // Only probe local IOHIDManager bridge on mount when Cell 05 secondary view is already open
+    // (never eagerly on hidden main grid load). Otherwise `lg-secondary-open` / `hashchange` probes on open.
+    const shouldProbeOnMount =
+      (global.LeftGrilleLab &&
+        typeof global.LeftGrilleLab.isSecondaryOpen === 'function' &&
+        global.LeftGrilleLab.isSecondaryOpen()) ||
+      (typeof location !== 'undefined' && location && location.hash === '#left-grille') ||
+      (cellEl && typeof cellEl.closest === 'function' && !cellEl.closest('[hidden]'));
+
+    if (opts.autoProbeHid !== false && shouldProbeOnMount) {
       probeHidBridge({ userInitiated: false });
     }
 
@@ -1999,6 +2076,7 @@
         if (unsubAudio) unsubAudio();
         if (unsubState) unsubState();
         if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+          window.removeEventListener('lg-secondary-open', onSecondaryOpen);
           window.removeEventListener('lg-secondary-close', onSecondaryClose);
           window.removeEventListener('pagehide', onSecondaryClose);
           window.removeEventListener('hashchange', onHashReopen);
@@ -2041,6 +2119,7 @@
     DEFAULT_LOW_ANGLE,
     DEFAULT_OPEN_REF_INDEX,
     DEFAULT_LOW_REF_INDEX,
+    computePeriodForSampleRate,
     fftRadix2,
     buildLidPingWaveform,
     buildChirpPiggybackWaveform,

@@ -58,6 +58,33 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  function finiteOrZero(v) {
+    return Number.isFinite(v) ? v : 0;
+  }
+
+  function detectIosSafariEnv(rootObj) {
+    const r = (rootObj && rootObj.window) || rootObj || root || {};
+    const nav = r.navigator || (root && root.navigator) || {};
+    const ua = String(nav.userAgent || '');
+    if (/iPhone|iPad|iPod/i.test(ua)) return true;
+    if (nav.platform === 'MacIntel' && Number(nav.maxTouchPoints) > 1) return true;
+    const dme = r.DeviceMotionEvent || (root && root.DeviceMotionEvent);
+    if (dme && typeof dme.requestPermission === 'function') {
+      return true;
+    }
+    return false;
+  }
+
+  function prefersReducedMotion(rootObj) {
+    try {
+      const r = (rootObj && rootObj.window) || rootObj || root || {};
+      const mm = r.matchMedia || (root && root.matchMedia);
+      return Boolean(typeof mm === 'function' && mm.call(r, '(prefers-reduced-motion: reduce)').matches);
+    } catch (_e) {
+      return false;
+    }
+  }
+
   /**
    * Wraps any angle in degrees into [0, 360).
    */
@@ -117,10 +144,10 @@
   function projectDeskSpinRate(rotationRate, gUnit) {
     const r = rotationRate || {};
     const g = gUnit || { x: 0, y: 0, z: 1 };
-    const wx = Number.isFinite(r.beta) ? r.beta : 0;
-    const wy = Number.isFinite(r.gamma) ? r.gamma : 0;
-    const wz = Number.isFinite(r.alpha) ? r.alpha : 0;
-    return wx * g.x + wy * g.y + wz * g.z;
+    const wx = finiteOrZero(r.beta);
+    const wy = finiteOrZero(r.gamma);
+    const wz = finiteOrZero(r.alpha);
+    return wx * finiteOrZero(g.x) + wy * finiteOrZero(g.y) + wz * finiteOrZero(g.z);
   }
 
   /**
@@ -142,6 +169,7 @@
       ? clamp(cfg.compassBlend, 0, 0.25)
       : 0.025;
     this.enableBiasEstimation = cfg.enableBiasEstimation !== false;
+    this.iosGravity = typeof cfg.iosGravity === 'boolean' ? cfg.iosGravity : null;
 
     this.initialValue = Number.isFinite(cfg.initialValue)
       ? clamp(cfg.initialValue, 0, 100)
@@ -224,8 +252,12 @@
 
   RotaryDialTracker.prototype._updateGravity = function (sample) {
     const s = sample || {};
-    const accG = s.accelerationIncludingGravity || s;
-    const accLin = s.acceleration || s;
+    const accG = (s.accelerationIncludingGravity && typeof s.accelerationIncludingGravity === 'object')
+      ? s.accelerationIncludingGravity
+      : s;
+    const accLin = (s.acceleration && typeof s.acceleration === 'object')
+      ? s.acceleration
+      : null;
 
     const hasG = Number.isFinite(accG.gx) || Number.isFinite(accG.gy) || Number.isFinite(accG.gz) ||
       Number.isFinite(accG.x) || Number.isFinite(accG.y) || Number.isFinite(accG.z);
@@ -238,9 +270,21 @@
     const rawGy = Number.isFinite(accG.gy) ? accG.gy : (Number.isFinite(accG.y) ? accG.y : 0);
     const rawGz = Number.isFinite(accG.gz) ? accG.gz : (Number.isFinite(accG.z) ? accG.z : 0);
 
-    const ax = Number.isFinite(accLin.ax) ? accLin.ax : 0;
-    const ay = Number.isFinite(accLin.ay) ? accLin.ay : 0;
-    const az = Number.isFinite(accLin.az) ? accLin.az : 0;
+    const ax = Number.isFinite(s.ax)
+      ? s.ax
+      : accLin
+        ? (Number.isFinite(accLin.ax) ? accLin.ax : (Number.isFinite(accLin.x) ? accLin.x : 0))
+        : 0;
+    const ay = Number.isFinite(s.ay)
+      ? s.ay
+      : accLin
+        ? (Number.isFinite(accLin.ay) ? accLin.ay : (Number.isFinite(accLin.y) ? accLin.y : 0))
+        : 0;
+    const az = Number.isFinite(s.az)
+      ? s.az
+      : accLin
+        ? (Number.isFinite(accLin.az) ? accLin.az : (Number.isFinite(accLin.z) ? accLin.z : 0))
+        : 0;
 
     const gx = rawGx - ax;
     const gy = rawGy - ay;
@@ -270,7 +314,12 @@
     }
 
     const unit = normalizeGravityVector(this.gx, this.gy, this.gz, 9.81);
-    this.faceUp = unit.z >= 0;
+    const isIos = typeof s.iosGravity === 'boolean'
+      ? s.iosGravity
+      : typeof this.iosGravity === 'boolean'
+        ? this.iosGravity
+        : (detectIosSafariEnv(root) || (Number.isFinite(s.webkitCompassHeading) && unit.z < 0));
+    this.faceUp = isIos ? unit.z <= 0 : unit.z >= 0;
     this.flatness = Math.abs(unit.z);
     this.tiltDeg = Math.acos(clamp(this.flatness, 0, 1)) * (180 / Math.PI);
     return unit;
@@ -351,12 +400,12 @@
 
     const gUnit = this._updateGravity(s);
     const rot = s.rotationRate || s;
-    const wx = Number.isFinite(rot.beta) ? rot.beta : 0;
-    const wy = Number.isFinite(rot.gamma) ? rot.gamma : 0;
-    const wz = Number.isFinite(rot.alpha) ? rot.alpha : 0;
+    const wx = finiteOrZero(rot.beta);
+    const wy = finiteOrZero(rot.gamma);
+    const wz = finiteOrZero(rot.alpha);
     const totalRotMag = Math.hypot(wx, wy, wz);
 
-    const omegaProj = projectDeskSpinRate({ alpha: wz, beta: wx, gamma: wz === rot.alpha ? wy : 0 }, gUnit);
+    const omegaProj = projectDeskSpinRate({ alpha: wz, beta: wx, gamma: wy }, gUnit);
 
     // Stationary zero-velocity bias tracker & hard < 0.8 deg/s deadband
     const residualFromBias = omegaProj - this.gyroBias;
@@ -738,9 +787,10 @@
     return {
       playTick: function (isMajor) {
         try {
-          const Ctx = root.AudioContext || root.webkitAudioContext;
+          const win = (root && root.window) || root || {};
+          const Ctx = win.AudioContext || win.webkitAudioContext || root.AudioContext || root.webkitAudioContext;
           if (!Ctx) return;
-          if (!audioCtx) audioCtx = new Ctx();
+          if (!audioCtx || audioCtx.state === 'closed') audioCtx = new Ctx();
           if (audioCtx.state === 'suspended') {
             audioCtx.resume().catch(function () {});
           }
@@ -782,7 +832,8 @@
     cellEl.setAttribute('aria-label', '07 — iPhone Spinning Dial Control (Wi-Fi / WSS / BLE Rotary Encoder)');
     clearChildren(cellEl);
 
-    const NS = root.MotionGrid || {};
+    const win = (root && root.window) || root || {};
+    const NS = (win && win.MotionGrid) || (root && root.MotionGrid) || {};
     const Transport = NS.Transport;
     const QR = NS.QR;
 
@@ -800,18 +851,23 @@
 
     let customHost = safeStorageGet('localStorage', STORAGE_HOST_KEY);
     let bridgeConfig = null;
+    let bridgeProbeAbort = null;
     let link = null;
-    let linkState = 'connecting';
+    let linkState = 'standby';
     let linkTransport = 'mqtt';
     let phoneConnected = false;
     let lastPhoneRxMs = 0;
+    let bleEpoch = 0;
+    let bleConnecting = false;
     let bleDevice = null;
     let bleChar = null;
+    let bleDisconnectListener = null;
     let bleConnected = false;
     let qrOpen = false;
     let inertiaRaf = 0;
     let simTimer = 0;
-    let heartbeatTimer = 0;
+    let heartbeatTimer = null;
+    let secondaryActive = false;
     let unmounted = false;
 
     // 1. Top Bezel Bar
@@ -1189,6 +1245,7 @@
       if (qrOpen) {
         closeQrOverlay(true);
       } else {
+        activateSecondarySession();
         qrOpen = true;
         qrBtn.setAttribute('aria-expanded', 'true');
         renderQrPopover();
@@ -1280,7 +1337,7 @@
       dragState = null;
       dialPad.classList.remove('is-dragging');
 
-      if (Math.abs(releaseVel) > 28) {
+      if (Math.abs(releaseVel) > 28 && !prefersReducedMotion(win)) {
         startInertialFlywheel( clamp(releaseVel, -1080, 1080) );
       } else {
         tracker.ingestDeltaAngle(0, 0.016);
@@ -1293,6 +1350,11 @@
 
     function startInertialFlywheel(initialVelDegPerSec) {
       stopInertia();
+      if (prefersReducedMotion(win)) {
+        tracker.ingestDeltaAngle(0, 0.016);
+        renderTelemetry();
+        return;
+      }
       let vel = initialVelDegPerSec;
       let lastTs = performance.now();
 
@@ -1462,9 +1524,11 @@
     }
 
     function connectTransport() {
-      if (!Transport || typeof Transport.createLink !== 'function') return;
+      const curNS = (win && win.MotionGrid) || (root && root.MotionGrid) || NS || {};
+      const curTransport = curNS.Transport || Transport;
+      if (!curTransport || typeof curTransport.createLink !== 'function') return;
       if (link) {
-        link.close();
+        try { link.close(); } catch (_e) {}
         link = null;
       }
       const hasBridge = Boolean(bridgeConfig && bridgeConfig.desktopWsUrl);
@@ -1473,7 +1537,8 @@
         : '';
       const httpBase = hasBridge ? bridgeConfig.desktopHttpBase : '';
 
-      link = Transport.createLink({
+      linkState = 'connecting';
+      link = curTransport.createLink({
         mode: hasBridge ? 'dual' : 'mqtt',
         sessionId: sessionId,
         role: 'desktop',
@@ -1492,16 +1557,22 @@
     }
 
     function probeLocalBridge() {
-      if (typeof root.fetch !== 'function') return;
-      const loc = root.location || {};
+      const fetchFn = (win && win.fetch) || (root && root.fetch);
+      if (typeof fetchFn !== 'function') return;
+      const loc = (win && win.location) || (root && root.location) || {};
       if (loc.protocol !== 'http:' && loc.protocol !== 'https:') return;
+      if (bridgeProbeAbort) {
+        try { bridgeProbeAbort.abort(); } catch (_e) {}
+        bridgeProbeAbort = null;
+      }
       const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      bridgeProbeAbort = ctrl;
       const tId = setTimeout(function () {
         if (ctrl) {
           try { ctrl.abort(); } catch (_e) {}
         }
       }, 900);
-      root.fetch(loc.origin + '/api/motion-config', {
+      fetchFn(loc.origin + '/api/motion-config', {
         method: 'GET',
         signal: ctrl ? ctrl.signal : undefined
       })
@@ -1510,12 +1581,14 @@
           return r && r.ok ? r.json() : null;
         })
         .then(function (cfg) {
-          if (unmounted || !cfg || !cfg.ok) return;
+          if (bridgeProbeAbort === ctrl) bridgeProbeAbort = null;
+          if (unmounted || !secondaryActive || !cfg || !cfg.ok) return;
           bridgeConfig = cfg;
           connectTransport();
           if (qrOpen) renderQrPopover();
         })
         .catch(function () {
+          if (bridgeProbeAbort === ctrl) bridgeProbeAbort = null;
           clearTimeout(tId);
         });
     }
@@ -1525,13 +1598,24 @@
     // =========================================================================
 
     function disconnectBle() {
+      bleEpoch += 1;
+      bleConnecting = false;
       if (bleChar) {
         try { bleChar.removeEventListener('characteristicvaluechanged', onBleValueChanged); } catch (_e) {}
+        if (typeof bleChar.stopNotifications === 'function') {
+          try { bleChar.stopNotifications(); } catch (_e) {}
+        }
         bleChar = null;
       }
-      if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
-        try { bleDevice.gatt.disconnect(); } catch (_e) {}
+      if (bleDevice) {
+        if (bleDisconnectListener && typeof bleDevice.removeEventListener === 'function') {
+          try { bleDevice.removeEventListener('gattserverdisconnected', bleDisconnectListener); } catch (_e) {}
+        }
+        if (bleDevice.gatt && bleDevice.gatt.connected) {
+          try { bleDevice.gatt.disconnect(); } catch (_e) {}
+        }
       }
+      bleDisconnectListener = null;
       bleDevice = null;
       bleConnected = false;
       bleBtn.setAttribute('aria-pressed', 'false');
@@ -1560,40 +1644,75 @@
     }
 
     async function handleBleClick() {
-      if (bleConnected) {
+      if (bleConnected || bleConnecting) {
         disconnectBle();
         renderTelemetry();
         return;
       }
-      const bt = root.navigator && root.navigator.bluetooth;
+      const nav = (win && win.navigator) || (root && root.navigator);
+      const bt = nav && nav.bluetooth;
       if (!bt || typeof bt.requestDevice !== 'function') {
         statusLabel.textContent = 'BLE N/A · USE QR';
         poseBadge.textContent = 'Web Bluetooth requires Chrome/Edge · Use [PAIR QR] on Safari';
         return;
       }
+      const myBleEpoch = ++bleEpoch;
+      bleConnecting = true;
+
+      function isBleStale(dev, listener) {
+        if (unmounted || myBleEpoch !== bleEpoch) {
+          if (dev) {
+            if (listener && typeof dev.removeEventListener === 'function') {
+              try { dev.removeEventListener('gattserverdisconnected', listener); } catch (_e) {}
+            }
+            if (dev.gatt && dev.gatt.connected) {
+              try { dev.gatt.disconnect(); } catch (_e) {}
+            }
+          }
+          return true;
+        }
+        return false;
+      }
+
       try {
         statusLabel.textContent = 'BLE PAIRING…';
         const device = await bt.requestDevice({
           acceptAllDevices: true,
           optionalServices: [BLE_UART_SERVICE, 0x1816, 0x180d, 'battery_service']
         });
-        if (!device || !device.gatt) return;
+        if (isBleStale(device, null) || !device || !device.gatt) {
+          bleConnecting = false;
+          return;
+        }
         bleDevice = device;
-        device.addEventListener('gattserverdisconnected', function () {
+        const onGattDisconnected = function () {
+          if (myBleEpoch !== bleEpoch) return;
           disconnectBle();
           renderTelemetry();
-        });
+        };
+        bleDisconnectListener = onGattDisconnected;
+        if (typeof device.addEventListener === 'function') {
+          device.addEventListener('gattserverdisconnected', onGattDisconnected);
+        }
+
         const server = await device.gatt.connect();
+        if (isBleStale(device, onGattDisconnected) || !server) return;
+
         let boundChar = null;
 
         try {
           const uartSvc = await server.getPrimaryService(BLE_UART_SERVICE);
+          if (isBleStale(device, onGattDisconnected)) return;
           boundChar = await uartSvc.getCharacteristic(BLE_UART_TX_CHAR);
+          if (isBleStale(device, onGattDisconnected)) return;
         } catch (_e) {
+          if (isBleStale(device, onGattDisconnected)) return;
           const services = await server.getPrimaryServices();
+          if (isBleStale(device, onGattDisconnected)) return;
           for (let s = 0; s < services.length && !boundChar; s++) {
             try {
               const chars = await services[s].getCharacteristics();
+              if (isBleStale(device, onGattDisconnected)) return;
               for (let c = 0; c < chars.length; c++) {
                 if (chars[c].properties && chars[c].properties.notify) {
                   boundChar = chars[c];
@@ -1604,16 +1723,28 @@
           }
         }
 
+        if (isBleStale(device, onGattDisconnected)) return;
+
         if (boundChar) {
-          bleChar = boundChar;
           await boundChar.startNotifications();
-          boundChar.addEventListener('characteristicvaluechanged', onBleValueChanged);
+          if (isBleStale(device, onGattDisconnected)) {
+            if (typeof boundChar.stopNotifications === 'function') {
+              try { boundChar.stopNotifications(); } catch (_e) {}
+            }
+            return;
+          }
+          bleChar = boundChar;
+          if (typeof boundChar.addEventListener === 'function') {
+            boundChar.addEventListener('characteristicvaluechanged', onBleValueChanged);
+          }
         }
+        bleConnecting = false;
         bleConnected = true;
         bleBtn.setAttribute('aria-pressed', 'true');
         bleBtn.textContent = 'BLE ON';
         renderTelemetry();
       } catch (err) {
+        if (unmounted || myBleEpoch !== bleEpoch) return;
         disconnectBle();
         const msg = String((err && err.message) || err || '');
         if (!/cancelled|canceled|user/i.test(msg)) {
@@ -1624,11 +1755,98 @@
       }
     }
 
-    // Lifecycle & Secondary Grid Close Handling
+    // Lifecycle & Secondary Grid Open / Close Handling (Zero Main-Grid Leak)
+    function isSecondaryVisible() {
+      const lab = (win && win.LeftGrilleLab) || (root && root.LeftGrilleLab);
+      const loc = (win && win.location) || (root && root.location);
+      if (lab && typeof lab.isSecondaryOpen === 'function') {
+        if (lab.isSecondaryOpen()) return true;
+        if (loc && loc.hash === '#left-grille') return true;
+        return false;
+      }
+      if (loc && loc.hash === '#left-grille') {
+        return true;
+      }
+      if (cellEl && typeof cellEl.closest === 'function' && cellEl.closest('[hidden]')) {
+        return false;
+      }
+      let cur = cellEl;
+      while (cur) {
+        if (
+          cur.hidden === true ||
+          (typeof cur.getAttribute === 'function' &&
+            cur.getAttribute('hidden') !== null &&
+            cur.getAttribute('hidden') !== 'false') ||
+          (typeof cur.hasAttribute === 'function' && cur.hasAttribute('hidden'))
+        ) {
+          return false;
+        }
+        cur = cur.parentNode || cur.parentElement || null;
+      }
+      if (typeof document !== 'undefined' && document && typeof document.getElementById === 'function') {
+        const page = document.getElementById('left-grille-page');
+        if (
+          page &&
+          (page.hidden === true ||
+            (typeof page.getAttribute === 'function' &&
+              page.getAttribute('hidden') !== null &&
+              page.getAttribute('hidden') !== 'false') ||
+            (typeof page.hasAttribute === 'function' && page.hasAttribute('hidden')))
+        ) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function activateSecondarySession() {
+      if (unmounted) return;
+      secondaryActive = true;
+      if (!heartbeatTimer) {
+        heartbeatTimer = setInterval(function () {
+          if (phoneConnected && Date.now() - lastPhoneRxMs > 7000) {
+            phoneConnected = false;
+            renderTelemetry();
+          }
+        }, 1500);
+      }
+      if (!link) {
+        connectTransport();
+        probeLocalBridge();
+      }
+    }
+
+    function onSecondaryOpen() {
+      activateSecondarySession();
+    }
+
+    function onHashOrPopState() {
+      if (isSecondaryVisible()) {
+        activateSecondarySession();
+      }
+    }
+
     function onSecondaryClose() {
+      secondaryActive = false;
       stopInertia();
       closeQrOverlay(false);
-      if (bleConnected) disconnectBle();
+      if (bridgeProbeAbort) {
+        try { bridgeProbeAbort.abort(); } catch (_e) {}
+        bridgeProbeAbort = null;
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      if (link) {
+        try { link.close(); } catch (_e) {}
+        link = null;
+      }
+      linkState = 'standby';
+      phoneConnected = false;
+      disconnectBle();
+      clickSynth.close();
+      renderTelemetry();
     }
 
     function onKeyDownDoc(e) {
@@ -1639,38 +1857,53 @@
       }
     }
 
-    root.addEventListener('lg-secondary-close', onSecondaryClose);
-    document.addEventListener('keydown', onKeyDownDoc, true);
+    function attachWindowEvents(target) {
+      if (!target || typeof target.addEventListener !== 'function') return;
+      target.addEventListener('lg-secondary-open', onSecondaryOpen);
+      target.addEventListener('lg-secondary-close', onSecondaryClose);
+      target.addEventListener('hashchange', onHashOrPopState);
+      target.addEventListener('popstate', onHashOrPopState);
+    }
 
-    heartbeatTimer = setInterval(function () {
-      if (phoneConnected && Date.now() - lastPhoneRxMs > 7000) {
-        phoneConnected = false;
-        renderTelemetry();
-      }
-    }, 1500);
+    function detachWindowEvents(target) {
+      if (!target || typeof target.removeEventListener !== 'function') return;
+      target.removeEventListener('lg-secondary-open', onSecondaryOpen);
+      target.removeEventListener('lg-secondary-close', onSecondaryClose);
+      target.removeEventListener('hashchange', onHashOrPopState);
+      target.removeEventListener('popstate', onHashOrPopState);
+    }
 
-    connectTransport();
-    probeLocalBridge();
+    attachWindowEvents(root);
+    if (win && win !== root) {
+      attachWindowEvents(win);
+    }
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('keydown', onKeyDownDoc, true);
+    }
+
+    if (isSecondaryVisible()) {
+      activateSecondarySession();
+    }
     renderTelemetry();
 
     cellEl._idUnmount = function () {
       unmounted = true;
-      stopInertia();
-      clearInterval(heartbeatTimer);
-      if (link) {
-        link.close();
-        link = null;
+      onSecondaryClose();
+      detachWindowEvents(root);
+      if (win && win !== root) {
+        detachWindowEvents(win);
       }
-      disconnectBle();
-      clickSynth.close();
-      root.removeEventListener('lg-secondary-close', onSecondaryClose);
-      document.removeEventListener('keydown', onKeyDownDoc, true);
+      if (typeof document.removeEventListener === 'function') {
+        document.removeEventListener('keydown', onKeyDownDoc, true);
+      }
     };
 
     return {
       tracker: tracker,
       zero: handleZero,
       runSyntheticSpin: runSyntheticSpin,
+      handleBleClick: handleBleClick,
+      activateSecondarySession: activateSecondarySession,
       unmount: cellEl._idUnmount
     };
   }

@@ -120,8 +120,8 @@ function createMockDomEnv(opts = {}) {
     addEventListener(ev, fn) {
       (docListeners[ev] = docListeners[ev] || []).push(fn);
     },
-    emitDocEvent(ev) {
-      (docListeners[ev] || []).forEach((fn) => fn());
+    emitDocEvent(ev, payload) {
+      (docListeners[ev] || []).forEach((fn) => fn(payload));
     }
   };
 
@@ -832,4 +832,422 @@ test('Reverse script-order resilience: sibling _pending + ui.js running BEFORE s
   vm.runInNewContext(sharedBusCode, win);
   assert.deepEqual(mounted5, { id: 'lg-sec-cell-5', hasBus: true });
   assert.equal(doc.getElementById('lg-sec-cell-5').getAttribute('aria-label'), 'Grille Breath Puff');
+});
+
+test('Regression #6A: stopAll() -> requestArm("lid-ping") within 20 ms ScriptProcessor fade never invokes new TX mode on dying context', async () => {
+  const contexts = [];
+  class MockFadeAudioContext {
+    constructor() {
+      this.sampleRate = 48000;
+      this.state = 'running';
+      this.destination = { maxChannelCount: 2 };
+      this.scriptNode = null;
+      contexts.push(this);
+    }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
+    createScriptProcessor() {
+      const node = { connect() {}, disconnect() {}, onaudioprocess: null };
+      this.scriptNode = node;
+      return node;
+    }
+    async close() {
+      this.state = 'closed';
+    }
+  }
+
+  const bus = new SharedAcousticBus({
+    root: {
+      document: { hidden: false },
+      AudioContext: MockFadeAudioContext,
+      navigator: {
+        mediaDevices: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop() {} }],
+            getAudioTracks: () => [{ label: 'Built-in Microphone', stop() {} }]
+          }),
+          enumerateDevices: async () => []
+        }
+      }
+    }
+  });
+
+  let chirpCalls = 0;
+  let lidPingCalls = 0;
+  const lidPingOffsets = [];
+
+  bus.registerTxGenerator('chirp', (l, r, _sr, sampleOffset) => {
+    assert.equal(sampleOffset % BLOCK_SIZE, 0);
+    chirpCalls++;
+    l.fill(0.5);
+    r.fill(-0.5);
+  });
+
+  bus.registerTxGenerator('lid-ping', (l, r, _sr, sampleOffset) => {
+    lidPingCalls++;
+    lidPingOffsets.push(sampleOffset);
+    l.fill(0.35);
+    r.fill(0.35);
+  });
+
+  function makeAudioProcessEvent() {
+    const outL = new Float32Array(BLOCK_SIZE);
+    const outR = new Float32Array(BLOCK_SIZE);
+    const inCh = new Float32Array(BLOCK_SIZE);
+    return {
+      outL,
+      outR,
+      ev: {
+        outputBuffer: {
+          numberOfChannels: 2,
+          getChannelData: (ch) => (ch === 0 ? outL : outR)
+        },
+        inputBuffer: {
+          getChannelData: () => inCh
+        }
+      }
+    };
+  }
+
+  assert.equal(await bus.requestArm('chirp'), true);
+  assert.equal(contexts.length, 1);
+  const dyingCtx = contexts[0];
+
+  // Pump 2 blocks on session #1 so 'chirp' reaches full steady-state phase (1.0)
+  dyingCtx.scriptNode.onaudioprocess(makeAudioProcessEvent().ev);
+  dyingCtx.scriptNode.onaudioprocess(makeAudioProcessEvent().ev);
+  assert.equal(chirpCalls, 2);
+
+  // Initiate 20 ms ScriptProcessor fade-out WITHOUT awaiting completion yet
+  const stopPromise = bus.stopAll({ dispatchClose: false });
+  const chirpCallsAfterSnapshot = chirpCalls;
+
+  // Immediately re-arm with 'lid-ping' inside the 20 ms window!
+  const okRearm = await bus.requestArm('lid-ping');
+  assert.equal(okRearm, true);
+  assert.equal(contexts.length, 2);
+  const liveCtx = contexts[1];
+  assert.equal(bus.getTxMode(), 'lid-ping');
+  assert.equal(lidPingCalls, 0);
+
+  // Fire callbacks on the DYING ScriptProcessorNode during the 20 ms ramp-down window
+  const fade1 = makeAudioProcessEvent();
+  dyingCtx.scriptNode.onaudioprocess(fade1.ev);
+  const fade2 = makeAudioProcessEvent();
+  dyingCtx.scriptNode.onaudioprocess(fade2.ev);
+
+  assert.equal(lidPingCalls, 0, 'Dying context must NEVER invoke newly armed lid-ping generator');
+  assert.equal(
+    chirpCalls,
+    chirpCallsAfterSnapshot,
+    'Dying context must drain pre-snapshotted fade samples without re-calling generators'
+  );
+  assert.equal(bus._txSampleOffset, 0, 'Dying context must never advance live _txSampleOffset');
+  assert.equal(bus._activeTxPhase, 0, 'Dying context must never advance live _activeTxPhase');
+  assert.ok(fade1.outL[0] > 0.4, 'Dying context must smoothly ramp down prior chirp Left');
+  assert.ok(fade1.outR[0] < -0.4, 'Dying context must smoothly ramp down prior negative chirp Right');
+  assert.equal(fade2.outL[511], 0, 'Dying context fade must reach exact digital zero within 2 blocks');
+  assert.equal(fade2.outR[511], 0);
+
+  // Live context starts 'lid-ping' cleanly from sampleOffset === 0
+  const live1 = makeAudioProcessEvent();
+  liveCtx.scriptNode.onaudioprocess(live1.ev);
+  assert.equal(lidPingCalls, 1);
+  assert.equal(lidPingOffsets[0], 0);
+  assert.ok(live1.outR[255] > 0, 'Live context emits positive lid-ping Right channel');
+
+  await stopPromise;
+  assert.equal(dyingCtx.state, 'closed');
+  assert.equal(liveCtx.state, 'running');
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+});
+
+test('Regression #6B: NotAllowedError during requestArm("lid-ping") resets getTxMode() === "off" before passive re-arm', async () => {
+  let attempt = 0;
+  let activeNode = null;
+
+  class MockCtx {
+    constructor() {
+      this.sampleRate = 48000;
+      this.state = 'running';
+      this.destination = { maxChannelCount: 2 };
+    }
+    createMediaStreamSource() {
+      return { connect() {}, disconnect() {} };
+    }
+    createScriptProcessor() {
+      activeNode = { connect() {}, disconnect() {}, onaudioprocess: null };
+      return activeNode;
+    }
+    async close() {
+      this.state = 'closed';
+    }
+  }
+
+  const bus = new SharedAcousticBus({
+    root: {
+      document: { hidden: false },
+      AudioContext: MockCtx,
+      navigator: {
+        mediaDevices: {
+          getUserMedia: async () => {
+            attempt++;
+            if (attempt === 1) {
+              const err = new Error('Permission denied');
+              err.name = 'NotAllowedError';
+              throw err;
+            }
+            return {
+              getTracks: () => [{ stop() {} }],
+              getAudioTracks: () => [{ label: 'Built-in Microphone', stop() {} }]
+            };
+          },
+          enumerateDevices: async () => []
+        }
+      }
+    }
+  });
+
+  let lidPingCalls = 0;
+  bus.registerTxGenerator('lid-ping', (l, r) => {
+    lidPingCalls++;
+    l.fill(0.4);
+    r.fill(0.4);
+  });
+
+  const snapshots = [];
+  bus.onStateChange((snap) => snapshots.push(snap));
+
+  // 1. Active arm fails with NotAllowedError -> txMode must reset to 'off'
+  const ok1 = await bus.requestArm('lid-ping');
+  assert.equal(ok1, false);
+  assert.equal(bus.state, 'error');
+  assert.equal(bus.getTxMode(), 'off', 'Failed requestArm must reset _txMode to "off"');
+  assert.equal(snapshots[snapshots.length - 1].txMode, 'off');
+
+  // 2. Subsequent passive requestArm() (no preferredTxMode) must stay passive ('off')
+  const ok2 = await bus.requestArm();
+  assert.equal(ok2, true);
+  assert.equal(bus.state, 'listening');
+  assert.equal(bus.getTxMode(), 'off');
+
+  const outL = new Float32Array(BLOCK_SIZE);
+  const outR = new Float32Array(BLOCK_SIZE);
+  activeNode.onaudioprocess({
+    outputBuffer: {
+      numberOfChannels: 2,
+      getChannelData: (ch) => (ch === 0 ? outL : outR)
+    },
+    inputBuffer: {
+      getChannelData: () => new Float32Array(BLOCK_SIZE)
+    }
+  });
+  assert.equal(lidPingCalls, 0, 'Passive arm after failed active arm must not transmit lid-ping');
+  assert.ok(outL.every((v) => v === 0));
+  assert.ok(outR.every((v) => v === 0));
+
+  await bus.stopAll({ immediate: true, dispatchClose: false });
+});
+
+test('Regression #6C: setHiddenMuted(true) immediately flushes pre-queued AudioWorklet TX blocks to strict 0', async () => {
+  let WorkletProcessorCls = null;
+  let lastCreatedNode = null;
+
+  class MockAudioWorkletProcessor {
+    constructor() {
+      this.port = {
+        onmessage: null,
+        postMessage: (msg) => {
+          if (lastCreatedNode && lastCreatedNode.port.onmessage) {
+            lastCreatedNode.port.onmessage({ data: msg });
+          }
+        }
+      };
+    }
+  }
+
+  class MockWorkletNode {
+    constructor(_ctx, name) {
+      assert.equal(name, 'lg-shared-acoustic-bus-processor');
+      lastCreatedNode = this;
+      this.proc = null;
+      this.port = {
+        onmessage: null,
+        postMessage: (msg) => {
+          if (this.proc && this.proc.port.onmessage) {
+            this.proc.port.onmessage({ data: msg });
+          }
+        }
+      };
+      this.proc = new WorkletProcessorCls();
+    }
+    connect() {}
+    disconnect() {}
+  }
+
+  const blobSources = new Map();
+  const origBlob = globalThis.Blob;
+  const origURL = globalThis.URL;
+
+  try {
+    globalThis.Blob = class MockBlob {
+      constructor(parts) {
+        this.code = parts.join('');
+      }
+    };
+    globalThis.URL = {
+      createObjectURL(blob) {
+        const u = 'blob:mock-shared-bus-flush';
+        blobSources.set(u, blob.code);
+        return u;
+      },
+      revokeObjectURL(u) {
+        blobSources.delete(u);
+      }
+    };
+
+    const mockDoc = { hidden: false };
+    const workletRoot = {
+      document: mockDoc,
+      AudioWorkletNode: MockWorkletNode,
+      AudioContext: class {
+        constructor() {
+          this.sampleRate = 48000;
+          this.state = 'running';
+          this.destination = { maxChannelCount: 2 };
+          this.audioWorklet = {
+            async addModule(url) {
+              const code = blobSources.get(url);
+              vm.runInNewContext(code, {
+                AudioWorkletProcessor: MockAudioWorkletProcessor,
+                registerProcessor: (_n, cls) => {
+                  WorkletProcessorCls = cls;
+                },
+                Float32Array,
+                Number
+              });
+            }
+          };
+        }
+        createMediaStreamSource() {
+          return { connect() {}, disconnect() {} };
+        }
+        async close() {
+          this.state = 'closed';
+        }
+      },
+      navigator: {
+        mediaDevices: {
+          getUserMedia: async () => ({
+            getTracks: () => [{ stop() {} }],
+            getAudioTracks: () => [{ label: 'Built-in Microphone', stop() {} }]
+          }),
+          enumerateDevices: async () => []
+        }
+      }
+    };
+
+    const bus = new SharedAcousticBus({ root: workletRoot });
+    bus.registerTxGenerator('chirp', (l, r) => {
+      l.fill(0.5);
+      r.fill(-0.5);
+    });
+
+    assert.equal(await bus.requestArm('chirp', { preferWorklet: true }), true);
+    assert.equal(lastCreatedNode.proc.txQueue.length, 3, '3 TX blocks pre-queued on start');
+
+    const in128 = new Float32Array(128).fill(0.05);
+    const outL = new Float32Array(128);
+    const outR = new Float32Array(128);
+
+    // Process 1 visible quantum -> consumes part of block 1, leaving curTx + 2 queued blocks
+    lastCreatedNode.proc.process([[in128]], [[outL, outR]]);
+    assert.ok(outL.some((v) => v > 0), 'Visible quantum emits ultrasonic samples');
+    assert.equal(lastCreatedNode.proc.txQueue.length, 2);
+    assert.ok(lastCreatedNode.proc.curTx !== null);
+
+    // Hide tab -> must immediately flush queued worklet TX blocks so ZERO non-zero samples leak
+    mockDoc.hidden = true;
+    bus.setHiddenMuted(true);
+    assert.equal(lastCreatedNode.proc.txQueue.length, 0);
+    assert.equal(lastCreatedNode.proc.curTx, null);
+
+    for (let q = 0; q < 8; q++) {
+      outL.fill(1);
+      outR.fill(-1);
+      lastCreatedNode.proc.process([[in128]], [[outL, outR]]);
+      assert.ok(outL.every((v) => v === 0), `Quantum ${q} Left must be strict 0 after hide`);
+      assert.ok(outR.every((v) => v === 0), `Quantum ${q} Right must be strict 0 after hide`);
+    }
+
+    // Unhide tab -> smoothly ramps back in from 0
+    mockDoc.hidden = false;
+    bus.setHiddenMuted(false);
+    lastCreatedNode.proc.process([[in128]], [[outL, outR]]);
+    assert.ok(Math.abs(outL[0]) < 1e-3 && outL[127] > 0.01, 'Smoothly ramps back in after unhide');
+
+    await bus.stopAll({ immediate: true, dispatchClose: false });
+  } finally {
+    globalThis.Blob = origBlob;
+    globalThis.URL = origURL;
+  }
+});
+
+test('UI lifecycle & Escape guard: lg-secondary-open event, LeftGrilleLab.isSecondaryOpen(), and defaultPrevented Escape', () => {
+  const { win, doc, portalCell } = createMockDomEnv();
+
+  const engineCode = fs.readFileSync(path.join(__dirname, 'acoustic-engine.js'), 'utf8');
+  const controllerCode = fs.readFileSync(path.join(__dirname, 'acoustic-controller.js'), 'utf8');
+  const sharedBusCode = fs.readFileSync(path.join(__dirname, 'shared-bus.js'), 'utf8');
+  const uiCode = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
+
+  vm.runInNewContext(engineCode, win);
+  vm.runInNewContext(controllerCode, win);
+  vm.runInNewContext(sharedBusCode, win);
+  vm.runInNewContext(uiCode, win);
+
+  assert.equal(typeof win.LeftGrilleLab.isSecondaryOpen, 'function');
+  assert.equal(win.LeftGrilleLab.isSecondaryOpen(), false);
+
+  const openSnapshots = [];
+  win.addEventListener('lg-secondary-open', () => {
+    openSnapshots.push({
+      isOpen: win.LeftGrilleLab.isSecondaryOpen(),
+      pageHidden: doc.getElementById('left-grille-page').hidden
+    });
+  });
+
+  // 1. First open via portal tap (history.pushState)
+  portalCell.children[0].dispatch('click');
+  assert.equal(openSnapshots.length, 1);
+  assert.deepEqual(openSnapshots[0], { isOpen: true, pageHidden: false });
+  assert.equal(win.LeftGrilleLab.isSecondaryOpen(), true);
+
+  // 2. Escape already handled by an in-cell capture-phase popover (defaultPrevented = true) must NOT close secondary page!
+  doc.emitDocEvent('keydown', {
+    key: 'Escape',
+    defaultPrevented: true,
+    preventDefault() {}
+  });
+  assert.equal(win.LeftGrilleLab.isSecondaryOpen(), true);
+  assert.equal(doc.getElementById('left-grille-page').hidden, false);
+
+  // 3. Unhandled Escape closes secondary page cleanly
+  let prevented = false;
+  doc.emitDocEvent('keydown', {
+    key: 'Escape',
+    defaultPrevented: false,
+    preventDefault() {
+      prevented = true;
+    }
+  });
+  assert.equal(prevented, true);
+  assert.equal(win.LeftGrilleLab.isSecondaryOpen(), false);
+  assert.equal(doc.getElementById('left-grille-page').hidden, true);
+
+  // 4. Re-opening via portal tap (history.pushState without hashchange) fires lg-secondary-open again!
+  portalCell.children[0].dispatch('click');
+  assert.equal(openSnapshots.length, 2);
+  assert.deepEqual(openSnapshots[1], { isOpen: true, pageHidden: false });
 });

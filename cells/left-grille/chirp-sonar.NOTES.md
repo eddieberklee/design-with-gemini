@@ -38,7 +38,7 @@ Cell 04 turns a MacBook's stereo speakers (`~30 cm` physical baseline across the
 - **Sub-40 kHz TX Safety (`StereoChirpGenerator.fillBuffers`)**: Never emit chirps when `sampleRate < 40000` (e.g., Bluetooth HFP `16 kHz`); both output channels fill with `0` and `ChirpSonarEngine` sets `ultrasonicSupported = false`.
 - **Far-Zone Noise Floor Estimation (`ChirpSonarEngine._processFrame`)**: Noise floor samples both `4..55 cm` and quiet outer lags (`lagMax + 24 .. lagMax + 120`) using `min(nearMedian, farMedian)` so a broad near-field hand echo cannot inflate the noise floor and suppress its own SNR.
 - **Zero `innerHTML` & Strict 4:3 Lock (`chirp-sonar.js:h`, `chirp-sonar.css:.cs-stage`)**: All DOM updates use `textContent` / `dataset`; `.cs-stage` uses `position: absolute; inset: 0;` and `@container` breakpoints at `310px`, `235px`, and `180px` so the cell never blows out secondary grid row heights.
-- **Bus Coordination**: Subscribes to `bus.subscribeAudio` and ignores frames whenever `pkt.txMode !== 'chirp'` or while a local `Sim` playback is running; stops simulation timers cleanly on `lg-secondary-close` or `destroy()`.
+- **Bus Coordination**: Subscribes to `bus.subscribeAudio` and ignores frames whenever `pkt.txMode !== 'chirp'` or while a local `Sim` playback is running; `stopSim()` always restores `engine.setAutoAlignDirectPath(true)` for live hardware alignment, `resetClutter()` clears partial `_frameFill` buffers, and `handleSecondaryClose()` stops simulation timers and cancels any pending `rafId` on `lg-secondary-close`.
 
 ---
 
@@ -49,4 +49,4 @@ Cell 04 turns a MacBook's stereo speakers (`~30 cm` physical baseline across the
 - **Unit & synthesized 48 kHz acoustic physics test suite**:
   `timeout 60 node --test cells/left-grille/chirp-sonar.test.js`
 - **Interactive verification**:
-  Open the Left Grille secondary grid (`#left-grille`), inspect **Cell 04 (`18–20kHz Chirp Sonar`)**, click `Sim Push`, `Sim Pull`, and `Sim Wave` (alternating `→`/`←`) to verify live matched-filter waterfall trajectories and gesture readouts, or click `[● SONAR]` on a 48 kHz MacBook to run live contactless ultrasonic sonar.
+  Open the Left Grille secondary grid (`#left-grille`), inspect **Cell 04 (`18–20kHz Chirp Sonar`)**, click `Sim Push`, `Sim Pull`, and `Sim Wave` (alternating `→`/`←`) to verify live matched-filter waterfall trajectories and gesture readouts, or click `SONAR` on a 48 kHz MacBook to run live contactless ultrasonic sonar.

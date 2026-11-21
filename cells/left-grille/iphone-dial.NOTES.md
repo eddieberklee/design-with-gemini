@@ -29,9 +29,16 @@ Secondary Grid Cell 07 (`#lg-sec-cell-7`) turns an iPhone lying flat on the desk
 
 ## 3. Hazards, Invariants & Edge Cases
 
-- **Strict `4:3` Grid Aspect-Ratio Lock**: `.id-stage` uses `position: absolute; inset: 0;` inside `.id-cell` (`position: relative; overflow: hidden; container-type: inline-size;`) so neither the rotary platter SVG nor the `[PAIR QR]` overlay ever inflates row height.
-- **Session ID Namespace Isolation**: Desktop Cell 07 prefixes generated session IDs with `'DL'` (`8` uppercase alphanumeric characters matching `MotionGrid.Transport.SESSION_ID_RE`), preventing topic collisions with Main Grid Cell 03.
-- **Lifecycle Cleanup**: `mountIphoneDialCell` listens for `window.addEventListener('lg-secondary-close', ...)` to cancel active inertial flywheel `requestAnimationFrame` loops, close the QR popover, and disconnect active Web Bluetooth GATT sessions when the user exits the secondary grid.
+- **Strict `4:3` Grid Aspect-Ratio Lock & Narrow Container Ergonomics**: `.id-stage` uses `position: absolute; inset: 0;` inside `.id-cell` (`position: relative; overflow: hidden; container-type: inline-size;`) so neither the rotary platter SVG nor the `[PAIR QR]` overlay ever inflates row height. At `@container (max-width: 245px)` down to `150px`, `.id-qr-sid` and `.id-qr-hint` collapse and `.id-qr-overlay` compacts so `Copy URL` and `Done` always fit without clipping.
+- **Reduced Motion & Contrast**: `@media (prefers-reduced-motion: reduce)` disables CSS transitions across `.id-cell` and `.dp-body`, and `mountIphoneDialCell` skips `startInertialFlywheel()` when `matchMedia('(prefers-reduced-motion: reduce)').matches` is true. Dark-mode `--dp-ink-muted` uses `#8a8a82` on `#1b1b19` (`4.85:1` WCAG AA contrast).
+- **Storage Keys & Session ID Namespace Isolation**:
+  - `localStorage` key `dwg.iphoneDialHost.v1`: Persists custom LAN IP or HTTPS tunnel host override (`STORAGE_HOST_KEY`, wrapped in `try/catch`).
+  - `sessionStorage` key `dwg.iphoneDialSid.v1`: Persists the `'DL'`-prefixed 8-character uppercase alphanumeric session ID (`STORAGE_SID_KEY`, validated via `MotionGrid.Transport.isValidSessionId`), preventing topic collisions with Main Grid Cell 03. In `dial-phone.js`, invalid `?s=` query strings fall back safely to `'DL000000'` so `MqttRelayTransport` never throws.
+- **Phone `<->` Desktop Handshake & `pagehide` Cleanup**: On transport ready, `dial-phone.js` sends `{ t: 'hello' }` without immediately blasting default `{ dialValue: 50, fineMode: false }` telemetry, preserving desktop's current `dialValue` and `fineMode` until desktop replies with `{ t: 'state', dialValue, fineMode }`. On `pagehide`, `dial-phone.js` cancels inertial `rAF` and closes both `link` and `AudioContext`.
+- **Lifecycle (`lg-secondary-open` / `lg-secondary-close`) & BLE Async Race Guard**:
+  - Zero Main-Grid Leak: On `DOMContentLoaded` while `#left-grille-page` is hidden on the main grid, `mountIphoneDialCell` does **not** start `connectTransport()`, `probeLocalBridge()`, or the `1500 ms` `heartbeatTimer`. Instead, transport and `heartbeatTimer` activate lazily when `lg-secondary-open` fires (or on mount only if `#left-grille-page` is already open / `location.hash === '#left-grille'`, or when the user clicks `[PAIR QR]`).
+  - Full Teardown on `lg-secondary-close`: `onSecondaryClose()` stops inertial `requestAnimationFrame` loops, closes the QR popover, aborts any in-flight `/api/motion-config` fetch, clears `heartbeatTimer` (`heartbeatTimer = null`), closes `link` (`link.close(); link = null`), closes `clickSynth` (`AudioContext`), and calls `disconnectBle()`.
+  - Monotonic `bleEpoch` Race Guard: `disconnectBle()` increments `bleEpoch`, removes the named `gattserverdisconnected` and `characteristicvaluechanged` listeners, and disconnects GATT even if `handleBleClick()` is mid-flight (`await requestDevice`, `gatt.connect`, `getPrimaryService`, `getCharacteristic`, or `startNotifications`).
 
 ---
 

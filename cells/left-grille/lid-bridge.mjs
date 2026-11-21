@@ -245,6 +245,7 @@ export function createBridgeServer(opts = {}) {
     }
 
     helperProc = spawn(compiled.binPath, [], { stdio: ['ignore', 'pipe', 'pipe'] });
+    if (helperProc.stderr) helperProc.stderr.resume();
     helperProc.stdout.setEncoding('utf8');
     helperProc.stdout.on('data', (chunk) => {
       helperStdoutBuf += chunk;
@@ -308,7 +309,19 @@ export function createBridgeServer(opts = {}) {
       return;
     }
 
-    const url = new URL(req.url || '/', `http://${host}:${port}`);
+    let url;
+    try {
+      const addr = server.address();
+      const activePort = addr && typeof addr === 'object' ? addr.port : port;
+      url = new URL(req.url || '/', `http://${host}:${activePort}`);
+    } catch (_) {
+      res.writeHead(400, {
+        ...corsHeaders,
+        'Content-Type': 'application/json; charset=utf-8'
+      });
+      res.end(JSON.stringify({ error: 'Malformed request URL' }));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/angle') {
       res.writeHead(200, {
@@ -369,7 +382,12 @@ export function createBridgeServer(opts = {}) {
       } catch (_) {}
       helperProc = null;
     }
-    return new Promise((resolve) => server.close(() => resolve()));
+    return new Promise((resolve) => {
+      server.close(() => resolve());
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections();
+      }
+    });
   }
 
   return {
@@ -380,7 +398,9 @@ export function createBridgeServer(opts = {}) {
         server.once('error', reject);
         server.listen(port, host, () => {
           server.removeListener('error', reject);
-          resolve({ host, port });
+          const addr = server.address();
+          const boundPort = addr && typeof addr === 'object' ? addr.port : port;
+          resolve({ host, port: boundPort });
         });
       });
     },
