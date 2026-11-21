@@ -1,0 +1,302 @@
+/* ==========================================================================
+   cells/image-to-3d/image-to-3d.css — Cell 11: Image -> 3D (4-Model Arena)
+   Scoped to .cell--image-to-3d / .i3d-* using ui/base.css --ui-* tokens.
+   ========================================================================== */
+
+.cell--image-to-3d {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.cell--image-to-3d.i3d-dragover {
+  border-color: var(--ui-accent);
+  box-shadow: inset 0 0 0 2px var(--ui-accent);
+}
+
+/* Inline key drawer */
+.i3d-key-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--ui-3);
+  border-bottom: 1px solid var(--ui-hairline);
+  background: var(--ui-well);
+}
+
+.i3d-key-bar[hidden] {
+  display: none;
+}
+
+.i3d-key-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--ui-ctl-h-sm);
+  padding: 0 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+}
+
+.i3d-key-persist {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
+  color: var(--ui-ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Body */
+.i3d-body {
+  gap: 6px;
+  padding: 8px;
+}
+
+/* Top drop strip */
+.i3d-dropbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px dashed var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
+  min-width: 0;
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
+}
+
+.i3d-dropbar:hover {
+  border-color: var(--ui-ink-3);
+  background: var(--ui-surface);
+}
+
+.i3d-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  object-fit: cover;
+  border: 1px solid var(--ui-hairline);
+  background: var(--ui-surface);
+  flex: 0 0 auto;
+}
+
+.i3d-thumb[hidden] {
+  display: none;
+}
+
+.i3d-drop-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 400 var(--ui-fs-1) / 1.2 var(--ui-sans);
+  color: var(--ui-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.i3d-file-input {
+  display: none;
+}
+
+/* 4 side-by-side 3D viewers */
+.i3d-arena {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.i3d-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+  background: #16171a;
+  overflow: hidden;
+}
+
+.i3d-slot-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 4px 5px;
+  background: rgba(22, 23, 26, 0.92);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 0;
+}
+
+.i3d-model-name {
+  min-width: 0;
+  font: 600 9.5px / 1.1 var(--ui-mono);
+  color: #f3f3f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.i3d-slot-meta {
+  flex: 0 0 auto;
+  font: 400 9px / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  color: #9c9ca3;
+}
+
+.i3d-canvas-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+.i3d-canvas-wrap:active {
+  cursor: grabbing;
+}
+
+.i3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.i3d-slot-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.i3d-slot-overlay[hidden] {
+  display: none;
+}
+
+.i3d-slot-msg {
+  font: 400 9.5px / 1.3 var(--ui-mono);
+  color: #b4b4bc;
+  word-break: break-word;
+}
+
+.i3d-slot-msg--err {
+  color: #f48c72;
+}
+
+.i3d-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: i3d-spin 700ms linear infinite;
+}
+
+@keyframes i3d-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.i3d-slot-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 5px;
+  background: rgba(22, 23, 26, 0.92);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 18px;
+}
+
+.i3d-slot-title {
+  min-width: 0;
+  font: 400 9px / 1.1 var(--ui-sans);
+  color: #a1a1aa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.i3d-obj-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #d4d4d8;
+  font: 500 9px / 1 var(--ui-mono);
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+}
+
+.i3d-obj-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+}
+
+.i3d-obj-btn[hidden] {
+  display: none;
+}
+
+/* Full-width 4-up Studio dialog */
+.i3d-dialog {
+  width: min(1240px, calc(100vw - 24px));
+  height: min(680px, calc(100dvh - 24px));
+  display: flex;
+  flex-direction: column;
+}
+
+.i3d-dialog:not([open]) {
+  display: none;
+}
+
+.i3d-dialog-arena {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--ui-3);
+  background: var(--ui-paper);
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ui-2);
+}
+
+.i3d-dialog-arena .i3d-model-name {
+  font-size: 11px;
+}
+
+.i3d-dialog-arena .i3d-slot-meta {
+  font-size: 10px;
+}
+
+@container ui-tile (max-width: 319px) {
+  .i3d-arena {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .i3d-dialog-arena {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+}
