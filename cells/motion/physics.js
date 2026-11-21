@@ -20,31 +20,37 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
-  function lerp(a, b, t) {
-    return a + (b - a) * t;
+  /**
+   * Shortest signed angular difference (a - b) wrapped into [-180, +180] degrees.
+   */
+  function wrapAngleDiffDeg(a, b) {
+    let d = (a - b) % 360;
+    if (d > 180) d -= 360;
+    if (d < -180) d += 360;
+    return d;
   }
 
   /**
-   * Tracks the gravity vector from accelerationIncludingGravity via an exponential
-   * low-pass filter, returning a normalized unit vector gHat so world-up and tilt
-   * math stay invariant to device orientation and iOS/Android sign conventions.
+   * Tracks the gravity (world-up reaction) vector via an exponential low-pass filter,
+   * returning a normalized unit vector gHat so world-up and tilt math stay invariant
+   * to device orientation and iOS/Android sign conventions.
    */
   function GravityFilter(alpha) {
     this.alpha = typeof alpha === 'number' ? alpha : 0.86;
     this.initialized = false;
     this.gx = 0;
     this.gy = 0;
-    this.gz = -9.81;
+    this.gz = 9.81;
   }
 
   GravityFilter.prototype.reset = function () {
     this.initialized = false;
     this.gx = 0;
     this.gy = 0;
-    this.gz = -9.81;
+    this.gz = 9.81;
   };
 
-  GravityFilter.prototype.update = function (ax, ay, az) {
+  GravityFilter.prototype.update = function (ax, ay, az, overrideAlpha) {
     const x = Number.isFinite(ax) ? ax : 0;
     const y = Number.isFinite(ay) ? ay : 0;
     const z = Number.isFinite(az) ? az : 0;
@@ -58,7 +64,7 @@
       this.gz = z;
       this.initialized = true;
     } else {
-      const a = this.alpha;
+      const a = typeof overrideAlpha === 'number' ? overrideAlpha : this.alpha;
       this.gx = a * this.gx + (1 - a) * x;
       this.gy = a * this.gy + (1 - a) * y;
       this.gz = a * this.gz + (1 - a) * z;
@@ -69,7 +75,7 @@
   GravityFilter.prototype.getUnit = function () {
     const mag = Math.hypot(this.gx, this.gy, this.gz);
     if (mag < 1e-4) {
-      return { x: 0, y: 0, z: -1, mag: 9.81 };
+      return { x: 0, y: 0, z: 1, mag: 9.81 };
     }
     return {
       x: this.gx / mag,
@@ -80,25 +86,25 @@
   };
 
   /**
-   * Computes continuous tilt angles (degrees) from the normalized gravity vector.
-   * Works smoothly across full portrait/flat handheld grips without Euler gimbal flip.
+   * Computes continuous tilt angles (degrees) from the normalized W3C world-up vector gUnit
+   * (+X right edge, +Y top edge, +Z out of screen).
+   * - roll > 0 corresponds to clockwise wrist rotation (right edge down -> left edge toward sky -> gUnit.x < 0).
+   * - pitch uses signed atan2(gUnit.y, gUnit.z) over (-180..+180] so tilting upright past vertical never folds.
    */
   function gravityToTiltDeg(gUnit) {
-    // Roll: tilting left/right around the phone's long axis (-90..+90)
-    // Pitch: tilting nose up/down around the phone's horizontal axis (-90..+90)
     const radToDeg = 180 / Math.PI;
-    const roll = Math.atan2(gUnit.x, Math.hypot(gUnit.y, gUnit.z)) * radToDeg;
-    const pitch = Math.atan2(gUnit.y, Math.hypot(gUnit.x, gUnit.z)) * radToDeg;
+    const roll = Math.atan2(-gUnit.x, Math.hypot(gUnit.y, gUnit.z)) * radToDeg;
+    const pitch = Math.atan2(gUnit.y, gUnit.z) * radToDeg;
     return { roll: roll, pitch: pitch };
   }
 
   /**
-   * Core Phone Accelerometer & Orientation Processor.
-   * Converts raw iOS/Android DeviceMotion + DeviceOrientation events into a smooth,
-   * drift-controlled grid cell scale in [MIN_SCALE, MAX_SCALE].
+   * Core Phone Accelerometer Processor.
+   * Converts raw iOS/Android DeviceMotion events into a smooth, drift-controlled
+   * grid cell scale in [MIN_SCALE, MAX_SCALE].
    *
    * Supported modes:
-   * - 'all'  : Fused Tilt Dial + Vertical Lift + Pull/Push impulses (immediate response to any gesture)
+   * - 'all'  : Fused Tilt Dial + Vertical Lift + Pull/Push impulses
    * - 'tilt' : Zero-drift absolute rotation/tilt relative to calibrated neutral pose
    * - 'lift' : World-up projected linear acceleration (raise phone up = bigger, lower = smaller)
    * - 'pull' : Screen-normal/forward linear acceleration (pull toward self = bigger, push away = smaller)
@@ -115,15 +121,9 @@
     this.scale = DEFAULT_SCALE;
     this.impulseOffset = 0;
 
-    // Neutral pose calibration (captured on first valid reading or Zero button)
     this.calibrated = false;
     this.zeroRoll = 0;
     this.zeroPitch = 0;
-    this.zeroGamma = 0;
-    this.zeroBeta = 0;
-    this.hasOrientation = false;
-    this.lastGamma = 0;
-    this.lastBeta = 0;
 
     // Velocity-damped ZUPT linear integrators (prevents MEMS quadratic drift)
     this.velLift = 0;
@@ -132,10 +132,9 @@
     this.quietPullMs = 0;
     this.lastTs = null;
 
-    // Latest smoothed telemetry for UI meters
     this.telemetry = {
       ax: 0, ay: 0, az: 0,
-      gx: 0, gy: 0, gz: -9.81,
+      gx: 0, gy: 0, gz: 9.81,
       roll: 0, pitch: 0,
       liftA: 0, pullA: 0,
       scale: DEFAULT_SCALE,
@@ -147,15 +146,12 @@
     const allowed = ['all', 'tilt', 'lift', 'pull'];
     if (allowed.indexOf(mode) < 0) return;
     if (this.mode !== mode) {
-      // Carry current scale cleanly as the new baseline so switching modes never jumps!
       this.baseScale = this.scale;
       this.impulseOffset = 0;
       this.velLift = 0;
       this.velPull = 0;
       this.zeroRoll = this.telemetry.roll;
       this.zeroPitch = this.telemetry.pitch;
-      this.zeroGamma = this.lastGamma;
-      this.zeroBeta = this.lastBeta;
       this.mode = mode;
       this.telemetry.mode = mode;
     }
@@ -171,13 +167,10 @@
   MotionProcessor.prototype.setClutch = function (active) {
     const next = Boolean(active);
     if (next && !this.clutchActive) {
-      // Re-anchor tilt on clutch press so you can ratchet like a trackpad
       this.baseScale = this.scale;
       this.impulseOffset = 0;
       this.zeroRoll = this.telemetry.roll;
       this.zeroPitch = this.telemetry.pitch;
-      this.zeroGamma = this.lastGamma;
-      this.zeroBeta = this.lastBeta;
       this.velLift = 0;
       this.velPull = 0;
     } else if (!next && this.clutchActive) {
@@ -192,8 +185,6 @@
   MotionProcessor.prototype.calibrate = function () {
     this.zeroRoll = this.telemetry.roll;
     this.zeroPitch = this.telemetry.pitch;
-    this.zeroGamma = this.lastGamma;
-    this.zeroBeta = this.lastBeta;
     this.baseScale = this.scale;
     this.impulseOffset = 0;
     this.velLift = 0;
@@ -210,22 +201,13 @@
     this.velPull = 0;
     this.zeroRoll = this.telemetry.roll;
     this.zeroPitch = this.telemetry.pitch;
-    this.zeroGamma = this.lastGamma;
-    this.zeroBeta = this.lastBeta;
+    this.telemetry.ax = 0;
+    this.telemetry.ay = 0;
+    this.telemetry.az = 0;
+    this.telemetry.liftA = 0;
+    this.telemetry.pullA = 0;
     this.telemetry.scale = s;
     return s;
-  };
-
-  MotionProcessor.prototype.ingestOrientation = function (beta, gamma) {
-    if (Number.isFinite(beta) && Number.isFinite(gamma)) {
-      this.lastBeta = beta;
-      this.lastGamma = gamma;
-      if (!this.hasOrientation) {
-        this.hasOrientation = true;
-        this.zeroBeta = beta;
-        this.zeroGamma = gamma;
-      }
-    }
   };
 
   /**
@@ -235,7 +217,7 @@
    *   - ax,ay,az: linear acceleration (m/s^2, gravity removed)
    *   - gx,gy,gz: accelerationIncludingGravity (m/s^2)
    *   - ts: timestamp in ms
-   *   - isIOS: optional boolean (iOS Safari reports accelerationIncludingGravity with inverted sign vs W3C/Android)
+   *   - isIOS: iOS Safari negates DeviceMotion acceleration axes relative to W3C/Android
    */
   MotionProcessor.prototype.ingestMotion = function (sample) {
     const s = sample || {};
@@ -244,19 +226,40 @@
     if (!Number.isFinite(dt) || dt <= 0 || dt > 0.25) dt = 0.016;
     this.lastTs = ts;
 
-    // Normalize iOS inverted accelerometer axes so +up and +right feel consistent everywhere
+    // Normalize iOS inverted accelerometer axes into W3C convention (flat face-up => gz = +9.81)
     const sign = s.isIOS ? -1 : 1;
     const rawGx = Number.isFinite(s.gx) ? s.gx * sign : 0;
     const rawGy = Number.isFinite(s.gy) ? s.gy * sign : 0;
     const rawGz = Number.isFinite(s.gz) ? s.gz * sign : 0;
 
-    const gUnit = this.gravity.update(rawGx, rawGy, rawGz);
-
-    // Linear acceleration: prefer hardware-fused event.acceleration; fall back to high-pass (accIncGrav - g)
     const hasLinear = Number.isFinite(s.ax) && Number.isFinite(s.ay) && Number.isFinite(s.az);
-    const linX = hasLinear ? s.ax * sign : (rawGx - this.gravity.gx);
-    const linY = hasLinear ? s.ay * sign : (rawGy - this.gravity.gy);
-    const linZ = hasLinear ? s.az * sign : (rawGz - this.gravity.gz);
+    let linX;
+    let linY;
+    let linZ;
+    let gUnit;
+
+    if (hasLinear) {
+      // Subtract gyro-fused linear acceleration BEFORE updating GravityFilter so rapid pulls/lifts
+      // never contaminate the gravity tilt estimate.
+      linX = s.ax * sign;
+      linY = s.ay * sign;
+      linZ = s.az * sign;
+      gUnit = this.gravity.update(rawGx - linX, rawGy - linY, rawGz - linZ);
+    } else {
+      // Fallback when event.acceleration is null: extract linear residual against prior gravity
+      // before slow-updating gravity (alpha=0.94) so upward lifts aren't high-passed away.
+      if (!this.gravity.initialized) {
+        gUnit = this.gravity.update(rawGx, rawGy, rawGz, 0.94);
+        linX = 0;
+        linY = 0;
+        linZ = 0;
+      } else {
+        linX = rawGx - this.gravity.gx;
+        linY = rawGy - this.gravity.gy;
+        linZ = rawGz - this.gravity.gz;
+        gUnit = this.gravity.update(rawGx, rawGy, rawGz, 0.94);
+      }
+    }
 
     const tilt = gravityToTiltDeg(gUnit);
     if (!this.calibrated) {
@@ -265,18 +268,15 @@
       this.calibrated = true;
     }
 
-    // World-Up projection: gravity vector in W3C convention points UP along normal reaction (+9.81 on flat table)
-    // With sign normalized to W3C convention, gUnit points along world-UP!
+    // World-Up projection: normalized W3C gUnit points along world-UP
     const liftA = linX * gUnit.x + linY * gUnit.y + linZ * gUnit.z;
 
-    // Pull/Push axis: screen-normal (+Z out of glass toward user's face), orthogonalized against gravity
+    // Pull/Push axis: screen-normal (+Z out of glass toward user), orthogonalized against gravity
     const nzDotG = gUnit.z;
     const px = -nzDotG * gUnit.x;
     const py = -nzDotG * gUnit.y;
     const pz = 1 - nzDotG * gUnit.z;
     const pMag = Math.hypot(px, py, pz);
-    // When phone is held flat (screen faces straight up), screen-normal coincides with world-up;
-    // fall back to phone's -Y axis (pulling phone along table toward chest).
     let pullA;
     if (pMag > 0.25) {
       pullA = (linX * px + linY * py + linZ * pz) / pMag;
@@ -295,7 +295,6 @@
     this.telemetry.liftA = liftA;
     this.telemetry.pullA = pullA;
 
-    // If clutch mode is enabled and thumb isn't down, hold current scale steady
     if (this.clutchRequired && !this.clutchActive) {
       this.velLift *= Math.exp(-dt / 0.08);
       this.velPull *= Math.exp(-dt / 0.08);
@@ -303,17 +302,15 @@
       return this.telemetry;
     }
 
-    // 1. Tilt delta relative to calibrated neutral pose (degrees)
-    const dRoll = clamp(tilt.roll - this.zeroRoll, -65, 65);
-    const dPitch = clamp(tilt.pitch - this.zeroPitch, -65, 65);
-    // Deadzone 2.5 deg for steady hands
+    // 1. Tilt delta relative to calibrated neutral pose (unwrapped degrees)
+    const dRoll = clamp(wrapAngleDiffDeg(tilt.roll, this.zeroRoll), -65, 65);
+    const dPitch = clamp(wrapAngleDiffDeg(tilt.pitch, this.zeroPitch), -65, 65);
     const rollEff = Math.abs(dRoll) < 2.5 ? 0 : dRoll - Math.sign(dRoll) * 2.5;
     const pitchEff = Math.abs(dPitch) < 2.5 ? 0 : dPitch - Math.sign(dPitch) * 2.5;
-    // Clockwise roll (+roll) or tilting nose up (+pitch) grows the grid cells
     const tiltContribution = ((rollEff * 0.0155) + (pitchEff * 0.0115)) * this.sensitivity;
 
     // 2. Lift (Raise Up / Lower Down) velocity-damped ZUPT integrator
-    const LIFT_DEADZONE = 0.42; // m/s^2
+    const LIFT_DEADZONE = 0.42;
     if (Math.abs(liftA) > LIFT_DEADZONE) {
       const eff = liftA - Math.sign(liftA) * LIFT_DEADZONE;
       this.velLift += clamp(eff, -18, 18) * dt;
@@ -327,7 +324,7 @@
     this.velLift = clamp(this.velLift, -3.5, 3.5);
 
     // 3. Pull (Toward Self / Push Away) velocity-damped ZUPT integrator
-    const PULL_DEADZONE = 0.45; // m/s^2
+    const PULL_DEADZONE = 0.45;
     if (Math.abs(pullA) > PULL_DEADZONE) {
       const eff = pullA - Math.sign(pullA) * PULL_DEADZONE;
       this.velPull += clamp(eff, -18, 18) * dt;
@@ -340,7 +337,6 @@
     }
     this.velPull = clamp(this.velPull, -3.5, 3.5);
 
-    // Combine according to active mode
     let nextScale = this.scale;
     if (this.mode === 'tilt') {
       nextScale = this.baseScale + tiltContribution;
@@ -351,17 +347,14 @@
       this.impulseOffset += this.velPull * dt * 0.85 * this.sensitivity;
       nextScale = this.baseScale + this.impulseOffset;
     } else {
-      // 'all': seamless fusion of tilt dial + vertical lift & depth pull impulses
       this.impulseOffset += (this.velLift * 0.62 + this.velPull * 0.55) * dt * this.sensitivity;
-      this.impulseOffset = clamp(this.impulseOffset, -1.2, 1.4);
+      this.impulseOffset = clamp(this.impulseOffset, -1.85, 1.85);
       nextScale = this.baseScale + tiltContribution + this.impulseOffset;
     }
 
     const clamped = clamp(nextScale, MIN_SCALE, MAX_SCALE);
-    // Anti-windup: if impulse pushed past bounds, keep impulseOffset tight to the bound
     if (clamped !== nextScale && this.mode !== 'tilt') {
-      const overshot = nextScale - clamped;
-      this.impulseOffset -= overshot;
+      this.impulseOffset -= (nextScale - clamped);
     }
 
     this.scale = clamped;
@@ -401,15 +394,11 @@
     if (Math.abs(this.target - this.value) < 0.0005 && Math.abs(this.velocity) < 0.001) {
       this.value = this.target;
       this.velocity = 0;
-      return false; // settled
+      return false;
     }
-    return true; // still moving
+    return true;
   };
 
-  /**
-   * Maps a normalized scale factor in [MIN_SCALE, MAX_SCALE] to an exact grid cell width
-   * anchored around the grid's natural baseline 3-column cell width.
-   */
   function scaleToCellWidth(scale, baseCellWidth, maxContainerWidth) {
     const base = clamp(baseCellWidth || 420, 180, 600);
     const maxW = Math.max(MIN_CELL_W, Math.min(MAX_CELL_W, maxContainerWidth || MAX_CELL_W));
@@ -424,7 +413,7 @@
     MIN_CELL_W: MIN_CELL_W,
     MAX_CELL_W: MAX_CELL_W,
     clamp: clamp,
-    lerp: lerp,
+    wrapAngleDiffDeg: wrapAngleDiffDeg,
     GravityFilter: GravityFilter,
     gravityToTiltDeg: gravityToTiltDeg,
     MotionProcessor: MotionProcessor,

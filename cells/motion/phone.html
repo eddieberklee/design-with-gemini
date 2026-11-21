@@ -32,19 +32,15 @@
     <section class="ph-stage">
       <div class="ph-dial-wrap" id="ph-dial-pad" aria-label="Motion dial and clutch touch pad">
         <svg class="ph-dial-svg" viewBox="0 0 240 240" aria-hidden="true">
-          <!-- Outer tick track -->
           <circle cx="120" cy="120" r="106" fill="none" stroke="#262624" stroke-width="2" />
           <path id="ph-arc-bg" d="M 45.05 194.95 A 106 106 0 1 1 194.95 194.95" fill="none" stroke="#2c2c29" stroke-width="6" stroke-linecap="round" />
           <path id="ph-arc-active" d="M 45.05 194.95 A 106 106 0 0 1 120 14" fill="none" stroke="#e85d2a" stroke-width="6" stroke-linecap="round" />
-          <!-- Neutral 1.00x detent tick -->
-          <line x1="120" y1="7" x2="120" y2="21" stroke="#f7f7f5" stroke-width="2" opacity="0.65" />
-          <!-- Inner crosshair -->
+          <!-- Neutral 1.00x detent tick at 0 deg -->
+          <line x1="120" y1="7" x2="120" y2="21" stroke="#f7f7f5" stroke-width="2" opacity="0.7" />
           <circle cx="120" cy="120" r="56" fill="none" stroke="#232321" stroke-width="1" stroke-dasharray="3 4" />
           <line x1="64" y1="120" x2="176" y2="120" stroke="#232321" stroke-width="1" />
           <line x1="120" y1="64" x2="120" y2="176" stroke="#232321" stroke-width="1" />
-          <!-- Live accelerometer bubble reticle -->
           <circle id="ph-bubble" cx="120" cy="120" r="8" fill="#e85d2a" opacity="0.9" />
-          <!-- Needle -->
           <g id="ph-needle" transform="rotate(0 120 120)">
             <line x1="120" y1="24" x2="120" y2="42" stroke="#e85d2a" stroke-width="3" stroke-linecap="round" />
           </g>
@@ -63,6 +59,7 @@
             <span class="ph-enable-main">Enable Motion</span>
           </button>
           <p class="ph-gate-note" id="ph-gate-note">Tap once to grant motion access, then rotate, lift up/down, or pull phone.</p>
+          <button type="button" class="ph-dismiss-btn" id="ph-dismiss-gate">Use Touch Slider Only</button>
         </div>
       </div>
 
@@ -97,7 +94,7 @@
       <div class="ph-action-grid">
         <button type="button" class="ph-btn" id="ph-zero-btn">Zero Pose</button>
         <button type="button" class="ph-btn" id="ph-clutch-btn" aria-pressed="false">Clutch: Off</button>
-        <button type="button" class="ph-btn" id="ph-layout-btn">Reflow</button>
+        <button type="button" class="ph-btn" id="ph-layout-btn" aria-pressed="false">Reflow</button>
         <button type="button" class="ph-btn ph-btn--accent" id="ph-reset-btn">Reset 100%</button>
       </div>
 

@@ -9,6 +9,7 @@
   const STORAGE_BASE_URL_KEY = 'mg_custom_https_base_v1';
   const STORAGE_SESSION_KEY = 'mg_session_id_v1';
   const LOCAL_BRIDGE_DEFAULT = 'http://127.0.0.1:8443';
+  const MAX_QR_URL_BYTES = 213;
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -86,19 +87,27 @@
     return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1' || h === '';
   }
 
+  function utf8ByteLength(str) {
+    if (typeof TextEncoder !== 'undefined') {
+      return new TextEncoder().encode(String(str)).length;
+    }
+    return String(str).length;
+  }
+
   function normalizePhoneBaseUrl(raw) {
     const trimmed = String(raw || '').trim();
     if (!trimmed) return '';
     try {
       const u = new URL(trimmed);
       if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
-      // If user pasted root repo URL, append cells/motion/phone.html
-      let path = u.pathname;
-      if (!path.endsWith('.html')) {
-        if (!path.endsWith('/')) path += '/';
-        path += 'cells/motion/phone.html';
+      let p = u.pathname || '/';
+      if (/\/index\.html?$/i.test(p)) {
+        p = p.replace(/\/index\.html?$/i, '/cells/motion/phone.html');
+      } else if (!/\/phone\.html?$/i.test(p)) {
+        if (!p.endsWith('/')) p += '/';
+        p += 'cells/motion/phone.html';
       }
-      u.pathname = path;
+      u.pathname = p;
       u.search = '';
       u.hash = '';
       return u.toString();
@@ -119,9 +128,8 @@
     const gridEl = rootEl.closest('.grid') || document.querySelector('.grid');
     if (!gridEl) return;
 
-    // Persist session across reloads in this tab so re-scanning isn't needed on refresh
     let sessionId = safeStorageGet(window.sessionStorage, STORAGE_SESSION_KEY);
-    if (!sessionId || !/^[A-Z0-9]{6,12}$/.test(sessionId)) {
+    if (!Transport.isValidSessionId(sessionId)) {
       sessionId = Transport.generateSessionId(8);
       safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, sessionId);
     }
@@ -132,6 +140,7 @@
       layout: 'reflow',     // 'reflow' | 'fixed3'
       scale: Physics.DEFAULT_SCALE,
       baseCellW: 420,
+      maxCellW: Physics.MAX_CELL_W,
       currentCellW: 420,
       cols: 3,
       controlled: false,
@@ -145,7 +154,7 @@
       rxHz: 0,
       lastHzTick: Date.now(),
 
-      // Latest phone sensor vector for live meters
+      // Latest phone sensor vector
       roll: 0,
       pitch: 0,
       liftA: 0,
@@ -153,45 +162,61 @@
 
       // Resolved HTTPS URL for QR code
       phoneBaseUrl: '',
-      phoneUrlSource: 'none', // 'origin-https' | 'local-bridge' | 'custom' | 'none'
+      phoneUrlSource: 'none',
       phoneUrlIsHttps: false,
       qrUrl: '',
+      qrError: '',
       customUrlInput: safeStorageGet(window.localStorage, STORAGE_BASE_URL_KEY),
-      bridgeConfig: null,
-
-      copyFeedback: ''
+      bridgeConfig: null
     };
 
     const spring = new Physics.SpringDamper(Physics.DEFAULT_SCALE, 190, 26);
     let rafId = 0;
     let lastRafTs = 0;
     let link = null;
+    let hzTimer = 0;
     let feedbackTimer = 0;
+    let bridgePollTimer = 0;
+    let bridgePollAttempts = 0;
 
-    // Measure natural baseline 3-column cell width before any motion override
+    // Measure baseline 3-column cell width from original index.html geometry (never inflated by .is-motion-controlled)
     function measureBaseCellWidth() {
-      const wasControlled = gridEl.classList.contains('is-motion-controlled');
-      const gridRect = gridEl.getBoundingClientRect();
-      const avail = Math.max(260, gridRect.width || (window.innerWidth * 0.92));
-      const naturalCols = window.innerWidth >= 768 ? 3 : 2;
+      const bodyStyle = window.getComputedStyle(document.body);
+      const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
+      const docW = document.documentElement.clientWidth || window.innerWidth;
+      const contentW = Math.max(240, docW - padX);
+      const baselineGridW = Math.min(contentW, docW * 0.92, 1600);
+      const naturalCols = docW >= 768 ? 3 : 2;
       const gap = 4;
-      const naturalW = Math.round((avail - gap * (naturalCols - 1)) / naturalCols);
+      const naturalW = Math.round((baselineGridW - gap * (naturalCols - 1)) / naturalCols);
       state.baseCellW = Physics.clamp(naturalW, 180, 560);
-      if (!wasControlled) {
+      if (!state.controlled) {
         state.currentCellW = state.baseCellW;
         state.cols = naturalCols;
       }
+    }
+
+    function computeMaxCellWidth() {
+      const bodyStyle = window.getComputedStyle(document.body);
+      const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
+      const docW = document.documentElement.clientWidth || window.innerWidth;
+      const avail = Math.max(240, Math.min(docW - padX, docW * 0.96, 1800));
+      if (state.layout === 'fixed3') {
+        const fixedCols = docW >= 768 ? 3 : 2;
+        const gap = 4;
+        return Math.max(Physics.MIN_CELL_W, Math.floor((avail - gap * (fixedCols - 1)) / fixedCols));
+      }
+      return Math.min(Physics.MAX_CELL_W, Math.floor(avail));
     }
 
     function applyGridSize(scaleVal, forceActive) {
       const clampedScale = Physics.clamp(scaleVal, Physics.MIN_SCALE, Physics.MAX_SCALE);
       state.scale = clampedScale;
 
-      const bodyStyle = window.getComputedStyle(document.body);
-      const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
-      const maxAvail = Math.max(240, Math.min(window.innerWidth - padX, 1800));
-
-      const cellW = Physics.scaleToCellWidth(clampedScale, state.baseCellW, maxAvail);
+      const docW = document.documentElement.clientWidth || window.innerWidth;
+      const maxCellW = computeMaxCellWidth();
+      state.maxCellW = maxCellW;
+      const cellW = Physics.scaleToCellWidth(clampedScale, state.baseCellW, maxCellW);
       state.currentCellW = cellW;
 
       const isNearDefault = Math.abs(clampedScale - 1.0) < 0.008 && !forceActive && !state.phoneConnected;
@@ -200,16 +225,17 @@
         gridEl.classList.remove('is-motion-controlled');
         gridEl.style.removeProperty('--mg-cell-w');
         gridEl.removeAttribute('data-motion-layout');
-        state.cols = window.innerWidth >= 768 ? 3 : 2;
+        state.cols = docW >= 768 ? 3 : 2;
       } else {
         state.controlled = true;
         gridEl.classList.add('is-motion-controlled');
         gridEl.setAttribute('data-motion-layout', state.layout);
         gridEl.style.setProperty('--mg-cell-w', cellW + 'px');
         if (state.layout === 'fixed3') {
-          state.cols = window.innerWidth >= 768 ? 3 : 2;
+          state.cols = docW >= 768 ? 3 : 2;
         } else {
-          state.cols = Math.max(1, Math.floor((maxAvail + 4) / (cellW + 4)));
+          const gridAvail = gridEl.clientWidth || maxCellW;
+          state.cols = Math.max(1, Math.floor((gridAvail + 4) / (cellW + 4)));
         }
       }
 
@@ -268,7 +294,8 @@
         cols: state.cols,
         layout: state.layout,
         mode: state.mode,
-        baseW: state.baseCellW
+        baseW: state.baseCellW,
+        maxW: state.maxCellW
       });
     }
 
@@ -278,20 +305,10 @@
       let base = '';
       let source = 'none';
       let transportParam = 'mqtt';
+      state.qrError = '';
 
-      // 1. Live local bridge (server.mjs) takes priority when running locally
-      if (state.bridgeConfig && state.bridgeConfig.phoneBaseUrl) {
-        base = state.bridgeConfig.phoneBaseUrl;
-        source = 'local-bridge';
-        transportParam = state.bridgeConfig.transport || 'dual';
-      } else if (window.location.protocol === 'https:' && !isLocalhostHost(window.location.hostname)) {
-        // 2. Already hosted on a real HTTPS origin (GitHub Pages, ngrok, Tailscale, Netlify, Vercel)
-        const dir = window.location.pathname.replace(/[^/]*$/, '');
-        base = window.location.origin + dir + 'cells/motion/phone.html';
-        source = 'origin-https';
-        transportParam = 'mqtt';
-      } else if (state.customUrlInput) {
-        // 3. Saved custom HTTPS URL override
+      // 1. User's explicit custom URL override always wins if configured
+      if (state.customUrlInput) {
         const norm = normalizePhoneBaseUrl(state.customUrlInput);
         if (norm) {
           base = norm;
@@ -300,10 +317,35 @@
         }
       }
 
-      state.phoneBaseUrl = base;
-      state.phoneUrlSource = source;
-      state.phoneUrlIsHttps = base.startsWith('https://');
-      state.qrUrl = base ? buildQrTargetUrl(base, state.sessionId, transportParam) : '';
+      // 2. Live local bridge (server.mjs) when httpsReady is true
+      if (!base && state.bridgeConfig && state.bridgeConfig.httpsReady && state.bridgeConfig.phoneBaseUrl) {
+        base = state.bridgeConfig.phoneBaseUrl;
+        source = 'local-bridge';
+        transportParam = state.bridgeConfig.transport || 'dual';
+      }
+
+      // 3. Hosted HTTPS origin (GitHub Pages, ngrok, Tailscale, Vercel, Netlify)
+      if (!base && window.location.protocol === 'https:' && !isLocalhostHost(window.location.hostname)) {
+        const dir = window.location.pathname.replace(/[^/]*$/, '');
+        base = window.location.origin + dir + 'cells/motion/phone.html';
+        source = 'origin-https';
+        transportParam = 'mqtt';
+      }
+
+      const candidateQr = base ? buildQrTargetUrl(base, state.sessionId, transportParam) : '';
+      if (candidateQr && utf8ByteLength(candidateQr) > MAX_QR_URL_BYTES) {
+        state.qrError = 'URL exceeds 213-byte QR limit; use a shorter HTTPS host.';
+        state.phoneBaseUrl = '';
+        state.phoneUrlSource = 'none';
+        state.phoneUrlIsHttps = false;
+        state.qrUrl = '';
+      } else {
+        state.phoneBaseUrl = base;
+        state.phoneUrlSource = source;
+        state.phoneUrlIsHttps = base.startsWith('https://');
+        state.qrUrl = candidateQr;
+      }
+
       renderQrTargets();
       updateLiveDom();
     }
@@ -334,10 +376,22 @@
             return res.json();
           })
           .then(function (cfg) {
-            if (cfg && cfg.ok && cfg.phoneBaseUrl) {
+            if (cfg && cfg.ok) {
+              const prevUrl = state.bridgeConfig && state.bridgeConfig.phoneBaseUrl;
+              const prevWs = state.bridgeConfig && state.bridgeConfig.desktopWsUrl;
               state.bridgeConfig = cfg;
-              recomputeQrUrl();
-              connectTransport();
+              if (cfg.phoneBaseUrl !== prevUrl) {
+                recomputeQrUrl();
+              }
+              if (cfg.desktopWsUrl !== prevWs) {
+                connectTransport();
+              }
+              // If ngrok tunnel is still starting up, re-probe briefly to upgrade QR from LAN self-signed to ngrok
+              if (cfg.tunnelPending && bridgePollAttempts < 6) {
+                bridgePollAttempts++;
+                clearTimeout(bridgePollTimer);
+                bridgePollTimer = setTimeout(probeLocalBridge, 1200);
+              }
             } else {
               tryNext();
             }
@@ -386,7 +440,6 @@
       state.lastPhoneMs = now;
       if (!state.phoneConnected) {
         state.phoneConnected = true;
-        // Close studio QR modal automatically once iPhone connects so user sees the live grid!
         if (refs.dialog && refs.dialog.open) {
           refs.dialog.close();
         }
@@ -429,8 +482,7 @@
       }
     }
 
-    // Periodic Hz counter & phone timeout detector + phone HUD sync
-    setInterval(function () {
+    hzTimer = setInterval(function () {
       const now = Date.now();
       const elapsed = Math.max(250, now - state.lastHzTick);
       state.rxHz = Math.round((state.rxCount * 1000) / elapsed);
@@ -439,7 +491,7 @@
 
       if (state.phoneConnected && now - state.lastPhoneMs > 6500) {
         state.phoneConnected = false;
-        updateLiveDom();
+        applyGridSize(state.scale, false);
       } else if (state.phoneConnected) {
         updateLiveDom();
       }
@@ -463,60 +515,73 @@
     }
 
     function renderQrTargets() {
-      // Card QR slot
       clearNode(refs.cardQrFrame);
+      clearNode(refs.dlgQrBox);
+
+      let cardSvg = null;
+      let dlgSvg = null;
       if (state.qrUrl) {
+        try {
+          cardSvg = QR.renderSVGElement(state.qrUrl, {
+            quiet: 4,
+            fg: '#141413',
+            bg: '#ffffff',
+            label: 'Scan with iPhone camera to open Motion Grid Controller'
+          }).svg;
+          dlgSvg = QR.renderSVGElement(state.qrUrl, {
+            quiet: 4,
+            fg: '#141413',
+            bg: '#ffffff',
+            label: 'Large QR code for iPhone motion controller'
+          }).svg;
+        } catch (err) {
+          state.qrError = String(err && err.message || 'QR encode failed');
+          cardSvg = null;
+          dlgSvg = null;
+        }
+      }
+
+      if (cardSvg && dlgSvg) {
         refs.cardQrFrame.classList.remove('is-unconfigured');
         refs.cardQrFrame.title = 'Click to enlarge QR code for scanning';
-        const rendered = QR.renderSVGElement(state.qrUrl, {
-          quiet: 4,
-          fg: '#141413',
-          bg: '#ffffff',
-          label: 'Scan with iPhone camera to open Motion Grid Controller'
-        });
-        refs.cardQrFrame.appendChild(rendered.svg);
+        refs.cardQrFrame.appendChild(cardSvg);
         refs.cardQrCaption.textContent = state.phoneUrlIsHttps
           ? 'Scan with iPhone · HTTPS'
           : 'Scan · Needs HTTPS on iOS';
+
+        refs.dlgQrBox.appendChild(dlgSvg);
+        refs.dlgUrlText.textContent = state.qrUrl;
       } else {
         refs.cardQrFrame.classList.add('is-unconfigured');
         refs.cardQrFrame.title = 'Click to configure HTTPS QR bridge';
         refs.cardQrFrame.appendChild(
           el('div', { className: 'mg-qr-setup-box' }, [
-            el('div', { className: 'mg-qr-setup-title', textContent: 'HTTPS Bridge Needed' }),
-            el('div', { className: 'mg-qr-setup-sub', textContent: 'iOS requires HTTPS for accelerometer. Click for 1-cmd setup.' })
-          ])
-        );
-        refs.cardQrCaption.textContent = 'Run bridge or set HTTPS URL';
-      }
-
-      // Studio Dialog QR slot
-      clearNode(refs.dlgQrBox);
-      if (state.qrUrl) {
-        const big = QR.renderSVGElement(state.qrUrl, {
-          quiet: 4,
-          fg: '#141413',
-          bg: '#ffffff',
-          label: 'Large QR code for iPhone motion controller'
-        });
-        refs.dlgQrBox.appendChild(big.svg);
-        refs.dlgUrlText.textContent = state.qrUrl;
-      } else {
-        refs.dlgQrBox.appendChild(
-          el('div', { className: 'mg-qr-setup-box', style: { padding: '16px' } }, [
-            el('div', { className: 'mg-qr-setup-title', textContent: 'Waiting for HTTPS Host' }),
+            el('div', { className: 'mg-qr-setup-title', textContent: state.qrError ? 'QR URL Too Long' : 'HTTPS Bridge Needed' }),
             el('div', {
               className: 'mg-qr-setup-sub',
-              textContent: 'Run "node cells/motion/server.mjs" in this repo or paste any HTTPS URL on the right to generate a scannable iPhone QR code.'
+              textContent: state.qrError || 'iOS requires HTTPS for accelerometer. Click for 1-cmd setup.'
             })
           ])
         );
-        refs.dlgUrlText.textContent = 'No HTTPS phone URL detected yet.';
+        refs.cardQrCaption.textContent = state.qrError ? 'Shorten HTTPS URL' : 'Run bridge or set HTTPS URL';
+
+        refs.dlgQrBox.appendChild(
+          el('div', { className: 'mg-qr-setup-box', style: { padding: '16px' } }, [
+            el('div', { className: 'mg-qr-setup-title', textContent: state.qrError ? 'QR Limit Exceeded' : 'Waiting for HTTPS Host' }),
+            el('div', {
+              className: 'mg-qr-setup-sub',
+              textContent: state.qrError || 'Run "node cells/motion/server.mjs" in this repo or paste any HTTPS URL on the right to generate a scannable iPhone QR code.'
+            })
+          ])
+        );
+        refs.dlgUrlText.textContent = state.qrError || 'No HTTPS phone URL detected yet.';
+      }
+      if (refs.dlgErr) {
+        refs.dlgErr.textContent = state.qrError || '';
       }
     }
 
     function updateLiveDom() {
-      // Status pill
       if (state.phoneConnected) {
         refs.statusPill.dataset.state = 'live';
         refs.statusText.textContent = state.rxHz > 0 ? 'LIVE · ' + state.rxHz + 'Hz' : 'PHONE LIVE';
@@ -537,32 +602,28 @@
       refs.scaleChip.textContent = scaleLabel;
       refs.gridMeta.textContent = state.cols + ' col · ' + (state.layout === 'reflow' ? 'Reflow' : '3×3');
 
-      // Micro view (when cells are shrunk tiny)
       refs.microVal.textContent = pxLabel;
-      refs.microSub.textContent = scaleLabel + ' · ' + state.cols + ' col';
+      refs.microSub.textContent = scaleLabel + ' · ' + state.cols + 'c';
       const pct = ((state.scale - Physics.MIN_SCALE) / (Physics.MAX_SCALE - Physics.MIN_SCALE)) * 100;
       refs.microFill.style.width = Physics.clamp(pct, 4, 100) + '%';
 
-      // Slider sync (only when not actively dragging with pointer)
       if (document.activeElement !== refs.slider) {
         refs.slider.value = String(Math.round(state.scale * 100));
       }
 
-      // 3-Axis live bars: Roll (tilt), Lift (up/down), Pull (in/out)
       setAxisBar(refs.barTilt, refs.valTilt, state.roll, 55, '°');
       setAxisBar(refs.barLift, refs.valLift, state.liftA, 10, '');
       setAxisBar(refs.barPull, refs.valPull, state.pullA, 10, '');
 
-      // Mode pills
       Object.keys(refs.modeBtns).forEach(function (m) {
         refs.modeBtns[m].setAttribute('aria-pressed', state.mode === m ? 'true' : 'false');
       });
 
-      // Layout toggle button
-      refs.layoutBtn.textContent = state.layout === 'reflow' ? 'Reflow' : 'Lock 3×3';
-      refs.layoutBtn.classList.toggle('is-active', state.layout === 'fixed3');
+      const isLocked3 = state.layout === 'fixed3';
+      refs.layoutBtn.textContent = isLocked3 ? 'Lock 3×3' : 'Reflow';
+      refs.layoutBtn.classList.toggle('is-active', isLocked3);
+      refs.layoutBtn.setAttribute('aria-pressed', isLocked3 ? 'true' : 'false');
 
-      // Footer link telemetry
       const txName = state.linkTransport === 'local-ws'
         ? 'LOCAL WS'
         : state.linkTransport === 'local-http'
@@ -570,18 +631,17 @@
           : 'MQTT WSS';
       refs.footerLink.textContent = txName + ' · ' + state.sessionId.slice(0, 4);
 
-      // Reset button highlight when scaled away from 1.00x
       const isOffset = Math.abs(state.scale - 1.0) >= 0.02;
       refs.resetBtn.classList.toggle('is-active', isOffset);
 
-      // Floating HUD (visible when actively scaled or phone connected)
       const showHud = isOffset || state.phoneConnected;
       refs.hud.classList.toggle('is-visible', showHud);
       refs.hud.dataset.live = state.phoneConnected ? 'true' : 'false';
       refs.hudVal.textContent = (state.phoneConnected ? 'iPhone · ' : 'Grid · ') + pxLabel + ' (' + scaleLabel + ')';
+      refs.hudZeroBtn.hidden = !state.phoneConnected;
     }
 
-    // Build Cell #2 Card
+    // Build Cell #3 Card
     clearNode(rootEl);
 
     refs.statusText = el('span', { textContent: 'LINKING' });
@@ -679,9 +739,11 @@
       'aria-label': 'Simulate phone motion cell size',
       onInput: function (ev) {
         const nextScale = Number(ev.target.value) / 100;
-        // Reflect simulated tilt angle so axis meter responds too
         state.roll = (nextScale - 1.0) * 45;
         setTargetScale(nextScale, false);
+        if (state.phoneConnected) {
+          sendToPhone({ t: 'cmd', cmd: 'setScale', val: Number(nextScale.toFixed(3)) });
+        }
       }
     });
 
@@ -694,7 +756,7 @@
         el('div', { className: 'mg-readout-card' }, [
           el('div', { className: 'mg-readout-top' }, [refs.sizeBig, refs.scaleChip]),
           el('div', { className: 'mg-readout-meta' }, [
-            el('span', { textContent: 'CELL WIDTH' }),
+            el('span', { className: 'mg-meta-label', textContent: 'CELL WIDTH' }),
             refs.gridMeta
           ])
         ]),
@@ -707,14 +769,13 @@
         el('div', { className: 'mg-scrub-wrap' }, [
           el('div', { className: 'mg-scrub-label' }, [
             el('span', { textContent: 'TEST SIZE' }),
-            el('span', { textContent: 'R = Reset' })
+            el('span', { className: 'mg-scrub-hint', textContent: 'R = Reset' })
           ]),
           refs.slider
         ])
       ])
     ]);
 
-    // Micro overlay when cells are shrunk very small
     refs.microVal = el('div', { className: 'mg-micro-val', textContent: '160 px' });
     refs.microSub = el('div', { className: 'mg-micro-sub', textContent: '0.38×' });
     refs.microFill = el('div', { className: 'mg-micro-fill', style: { width: '40%' } });
@@ -735,6 +796,7 @@
       type: 'button',
       className: 'mg-chip-btn',
       textContent: 'Reflow',
+      'aria-pressed': 'false',
       title: 'Toggle between responsive column reflow and locked 3x3 grid',
       onClick: function () {
         state.layout = state.layout === 'reflow' ? 'fixed3' : 'reflow';
@@ -760,17 +822,18 @@
     rootEl.appendChild(micro);
     rootEl.appendChild(footer);
 
-    // Floating HUD appended to body
     refs.hudVal = el('span', { className: 'mg-hud-val', textContent: 'Grid · 420 px (1.00×)' });
+    refs.hudZeroBtn = el('button', {
+      type: 'button',
+      className: 'mg-hud-btn',
+      textContent: 'Zero',
+      hidden: true,
+      onClick: function () { sendToPhone({ t: 'cmd', cmd: 'zero' }); }
+    });
     refs.hud = el('div', { className: 'mg-hud', role: 'status', 'aria-live': 'polite' }, [
       el('span', { className: 'mg-hud-dot', 'aria-hidden': 'true' }),
       refs.hudVal,
-      el('button', {
-        type: 'button',
-        className: 'mg-hud-btn',
-        textContent: 'Zero',
-        onClick: function () { sendToPhone({ t: 'cmd', cmd: 'zero' }); }
-      }),
+      refs.hudZeroBtn,
       el('button', {
         type: 'button',
         className: 'mg-hud-btn',
@@ -780,9 +843,9 @@
     ]);
     document.body.appendChild(refs.hud);
 
-    // Expanded Pairing Studio <dialog>
     refs.dlgQrBox = el('div', { className: 'mg-dlg-qr-box' });
     refs.dlgUrlText = el('div', { className: 'mg-dlg-url', textContent: '' });
+    refs.dlgErr = el('div', { className: 'mg-dlg-err', textContent: '' });
     refs.dlgUrlInput = el('input', {
       type: 'url',
       className: 'mg-input',
@@ -825,6 +888,7 @@
                 state.sessionId = Transport.generateSessionId(8);
                 safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, state.sessionId);
                 state.phoneConnected = false;
+                applyGridSize(state.scale, false);
                 recomputeQrUrl();
                 connectTransport();
               }
@@ -834,7 +898,10 @@
               className: 'mg-btn mg-btn--sm',
               style: { flex: '1' },
               textContent: 'Retry Bridge',
-              onClick: function () { probeLocalBridge(); }
+              onClick: function () {
+                bridgePollAttempts = 0;
+                probeLocalBridge();
+              }
             })
           ])
         ]),
@@ -854,7 +921,7 @@
             el('div', { className: 'mg-dlg-label', textContent: '2. Or Use Any Hosted HTTPS URL' }),
             el('p', {
               className: 'mg-dlg-note',
-              textContent: 'If this repo is served on GitHub Pages, Tailscale Serve, Vercel, or ngrok, paste the HTTPS URL below. Phone telemetry relays securely over MQTT WSS with zero backend.'
+              textContent: 'If this repo is served on GitHub Pages, Tailscale Serve, Vercel, or ngrok, paste the HTTPS URL below (clear to revert to auto-detected bridge). Phone telemetry relays securely over MQTT WSS with zero backend.'
             }),
             el('div', { className: 'mg-input-row' }, [
               refs.dlgUrlInput,
@@ -864,12 +931,29 @@
                 textContent: 'Set URL',
                 onClick: function () {
                   const val = refs.dlgUrlInput.value.trim();
+                  if (!val) {
+                    state.customUrlInput = '';
+                    safeStorageSet(window.localStorage, STORAGE_BASE_URL_KEY, '');
+                    recomputeQrUrl();
+                    return;
+                  }
+                  const norm = normalizePhoneBaseUrl(val);
+                  if (!norm) {
+                    refs.dlgErr.textContent = 'Enter a valid https:// URL.';
+                    return;
+                  }
+                  const testQr = buildQrTargetUrl(norm, state.sessionId, 'mqtt');
+                  if (utf8ByteLength(testQr) > MAX_QR_URL_BYTES) {
+                    refs.dlgErr.textContent = 'URL too long for QR (max 213 bytes).';
+                    return;
+                  }
                   state.customUrlInput = val;
                   safeStorageSet(window.localStorage, STORAGE_BASE_URL_KEY, val);
                   recomputeQrUrl();
                 }
               })
-            ])
+            ]),
+            refs.dlgErr
           ]),
           el('div', { className: 'mg-dlg-section' }, [
             el('div', { className: 'mg-dlg-label', textContent: '3. Gestures Supported on iPhone' }),
@@ -887,6 +971,7 @@
     document.body.appendChild(refs.dialog);
 
     function openStudio() {
+      bridgePollAttempts = 0;
       probeLocalBridge();
       if (typeof refs.dialog.showModal === 'function') {
         if (!refs.dialog.open) refs.dialog.showModal();
@@ -895,7 +980,6 @@
       }
     }
 
-    // Keyboard shortcut: R resets grid size when not focused on an input
     window.addEventListener('keydown', function (ev) {
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
       const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
@@ -912,11 +996,12 @@
     });
 
     window.addEventListener('beforeunload', function () {
+      clearInterval(hzTimer);
       clearInterval(feedbackTimer);
+      clearTimeout(bridgePollTimer);
       if (link) link.close();
     });
 
-    // Boot
     measureBaseCellWidth();
     recomputeQrUrl();
     connectTransport();
@@ -924,7 +1009,11 @@
   }
 
   NS.UI = {
-    mountMotionCell: mountMotionCell
+    mountMotionCell: mountMotionCell,
+    _internal: {
+      normalizePhoneBaseUrl: normalizePhoneBaseUrl,
+      buildQrTargetUrl: buildQrTargetUrl
+    }
   };
 
   function autoMount() {

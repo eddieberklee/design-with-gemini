@@ -1,6 +1,6 @@
 # iPhone Motion Grid Controller (`cells/motion/`)
 
-Interactive Cell #3 prototype mounted into `#cell-motion` in [index.html](../../index.html). Displays a scannable QR code that opens a standalone mobile web controller (`phone.html`) on an iPhone and uses the phone's accelerometer and orientation sensors (rotate/tilt, raise up/down, or pull/push) to dynamically resize every cell in the desktop grid in real time.
+Interactive Cell #3 prototype mounted into `#cell-motion` in [index.html](../../index.html). Displays a scannable QR code that opens a standalone mobile web controller (`phone.html`) on an iPhone and uses the phone's accelerometer (`DeviceMotionEvent`) — rotating/tilting, raising up/down, or pulling/pushing — to dynamically resize every cell in the desktop grid in real time.
 
 ---
 
@@ -11,12 +11,13 @@ Zero-build, zero-dependency browser + Node architecture matching `cells/decision
 | File | Responsibility |
 | :--- | :--- |
 | [qr.js](qr.js) | Self-contained ISO/IEC 18004 Byte-mode QR encoder (Versions 1–10, EC Level M, GF(256) Reed-Solomon, 8-mask penalty evaluation) rendering crisp inline SVG with a 4-module quiet zone (`window.MotionGrid.QR`). |
-| [physics.js](physics.js) | Shared sensor-fusion and physics core (`window.MotionGrid.Physics`): exponential low-pass `GravityFilter`, continuous tilt extraction, gravity-projected world-up (`Lift`) and orthogonal screen-normal (`Pull`) ZUPT velocity integrators, and critically damped `SpringDamper` for 60fps desktop layout smoothing. |
-| [transport.js](transport.js) | Dual-path real-time link (`window.MotionGrid.Transport`): minimal pure-JS MQTT 3.1.1 over WSS relay (`wss://broker.emqx.io:8084/mqtt` with HiveMQ/Mosquitto failover) plus same-origin local WebSocket (`/ws`) and HTTP POST/SSE fallback (`LocalBridgeTransport`). |
-| [ui.js](ui.js) | Desktop Cell #2 card, large Pairing Studio `<dialog>`, auto-discovery of local HTTPS bridge (`/api/motion-config`), live 3-axis meters, desktop scale scrub simulator, floating resize HUD, and `--mg-cell-w` grid controller. |
-| [motion.css](motion.css) | Strictly scoped under `.cell--motion`, `.mg-*`, `.mg-dialog`, `.mg-hud`, and opt-in `.grid.is-motion-controlled` (`Reflow` and `Lock 3×3` modes) with `@container mg-card` micro-cell adaptation down to `140px`. |
-| [phone.html](phone.html), [phone.css](phone.css), [phone.js](phone.js) | One-handed dark-instrument iPhone web app with iOS `DeviceMotionEvent.requestPermission()` gesture gate, radial scale dial, bubble reticle, `All / Tilt / Lift / Pull` gesture modes, `Clutch` ratchet mode, `Zero Pose`, `Reset 100%`, Screen Wake Lock, and manual trim slider. |
-| [server.mjs](server.mjs) | Zero-dependency Node HTTPS + RFC 6455 WebSocket + SSE/POST local bridge (`node cells/motion/server.mjs`) that auto-detects/launches an `ngrok` trusted HTTPS tunnel and falls back to ephemeral self-signed LAN TLS in `os.tmpdir()`. |
+| [physics.js](physics.js) | Shared accelerometer sensor-fusion and physics core (`window.MotionGrid.Physics`): linear-subtracted `GravityFilter`, continuous unwrapped tilt extraction (`gravityToTiltDeg` + `wrapAngleDiffDeg`), gravity-projected world-up (`Lift`) and orthogonal screen-normal (`Pull`) ZUPT velocity integrators, and critically damped `SpringDamper` for 60fps desktop layout smoothing. |
+| [transport.js](transport.js) | Dual-path real-time link (`window.MotionGrid.Transport`): minimal pure-JS MQTT 3.1.1 over WSS relay (`wss://broker.emqx.io:8084/mqtt` with HiveMQ/Mosquitto failover), strict session ID validation (`SESSION_ID_RE`), plus same-origin local WebSocket (`/ws`) and liveness-checked HTTP POST/SSE fallback (`LocalBridgeTransport`). |
+| [ui.js](ui.js) | Desktop Cell #3 card, large Pairing Studio `<dialog>`, auto-discovery of local HTTPS bridge (`/api/motion-config` with ngrok-startup re-probe), live 3-axis meters, desktop scale scrub simulator, floating resize HUD, and `--mg-cell-w` grid controller. |
+| [motion.css](motion.css) | Strictly scoped under `.cell--motion`, `.mg-*`, `.mg-dialog`, `.mg-hud`, and opt-in `.grid.is-motion-controlled` (`Reflow` and `Lock 3×3` modes) with `@container mg-card` micro/narrow/hero adaptation (`140px` to `960px`), `:focus-visible` rings, and `prefers-reduced-motion` support. |
+| [phone.html](phone.html), [phone.css](phone.css), [phone.js](phone.js) | One-handed dark-instrument iPhone web app with synchronous iOS `DeviceMotionEvent.requestPermission()` gate (plus touch-slider dismiss fallback), piecewise radial dial anchored at `1.00× = 0°`, bubble reticle, `All / Tilt / Lift / Pull` gesture modes, `Clutch` ratchet mode, `Zero Pose`, `Reset 100%`, Screen Wake Lock re-acquisition, and `44pt` touch targets. |
+| [server.mjs](server.mjs) | Zero-dependency Node HTTPS + RFC 6455 WebSocket + SSE/POST local bridge (`node cells/motion/server.mjs`) that auto-detects/launches a port-matched `ngrok` HTTPS tunnel, falls back to ephemeral `0o700` self-signed LAN TLS in `os.tmpdir()`, enforces strict web-asset allowlisting + `fs.realpath` containment, and bounds WS/POST payload sizes (`8192B`). |
+| [motion.test.mjs](motion.test.mjs) | Node test suite (`node --test cells/motion/motion.test.mjs`) verifying QR ISO structure/RS syndromes, accelerometer physics (roll sign, gravity de-contamination, lift ZUPT, clutch), MQTT framing, DualLink dedup/failover, and hardened `server.mjs` security & relay behavior. |
 
 ---
 
@@ -24,32 +25,33 @@ Zero-build, zero-dependency browser + Node architecture matching `cells/decision
 
 - **Why dual-path transport (Local WS/HTTPS + MQTT 3.1.1 over WSS)**:
   - Works completely backend-free when hosted on any static HTTPS host (GitHub Pages, Vercel, Netlify, Tailscale Serve) via pure-JS MQTT over WSS (`~100ms` RTT, works across Wi-Fi and 5G cellular).
-  - Automatically upgrades to `< 5ms` same-origin WebSocket (with HTTP POST/SSE fallback for self-signed iOS Safari sessions) whenever `node cells/motion/server.mjs` is running.
-- **Why world-up gravity projection + ZUPT (`physics.js:MotionProcessor.prototype.ingestMotion`)**:
-  - Raw `event.acceleration.z` only means "up" when the phone is perfectly flat. Projecting linear acceleration onto the low-pass unit gravity vector $\hat{g}$ ensures **raising up / lowering down** works regardless of how the user holds the iPhone.
-  - Pure double-integration of MEMS accelerometers drifts quadratically within seconds; pairing an adaptive noise deadzone (`0.42 m/s²`) with Zero-Velocity Update (ZUPT) exponential damping converts intentional lift/pull motions into crisp relative cell-size changes with zero idle drift.
-- **Why `Reflow` default + `Lock 3×3` toggle (`motion.css:.grid.is-motion-controlled`)**:
+  - Automatically upgrades to `< 5ms` same-origin WebSocket whenever `node cells/motion/server.mjs` is running, while liveness-checking HTTP POST/SSE fallback via `EventSource.onopen` so a dead local bridge never starves healthy MQTT WSS.
+- **Why gravity-subtracted tilt + world-up ZUPT (`physics.js:MotionProcessor.prototype.ingestMotion`)**:
+  - Subtracting hardware-fused `event.acceleration` before updating `GravityFilter` prevents brisk pulls or lifts from tilting the estimated gravity vector and causing false pitch drops.
+  - Projecting linear acceleration onto the unit gravity vector $\hat{g}$ ensures **raising up / lowering down** works regardless of grip orientation, while adaptive deadzones (`0.42 m/s²`) + Zero-Velocity Update (ZUPT) damping eliminate MEMS double-integration drift.
+- **Why `Reflow` default + truthful `Lock 3×3` (`motion.css:.grid.is-motion-controlled`)**:
   - At `1.00×` neutral scale, `.is-motion-controlled` is inactive so `index.html` remains pixel-identical to baseline.
-  - In `Reflow` mode (`repeat(auto-fill, min(100%, var(--mg-cell-w)))`), cells smoothly shrink down to `140px` contact-sheet thumbnails (`6+` per row) and expand up to `960px` full hero cards (`1` per row) while every intermediate pixel visibly resizes every tile. `Lock 3×3` preserves strict 3-column topology for scaling within the 3×3 grid.
+  - In `Reflow` mode (`repeat(auto-fill, min(100%, var(--mg-cell-w)))`), cells smoothly shrink down to `140px` contact-sheet thumbnails (`6+` per row) and expand up to `960px` hero cards (`1` per row). `Lock 3×3` keeps 3 columns and caps reported `currentCellW` to the exact 3-column maximum so UI readouts always match rendered DOM widths.
 
 ---
 
 ## 3. Hazards & Invariants
 
-- **iOS Safari Secure Context (`phone.js`)**: `DeviceMotionEvent` and `DeviceOrientationEvent` are blocked by WebKit over non-HTTPS LAN URLs (`http://192.168.x.x`). `ui.js:recomputeQrUrl` never silently emits a broken `file://` or `localhost` QR URL; it resolves real `https://` origins, probes `server.mjs`'s `/api/motion-config`, or prompts the user to run `node cells/motion/server.mjs` or supply a hosted HTTPS URL.
-- **Synchronous iOS permission gesture (`phone.js:enableBtn`)**: `DeviceMotionEvent.requestPermission()` MUST be invoked synchronously inside the button `click` handler before any unrelated `await`.
-- **iOS accelerometer sign inversion (`physics.js:MotionProcessor.prototype.ingestMotion`)**: iOS Safari negates `accelerationIncludingGravity` and `acceleration` relative to the W3C / Android spec; `isIOS` normalizes signs so clockwise tilt and upward lift consistently grow cells across devices.
-- **No self-squish at micro cell sizes (`motion.css:@container mg-card`)**: Because Cell #2 shrinks itself along with the grid, below `245px` it automatically swaps out the QR grid for a high-contrast tabular pixel/scale tile with a `Reset 100%` button, and a fixed bottom-right `.mg-hud` keeps reset/zero reachable even if cells expand past the viewport.
+- **iOS Safari Secure Context (`phone.js`, `ui.js:recomputeQrUrl`)**: `DeviceMotionEvent` is blocked by WebKit over non-HTTPS URLs. `recomputeQrUrl` only accepts `httpsReady` bridge configs, real `https://` origins, or validated user custom URLs (`<= 213` UTF-8 bytes) and wraps `QR.renderSVGElement` in `try/catch` so invalid saved URLs never brick Cell #3.
+- **Synchronous iOS permission gesture (`phone.js:refs.enableBtn`)**: `DeviceMotionEvent.requestPermission()` MUST be invoked synchronously inside the button `click` handler before any unrelated `await`.
+- **iOS accelerometer sign normalization (`physics.js:MotionProcessor.prototype.ingestMotion`, `physics.js:gravityToTiltDeg`)**: iOS Safari negates `accelerationIncludingGravity` and `acceleration` relative to the W3C spec; `isIOS` normalizes to W3C world-up (`+Z` out of flat face-up glass), and `roll = atan2(-gUnit.x, hypot(gUnit.y, gUnit.z))` maps clockwise wrist twist to `+roll` (enlarge).
+- **Hardened local bridge (`server.mjs:handleRequest`, `server.mjs:handleUpgrade`)**: Safely parses malformed URLs (`400` instead of uncaught `URIError`), rejects `..`, dotfiles (`.git/*`, `.env`), non-allowlisted extensions (`GEMINI.md`, `AGENTS.md`), and symlink escapes via `fs.realpath`, and enforces `8192B` limits on WS frames and HTTP POST bodies.
+- **No self-squish at micro cell sizes (`motion.css:@container mg-card`)**: Below `245px` Cell #3 switches to a compact pixel/scale tile (`Reset 100%`), hiding the status pill below `195px` so nothing clips even at `140px × 105px`, while a fixed `.mg-hud` keeps `Reset 100%` (and `Zero` when phone is live) always reachable.
 
 ---
 
 ## 4. How to Run & Verify
 
-1. **Automated unit & relay tests**:
+1. **Automated unit, physics, security & relay tests**:
    ```bash
    node --test cells/motion/motion.test.mjs
    ```
-2. **Syntax check all browser scripts**:
+2. **Syntax check all browser & server scripts**:
    ```bash
    node --check cells/motion/qr.js && node --check cells/motion/physics.js && node --check cells/motion/transport.js && node --check cells/motion/ui.js && node --check cells/motion/phone.js && node --check cells/motion/server.mjs
    ```
@@ -57,4 +59,4 @@ Zero-build, zero-dependency browser + Node architecture matching `cells/decision
    ```bash
    node cells/motion/server.mjs
    ```
-   Open `http://localhost:8443` on desktop, scan the QR code in Cell #2 with your iPhone Camera, tap **Enable Motion**, and rotate, raise up/down, or pull the phone to smoothly resize the grid cells.
+   Open `http://localhost:8443` on desktop, scan the QR code in Cell #3 with your iPhone Camera, tap **Enable Motion**, and rotate, raise up/down, or pull the phone to smoothly resize the grid cells.

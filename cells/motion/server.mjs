@@ -2,10 +2,11 @@
 'use strict';
 
 /**
- * Zero-dependency HTTPS + WebSocket + SSE/POST Local Bridge for Cell #2 (Motion Grid).
+ * Zero-dependency HTTPS + WebSocket + SSE/POST Local Bridge for Cell #3 (Motion Grid).
  *
- * Serves the repository root so desktop (`http://localhost:8443`) and iPhone (`https://...`)
- * connect cleanly with iOS Safari's mandatory Secure Context for DeviceMotionEvent.
+ * Serves static web assets from the repository root so desktop (`http://localhost:8443`)
+ * and iPhone (`https://...`) connect cleanly under iOS Safari's mandatory Secure Context
+ * for DeviceMotionEvent.
  *
  * Usage:
  *   node cells/motion/server.mjs                # Auto-detects ngrok HTTPS tunnel; falls back to self-signed LAN HTTPS
@@ -26,7 +27,13 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-const MIME_TYPES = {
+const SESSION_ID_RE = /^[A-Z0-9]{6,12}$/;
+const MAX_POST_BYTES = 8192;
+const MAX_WS_PAYLOAD = 8192;
+const MAX_WS_RXBUF = 16384;
+
+// Public web asset allowlist (blocks dotfiles, .git/*, .env, GEMINI.md, AGENTS.md, etc.)
+const PUBLIC_MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -35,8 +42,9 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
-  '.md': 'text/markdown; charset=utf-8'
+  '.woff2': 'font/woff2'
 };
 
 function getLanIp() {
@@ -53,7 +61,8 @@ function getLanIp() {
 
 function generateSelfSignedCert(lanIp) {
   const dir = path.join(os.tmpdir(), 'dwg-motion-tls');
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { fs.chmodSync(dir, 0o700); } catch (_e) {}
   const keyPath = path.join(dir, 'key.pem');
   const certPath = path.join(dir, 'cert.pem');
   const san = `IP:${lanIp},IP:127.0.0.1,DNS:localhost`;
@@ -71,6 +80,7 @@ function generateSelfSignedCert(lanIp) {
       ],
       { stdio: 'ignore' }
     );
+    try { fs.chmodSync(keyPath, 0o600); } catch (_e) {}
     return {
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath)
@@ -82,8 +92,10 @@ function generateSelfSignedCert(lanIp) {
 
 // ---------- Minimal RFC 6455 WebSocket Frame Codec ----------
 
-function encodeWsFrame(payloadText, opcode = 0x1) {
-  const payload = Buffer.from(payloadText, 'utf8');
+function encodeWsFrame(payloadInput, opcode = 0x1) {
+  const payload = Buffer.isBuffer(payloadInput)
+    ? payloadInput
+    : Buffer.from(String(payloadInput), 'utf8');
   const len = payload.length;
   let header;
   if (len < 126) {
@@ -102,7 +114,7 @@ function encodeWsFrame(payloadText, opcode = 0x1) {
   return Buffer.concat([header, payload]);
 }
 
-function parseWsFrames(buffer) {
+function parseWsFrames(buffer, maxPayload = MAX_WS_PAYLOAD) {
   const frames = [];
   let offset = 0;
   while (offset + 2 <= buffer.length) {
@@ -119,8 +131,16 @@ function parseWsFrames(buffer) {
       pos += 2;
     } else if (payloadLen === 127) {
       if (pos + 8 > buffer.length) break;
-      payloadLen = Number(buffer.readBigUInt64BE(pos));
+      const bigLen = buffer.readBigUInt64BE(pos);
+      if (bigLen > BigInt(maxPayload)) {
+        return { frames, remainder: Buffer.alloc(0), error: 'frame_too_large' };
+      }
+      payloadLen = Number(bigLen);
       pos += 8;
+    }
+
+    if (payloadLen > maxPayload) {
+      return { frames, remainder: Buffer.alloc(0), error: 'frame_too_large' };
     }
 
     const maskLen = masked ? 4 : 0;
@@ -135,7 +155,21 @@ function parseWsFrames(buffer) {
     frames.push({ opcode, payload });
     offset = pos + payloadLen;
   }
-  return { frames, remainder: buffer.subarray(offset) };
+  return { frames, remainder: buffer.subarray(offset), error: null };
+}
+
+function safeParseRequestUrl(req) {
+  const rawUrl = typeof req.url === 'string' ? req.url : '/';
+  const rawHost = typeof req.headers.host === 'string' && /^[A-Za-z0-9.\-:\[\]]+$/.test(req.headers.host)
+    ? req.headers.host
+    : 'localhost';
+  try {
+    const parsed = new URL(rawUrl, `http://${rawHost}`);
+    const decodedPath = decodeURIComponent(parsed.pathname);
+    return { url: parsed, rawUrl, decodedPath };
+  } catch (_err) {
+    return null;
+  }
 }
 
 // ---------- Room Relay (Desktop <-> Phone) ----------
@@ -143,7 +177,7 @@ function parseWsFrames(buffer) {
 export function createBridgeServer(options = {}) {
   const httpPort = Number(options.port ?? 8443);
   const httpsPort = Number(options.httpsPort ?? httpPort + 1);
-  const rootDir = options.rootDir || REPO_ROOT;
+  const rootDir = fs.realpathSync(options.rootDir || REPO_ROOT);
   const lanIp = options.lanIp || getLanIp();
 
   const state = {
@@ -152,10 +186,10 @@ export function createBridgeServer(options = {}) {
     lanIp,
     publicHttpsOrigin: '',
     lanHttpsOrigin: '',
-    tunnelSource: 'none'
+    tunnelSource: 'none',
+    tunnelPending: Boolean(options.tunnelPending)
   };
 
-  // Map<sessionId, { desktop: Set<client>, phone: Set<client> }>
   const rooms = new Map();
 
   function getRoom(sid) {
@@ -188,54 +222,99 @@ export function createBridgeServer(options = {}) {
     if (state.lanHttpsOrigin) {
       return state.lanHttpsOrigin + '/cells/motion/phone.html';
     }
-    return `http://${state.lanIp}:${state.httpPort}/cells/motion/phone.html`;
+    return '';
   }
 
-  function setCors(res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, ngrok-skip-browser-warning');
+  function isAllowedOrigin(origin) {
+    if (!origin || origin === 'null') return true; // file:// or direct same-origin request
+    if (origin === state.publicHttpsOrigin || origin === state.lanHttpsOrigin) return true;
+    return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+  }
+
+  function applyCors(req, res) {
+    const origin = req.headers.origin;
+    if (origin && isAllowedOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, ngrok-skip-browser-warning');
+    }
   }
 
   function handleRequest(req, res) {
-    setCors(res);
+    applyCors(req, res);
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
       res.end();
       return;
     }
 
-    const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    const pathname = decodeURIComponent(reqUrl.pathname);
+    const parsedReq = safeParseRequestUrl(req);
+    if (!parsedReq) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Bad Request');
+      return;
+    }
 
-    if (pathname === '/api/motion-config') {
+    const { url: reqUrl, rawUrl, decodedPath } = parsedReq;
+
+    if (decodedPath === '/api/motion-config') {
+      const isTls = Boolean(req.socket && req.socket.encrypted);
+      const reqHost = typeof req.headers.host === 'string' && /^[A-Za-z0-9.\-:\[\]]+$/.test(req.headers.host)
+        ? req.headers.host
+        : `127.0.0.1:${state.httpPort}`;
+      const httpProto = isTls ? 'https' : 'http';
+      const wsProto = isTls ? 'wss' : 'ws';
+      const phoneBaseUrl = resolvePhoneBaseUrl();
+
       const payload = {
         ok: true,
-        phoneBaseUrl: resolvePhoneBaseUrl(),
-        httpsReady: Boolean(state.publicHttpsOrigin || state.lanHttpsOrigin),
+        phoneBaseUrl,
+        httpsReady: Boolean(phoneBaseUrl),
         tunnelSource: state.tunnelSource,
+        tunnelPending: state.tunnelPending,
         transport: 'dual',
-        desktopHttpBase: `http://127.0.0.1:${state.httpPort}`,
-        desktopWsUrl: `ws://127.0.0.1:${state.httpPort}/ws`
+        desktopHttpBase: `${httpProto}://${reqHost}`,
+        desktopWsUrl: `${wsProto}://${reqHost}/ws`
       };
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(payload));
       return;
     }
 
-    if (pathname === '/api/motion/send' && req.method === 'POST') {
+    if (decodedPath === '/api/motion/send' && req.method === 'POST') {
       const sid = (reqUrl.searchParams.get('s') || '').trim().toUpperCase();
       const role = reqUrl.searchParams.get('role') === 'phone' ? 'phone' : 'desktop';
-      if (!sid) {
+      if (!SESSION_ID_RE.test(sid)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end('{"error":"missing session"}');
+        res.end('{"error":"invalid session"}');
         return;
       }
-      let body = '';
+      const chunks = [];
+      let totalBytes = 0;
+      let tooLarge = false;
       req.on('data', (chunk) => {
-        if (body.length < 16384) body += chunk.toString('utf8');
+        totalBytes += chunk.length;
+        if (totalBytes > MAX_POST_BYTES) {
+          tooLarge = true;
+          return;
+        }
+        chunks.push(chunk);
       });
       req.on('end', () => {
+        if (tooLarge) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end('{"error":"payload too large"}');
+          return;
+        }
+        const body = Buffer.concat(chunks).toString('utf8');
+        try {
+          JSON.parse(body);
+        } catch (_e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end('{"error":"invalid json"}');
+          return;
+        }
         relayMessage(sid, role, body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end('{"ok":true}');
@@ -243,12 +322,12 @@ export function createBridgeServer(options = {}) {
       return;
     }
 
-    if (pathname === '/api/motion/stream' && req.method === 'GET') {
+    if (decodedPath === '/api/motion/stream' && req.method === 'GET') {
       const sid = (reqUrl.searchParams.get('s') || '').trim().toUpperCase();
       const role = reqUrl.searchParams.get('role') === 'phone' ? 'phone' : 'desktop';
-      if (!sid) {
+      if (!SESSION_ID_RE.test(sid)) {
         res.writeHead(400);
-        res.end('Missing session');
+        res.end('Invalid session');
         return;
       }
       res.writeHead(200, {
@@ -271,40 +350,74 @@ export function createBridgeServer(options = {}) {
       return;
     }
 
-    // Static file server strictly confined to REPO_ROOT
-    const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-    const fullPath = path.resolve(rootDir, rel);
-    if (!fullPath.startsWith(rootDir + path.sep) && fullPath !== rootDir) {
-      res.writeHead(403);
+    // Reject raw traversal attempts (`..` or `%2e%2e`) before URL normalization hides them
+    const rawPathOnly = rawUrl.split('?')[0].split('#')[0];
+    if (/(?:^|\/)(?:\.\.|%2e%2e)(?:\/|$)/i.test(rawPathOnly) || decodedPath.includes('\0')) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('Forbidden');
       return;
     }
 
-    fs.stat(fullPath, (err, stat) => {
-      if (err || !stat.isFile()) {
+    // Reject dotfiles and dot-directories (.git, .env, .DS_Store, etc.)
+    const segments = decodedPath.split('/').filter(Boolean);
+    if (segments.some((seg) => seg.startsWith('.') || seg === '..')) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden');
+      return;
+    }
+
+    const rel = decodedPath === '/' ? 'index.html' : decodedPath.replace(/^\/+/, '');
+    const ext = path.extname(rel).toLowerCase();
+    const mime = PUBLIC_MIME_TYPES[ext];
+    if (!mime) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden');
+      return;
+    }
+
+    const candidate = path.resolve(rootDir, rel);
+    if (!candidate.startsWith(rootDir + path.sep)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden');
+      return;
+    }
+
+    fs.realpath(candidate, (rpErr, realPath) => {
+      if (rpErr) {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Not found');
         return;
       }
-      const ext = path.extname(fullPath).toLowerCase();
-      res.writeHead(200, {
-        'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-        'Cache-Control': 'no-cache'
+      if (!realPath.startsWith(rootDir + path.sep)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden');
+        return;
+      }
+      fs.stat(realPath, (err, stat) => {
+        if (err || !stat.isFile()) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not found');
+          return;
+        }
+        res.writeHead(200, {
+          'Content-Type': mime,
+          'Cache-Control': 'no-cache'
+        });
+        fs.createReadStream(realPath).pipe(res);
       });
-      fs.createReadStream(fullPath).pipe(res);
     });
   }
 
   function handleUpgrade(req, socket) {
-    const reqUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    if (reqUrl.pathname !== '/ws') {
+    const parsedReq = safeParseRequestUrl(req);
+    if (!parsedReq || parsedReq.decodedPath !== '/ws') {
       socket.destroy();
       return;
     }
-    const sid = (reqUrl.searchParams.get('s') || '').trim().toUpperCase();
-    const role = reqUrl.searchParams.get('role') === 'phone' ? 'phone' : 'desktop';
+    const sid = (parsedReq.url.searchParams.get('s') || '').trim().toUpperCase();
+    const role = parsedReq.url.searchParams.get('role') === 'phone' ? 'phone' : 'desktop';
     const key = req.headers['sec-websocket-key'];
-    if (!sid || !key) {
+    if (!SESSION_ID_RE.test(sid) || !key) {
       socket.destroy();
       return;
     }
@@ -331,8 +444,18 @@ export function createBridgeServer(options = {}) {
 
     let rxBuf = Buffer.alloc(0);
     socket.on('data', (chunk) => {
+      if (rxBuf.length + chunk.length > MAX_WS_RXBUF) {
+        socket.end(encodeWsFrame(Buffer.from([0x03, 0xf1]), 0x8)); // 1009 Message Too Big
+        socket.destroy();
+        return;
+      }
       rxBuf = rxBuf.length ? Buffer.concat([rxBuf, chunk]) : chunk;
-      const parsed = parseWsFrames(rxBuf);
+      const parsed = parseWsFrames(rxBuf, MAX_WS_PAYLOAD);
+      if (parsed.error) {
+        socket.end(encodeWsFrame(Buffer.from([0x03, 0xf1]), 0x8));
+        socket.destroy();
+        return;
+      }
       rxBuf = Buffer.from(parsed.remainder);
       for (const frame of parsed.frames) {
         if (frame.opcode === 0x1) {
@@ -340,7 +463,7 @@ export function createBridgeServer(options = {}) {
         } else if (frame.opcode === 0x8) {
           socket.end();
         } else if (frame.opcode === 0x9) {
-          socket.write(encodeWsFrame(frame.payload.toString('utf8'), 0xA));
+          socket.write(encodeWsFrame(frame.payload, 0xA)); // Preserve binary ping payload verbatim
         }
       }
     });
@@ -387,12 +510,17 @@ export function createBridgeServer(options = {}) {
   };
 }
 
-async function queryNgrokUrl() {
+async function queryNgrokUrl(targetPort) {
   try {
     const res = await fetch('http://127.0.0.1:4040/api/tunnels');
     if (!res.ok) return '';
     const data = await res.json();
-    const tunnel = (data.tunnels || []).find((t) => typeof t.public_url === 'string' && t.public_url.startsWith('https://'));
+    const portSuffix = `:${targetPort}`;
+    const tunnel = (data.tunnels || []).find((t) => {
+      if (typeof t.public_url !== 'string' || !t.public_url.startsWith('https://')) return false;
+      const addr = String(t.config && t.config.addr || '');
+      return addr === String(targetPort) || addr.endsWith(portSuffix);
+    });
     return tunnel ? tunnel.public_url.replace(/\/+$/, '') : '';
   } catch (_e) {
     return '';
@@ -400,8 +528,7 @@ async function queryNgrokUrl() {
 }
 
 async function startNgrokTunnel(port) {
-  // Reuse an existing ngrok tunnel if one is already pointed at this port
-  const existing = await queryNgrokUrl();
+  const existing = await queryNgrokUrl(port);
   if (existing) return { url: existing, child: null };
 
   const child = spawn('ngrok', ['http', String(port), '--log=stdout'], {
@@ -411,14 +538,13 @@ async function startNgrokTunnel(port) {
 
   for (let i = 0; i < 24; i++) {
     await new Promise((r) => setTimeout(r, 250));
-    const url = await queryNgrokUrl();
+    const url = await queryNgrokUrl(port);
     if (url) return { url, child };
   }
   try { child.kill(); } catch (_e) {}
   return { url: '', child: null };
 }
 
-// CLI entry point
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === __filename;
 if (isMain) {
   const args = process.argv.slice(2);
@@ -426,7 +552,7 @@ if (isMain) {
   const portIdx = args.indexOf('--port');
   const port = portIdx >= 0 ? Number(args[portIdx + 1]) || 8443 : 8443;
 
-  const bridge = createBridgeServer({ port });
+  const bridge = createBridgeServer({ port, tunnelPending: !noNgrok });
   let ngrokChild = null;
 
   (async () => {
@@ -438,6 +564,7 @@ if (isMain) {
         st.tunnelSource = 'ngrok';
         ngrokChild = ng.child;
       }
+      st.tunnelPending = false;
     }
 
     console.log('');

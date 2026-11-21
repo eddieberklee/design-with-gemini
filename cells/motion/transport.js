@@ -10,7 +10,7 @@
   'use strict';
 
   // Zero-dependency dual-path real-time link for Desktop <-> iPhone Motion Control.
-  // Path 1: Same-origin Local WebSocket (/ws) with automatic HTTP POST/SSE fallback (via cells/motion/server.mjs)
+  // Path 1: Same-origin Local WebSocket (/ws) with liveness-checked HTTP POST/SSE fallback
   // Path 2: Pure-JS MQTT 3.1.1 over WSS relay (works zero-server from file://, http://localhost, or https://)
 
   const MQTT_BROKERS = [
@@ -20,6 +20,11 @@
   ];
 
   const TOPIC_PREFIX = 'dwg-motion-v1/';
+  const SESSION_ID_RE = /^[A-Z0-9]{6,12}$/;
+
+  function isValidSessionId(sid) {
+    return typeof sid === 'string' && SESSION_ID_RE.test(sid);
+  }
 
   function generateSessionId(len) {
     const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -90,7 +95,7 @@
     let value = 0;
     let idx = offset;
     for (let i = 0; i < 4; i++) {
-      if (idx >= buf.length) return null; // incomplete
+      if (idx >= buf.length) return null;
       const byte = buf[idx++];
       value += (byte & 127) * mult;
       if ((byte & 128) === 0) {
@@ -134,10 +139,6 @@
     return new Uint8Array([0xe0, 0x00]);
   }
 
-  /**
-   * Parses 0..N complete MQTT packets from an accumulated Uint8Array buffer.
-   * Returns { packets: [...], remainder: Uint8Array }.
-   */
   function parseMqttPackets(buffer) {
     const packets = [];
     let offset = 0;
@@ -152,11 +153,10 @@
         return { packets: packets, remainder: new Uint8Array(0), error: rem.error };
       }
       const pktEnd = rem.nextOffset + rem.length;
-      if (pktEnd > buffer.length) break; // wait for more bytes
+      if (pktEnd > buffer.length) break;
 
       const body = buffer.subarray(rem.nextOffset, pktEnd);
       if (type === 3) {
-        // PUBLISH
         if (body.length >= 2) {
           const tLen = (body[0] << 8) | body[1];
           const qos = (flags >>> 1) & 0x03;
@@ -185,8 +185,11 @@
   // ---------- MQTT WSS Transport ----------
 
   function MqttRelayTransport(opts) {
+    if (!isValidSessionId(opts.sessionId)) {
+      throw new Error('Invalid sessionId for MQTT transport');
+    }
     this.sessionId = opts.sessionId;
-    this.role = opts.role; // 'desktop' | 'phone'
+    this.role = opts.role;
     this.brokers = opts.brokers || MQTT_BROKERS;
     this.onMessage = opts.onMessage || function () {};
     this.onStatus = opts.onStatus || function () {};
@@ -283,9 +286,7 @@
       }
     };
 
-    ws.onerror = function () {
-      // onclose handles failover cleanly
-    };
+    ws.onerror = function () {};
 
     ws.onclose = function () {
       if (self.ws !== ws) return;
@@ -338,7 +339,7 @@
     }
   };
 
-  // ---------- Same-Origin Local WebSocket + HTTP Fallback Transport ----------
+  // ---------- Same-Origin Local WebSocket + Liveness-Checked HTTP Fallback ----------
 
   function LocalBridgeTransport(opts) {
     this.sessionId = opts.sessionId;
@@ -354,6 +355,7 @@
     this.closed = false;
     this.useHttpFallback = false;
     this.wsFailures = 0;
+    this.httpFailures = 0;
     this.reconnectTimer = null;
   }
 
@@ -389,6 +391,7 @@
       if (self.ws !== ws || self.closed) return;
       self.ready = true;
       self.wsFailures = 0;
+      self.httpFailures = 0;
       self.useHttpFallback = false;
       self.onStatus('ready', { transport: 'local-ws', url: self.wsUrl });
     };
@@ -413,7 +416,6 @@
 
   LocalBridgeTransport.prototype._onWsFail = function () {
     this.wsFailures++;
-    // iOS Safari over self-signed LAN certs may reject wss:// while allowing same-origin HTTPS fetch/SSE
     if (this.wsFailures >= 2 && this.httpBase) {
       this._startHttpFallback();
       return;
@@ -427,31 +429,68 @@
 
   LocalBridgeTransport.prototype._startHttpFallback = function () {
     if (this.closed || !this.httpBase) return;
+    if (this.es) {
+      try { this.es.close(); } catch (_e) {}
+      this.es = null;
+    }
     this.useHttpFallback = true;
-    this.ready = true;
-    this.onStatus('ready', { transport: 'local-http', url: this.httpBase });
+    this.ready = false;
+    this.httpFailures = 0;
+    const self = this;
+
+    // Only mark local HTTP fallback ready once EventSource confirms live reachability
+    // so an unreachable local bridge never starves healthy MQTT WSS in DualLink.
     if (typeof root.EventSource === 'function') {
       const url = this.httpBase + '/api/motion/stream?s=' + encodeURIComponent(this.sessionId) + '&role=' + encodeURIComponent(this.role);
       try {
         const es = new root.EventSource(url);
         this.es = es;
-        const self = this;
+        es.onopen = function () {
+          if (self.es !== es || self.closed) return;
+          self.ready = true;
+          self.httpFailures = 0;
+          self.onStatus('ready', { transport: 'local-http', url: self.httpBase });
+        };
         es.onmessage = function (ev) {
+          if (self.es !== es || self.closed) return;
           try { self.onMessage(JSON.parse(ev.data)); } catch (_e) {}
         };
-      } catch (_e) {}
+        es.onerror = function () {
+          if (self.es !== es || self.closed) return;
+          self.ready = false;
+          self.onStatus('reconnecting', { transport: 'local-http' });
+        };
+      } catch (_e) {
+        this.ready = false;
+        this.onStatus('reconnecting', { transport: 'local-http' });
+      }
     }
   };
 
   LocalBridgeTransport.prototype.send = function (obj) {
-    if (this.useHttpFallback && this.httpBase && typeof root.fetch === 'function') {
+    if (this.useHttpFallback && this.ready && this.httpBase && typeof root.fetch === 'function') {
+      const self = this;
       const url = this.httpBase + '/api/motion/send?s=' + encodeURIComponent(this.sessionId) + '&role=' + encodeURIComponent(this.role);
       root.fetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '1'
+        },
         body: JSON.stringify(obj),
         keepalive: false
-      }).catch(function () {});
+      })
+        .then(function (res) {
+          if (!res || !res.ok) throw new Error('HTTP ' + (res && res.status));
+          self.httpFailures = 0;
+        })
+        .catch(function () {
+          self.httpFailures++;
+          if (self.httpFailures >= 3) {
+            self.ready = false;
+            self.onStatus('reconnecting', { transport: 'local-http' });
+          }
+        });
       return true;
     }
     if (!this.ready || !this.ws || this.ws.readyState !== 1) return false;
@@ -473,18 +512,21 @@
 
   /**
    * DualLink: Runs MQTT WSS always (or local bridge + MQTT simultaneously when local bridge is available)
-   * with sequence deduplication so phone <-> desktop stays connected across Wi-Fi, 5G, ngrok, or LAN!
+   * with per-sender sequence deduplication so phone reloads and Wi-Fi -> 5G handoffs never drop packets.
    */
   function createLink(opts) {
-    const mode = opts.mode || 'mqtt'; // 'mqtt' | 'local' | 'dual'
+    const mode = opts.mode || 'mqtt';
     const links = [];
     const seenSeqs = new Set();
 
     function handleIncoming(msg) {
-      if (msg && msg.t === 'm' && typeof msg.seq === 'number') {
-        if (seenSeqs.has(msg.seq)) return;
-        seenSeqs.add(msg.seq);
-        if (seenSeqs.size > 120) {
+      if (msg && msg.t === 'hello') {
+        seenSeqs.clear();
+      } else if (msg && msg.t === 'm' && typeof msg.seq === 'number') {
+        const key = (typeof msg.cid === 'string' ? msg.cid : '') + ':' + msg.seq;
+        if (seenSeqs.has(key)) return;
+        seenSeqs.add(key);
+        if (seenSeqs.size > 160) {
           const first = seenSeqs.values().next().value;
           seenSeqs.delete(first);
         }
@@ -533,14 +575,13 @@
         links.forEach(function (l) { l.inst.start(); });
       },
       send: function (obj) {
-        // Prefer local low-latency bridge if ready; fall back to MQTT if local isn't ready
         const local = links.find(function (l) { return l.kind === 'local'; });
-        if (local && local.inst.ready) {
-          return local.inst.send(obj);
+        if (local && local.inst.ready && local.inst.send(obj)) {
+          return true;
         }
         let sent = false;
         links.forEach(function (l) {
-          if (l.inst.ready && l.inst.send(obj)) sent = true;
+          if (l.kind !== 'local' && l.inst.ready && l.inst.send(obj)) sent = true;
         });
         return sent;
       },
@@ -553,6 +594,8 @@
   return {
     MQTT_BROKERS: MQTT_BROKERS,
     TOPIC_PREFIX: TOPIC_PREFIX,
+    SESSION_ID_RE: SESSION_ID_RE,
+    isValidSessionId: isValidSessionId,
     generateSessionId: generateSessionId,
     MqttRelayTransport: MqttRelayTransport,
     LocalBridgeTransport: LocalBridgeTransport,

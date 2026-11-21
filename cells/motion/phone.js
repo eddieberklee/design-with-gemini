@@ -13,8 +13,10 @@
   };
 
   const params = new URLSearchParams(window.location.search);
-  const sessionId = (params.get('s') || '').trim().toUpperCase();
+  const rawSid = (params.get('s') || '').trim().toUpperCase();
+  const sessionId = Transport.isValidSessionId(rawSid) ? rawSid : '';
   const transportParam = (params.get('t') || 'mqtt').trim().toLowerCase();
+  const clientInstanceId = Transport.generateSessionId(6);
 
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -34,6 +36,7 @@
     colsMeta: document.getElementById('ph-cols-meta'),
     gate: document.getElementById('ph-gate'),
     enableBtn: document.getElementById('ph-enable-btn'),
+    dismissGateBtn: document.getElementById('ph-dismiss-gate'),
     gateNote: document.getElementById('ph-gate-note'),
     mTilt: document.getElementById('ph-m-tilt'),
     bTilt: document.getElementById('ph-b-tilt'),
@@ -55,17 +58,27 @@
   let seq = 1;
   let sensorsActive = false;
   let lastSendMs = 0;
-  let desktopState = { cellW: 420, cols: 3, layout: 'reflow', baseW: 420 };
+  let desktopState = { cellW: 420, cols: 3, layout: 'reflow', baseW: 420, maxW: Physics.MAX_CELL_W };
   let wakeLock = null;
   let manualScrubbing = false;
 
-  refs.sessionTag.textContent = sessionId ? 'SID ' + sessionId.slice(0, 4) : 'NO SESSION';
+  refs.sessionTag.textContent = sessionId ? 'SID ' + sessionId.slice(0, 4) : 'INVALID SID';
 
   if (!window.isSecureContext && isIOS) {
     refs.httpsBanner.hidden = false;
   }
 
-  // ---------- Arc SVG Math (-135 deg to +135 deg) ----------
+  // ---------- Arc SVG Math: Piecewise mapping so 1.00x lands exactly at 0 deg top detent ----------
+
+  function scaleToDialAngle(scale) {
+    const s = Physics.clamp(scale, Physics.MIN_SCALE, Physics.MAX_SCALE);
+    if (s <= Physics.DEFAULT_SCALE) {
+      const t = (s - Physics.MIN_SCALE) / (Physics.DEFAULT_SCALE - Physics.MIN_SCALE);
+      return -135 + t * 135;
+    }
+    const t = (s - Physics.DEFAULT_SCALE) / (Physics.MAX_SCALE - Physics.DEFAULT_SCALE);
+    return t * 135;
+  }
 
   function polarToCartesian(cx, cy, r, deg) {
     const rad = ((deg - 90) * Math.PI) / 180;
@@ -91,11 +104,12 @@
   }
 
   function renderDial(scale, roll, pitch, liftA, pullA) {
-    const norm = (scale - Physics.MIN_SCALE) / (Physics.MAX_SCALE - Physics.MIN_SCALE);
-    const angle = -135 + Physics.clamp(norm, 0, 1) * 270;
+    const angle = scaleToDialAngle(scale);
     refs.needle.setAttribute('transform', 'rotate(' + angle.toFixed(1) + ' 120 120)');
-    if (Math.abs(angle + 135) > 1) {
+    if (angle > -134) {
       refs.arcActive.setAttribute('d', describeArc(120, 120, 106, -135, angle));
+    } else {
+      refs.arcActive.setAttribute('d', '');
     }
 
     const bx = 120 + Physics.clamp(roll / 45, -1, 1) * 44;
@@ -103,7 +117,7 @@
     refs.bubble.setAttribute('cx', bx.toFixed(1));
     refs.bubble.setAttribute('cy', by.toFixed(1));
 
-    const estPx = desktopState.cellW || Math.round((desktopState.baseW || 420) * scale);
+    const estPx = Physics.scaleToCellWidth(scale, desktopState.baseW, desktopState.maxW);
     refs.sizePx.textContent = estPx + ' px';
     refs.scaleVal.textContent = scale.toFixed(2) + '×';
     refs.colsMeta.textContent = desktopState.cols + ' col · ' + (desktopState.layout === 'reflow' ? 'Reflow' : '3×3');
@@ -122,7 +136,7 @@
   function connect() {
     if (!sessionId) {
       refs.status.dataset.state = 'warn';
-      refs.statusText.textContent = 'NO SID';
+      refs.statusText.textContent = 'BAD SID';
       return;
     }
 
@@ -148,7 +162,7 @@
               ? 'LIVE · HTTPS'
               : 'LIVE · MQTT';
           refs.statusText.textContent = tag;
-          link.send({ t: 'hello', v: 1, ua: isIOS ? 'ios' : 'web', secure: Boolean(window.isSecureContext) });
+          link.send({ t: 'hello', v: 1, cid: clientInstanceId, ua: isIOS ? 'ios' : 'web', secure: Boolean(window.isSecureContext) });
         } else {
           refs.statusText.textContent = 'LINKING';
         }
@@ -159,9 +173,15 @@
           if (Number.isFinite(msg.cellW)) desktopState.cellW = msg.cellW;
           if (Number.isFinite(msg.cols)) desktopState.cols = msg.cols;
           if (Number.isFinite(msg.baseW)) desktopState.baseW = msg.baseW;
+          if (Number.isFinite(msg.maxW)) desktopState.maxW = msg.maxW;
           if (msg.layout === 'reflow' || msg.layout === 'fixed3') {
             desktopState.layout = msg.layout;
-            refs.layoutBtn.textContent = msg.layout === 'reflow' ? 'Reflow' : 'Lock 3×3';
+            const locked = msg.layout === 'fixed3';
+            refs.layoutBtn.textContent = locked ? 'Lock 3×3' : 'Reflow';
+            refs.layoutBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+          }
+          if (typeof msg.mode === 'string' && Object.prototype.hasOwnProperty.call(MODE_HINTS, msg.mode) && msg.mode !== processor.mode) {
+            setMode(msg.mode, false);
           }
           renderDial(processor.scale, processor.telemetry.roll, processor.telemetry.pitch, processor.telemetry.liftA, processor.telemetry.pullA);
         } else if (msg.t === 'cmd') {
@@ -170,8 +190,11 @@
             renderDial(processor.scale, 0, 0, 0, 0);
           } else if (msg.cmd === 'zero') {
             processor.calibrate();
-          } else if (msg.cmd === 'mode' && msg.val) {
+          } else if (msg.cmd === 'mode' && typeof msg.val === 'string') {
             setMode(msg.val, false);
+          } else if (msg.cmd === 'setScale' && Number.isFinite(msg.val)) {
+            processor.resetScale(msg.val);
+            renderDial(processor.scale, 0, 0, 0, 0);
           }
         }
       }
@@ -182,11 +205,11 @@
   function transmitMotion(tel, force) {
     if (!link) return;
     const now = performance.now();
-    // 30Hz cap balances silky smoothness and low radio overhead
     if (!force && now - lastSendMs < 32) return;
     lastSendMs = now;
     link.send({
       t: 'm',
+      cid: clientInstanceId,
       seq: seq++,
       ts: Math.round(now),
       scale: Number(tel.scale.toFixed(3)),
@@ -199,12 +222,18 @@
     });
   }
 
-  // ---------- iOS Accelerometer & Orientation Permission Gate ----------
+  // ---------- iOS Accelerometer Permission Gate & Wake Lock ----------
 
   async function requestWakeLock() {
     try {
       if (navigator.wakeLock && typeof navigator.wakeLock.request === 'function') {
-        wakeLock = await navigator.wakeLock.request('screen');
+        const sentinel = await navigator.wakeLock.request('screen');
+        wakeLock = sentinel;
+        if (sentinel && typeof sentinel.addEventListener === 'function') {
+          sentinel.addEventListener('release', function () {
+            if (wakeLock === sentinel) wakeLock = null;
+          });
+        }
       }
     } catch (_e) {}
   }
@@ -214,12 +243,6 @@
     sensorsActive = true;
     refs.gate.hidden = true;
     requestWakeLock();
-
-    window.addEventListener('deviceorientation', function (ev) {
-      if (ev && Number.isFinite(ev.beta) && Number.isFinite(ev.gamma)) {
-        processor.ingestOrientation(ev.beta, ev.gamma);
-      }
-    });
 
     window.addEventListener('devicemotion', function (ev) {
       if (!ev || manualScrubbing) return;
@@ -235,7 +258,6 @@
         ts: ev.timeStamp || Date.now(),
         isIOS: isIOS
       });
-      desktopState.cellW = Math.round((desktopState.baseW || 420) * tel.scale);
       renderDial(tel.scale, tel.roll, tel.pitch, tel.liftA, tel.pullA);
       transmitMotion(tel, false);
     });
@@ -251,25 +273,15 @@
 
     const motionNeedsPerm = typeof DeviceMotionEvent !== 'undefined' &&
       typeof DeviceMotionEvent.requestPermission === 'function';
-    const orientNeedsPerm = typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function';
 
-    if (!motionNeedsPerm && !orientNeedsPerm) {
+    if (!motionNeedsPerm) {
       startSensors();
       return;
     }
 
-    const promises = [];
-    if (motionNeedsPerm) {
-      try { promises.push(DeviceMotionEvent.requestPermission()); } catch (e) { promises.push(Promise.reject(e)); }
-    }
-    if (orientNeedsPerm) {
-      try { promises.push(DeviceOrientationEvent.requestPermission()); } catch (_e) {}
-    }
-
-    Promise.all(promises)
-      .then(function (results) {
-        if (results.indexOf('granted') >= 0) {
+    DeviceMotionEvent.requestPermission()
+      .then(function (result) {
+        if (result === 'granted') {
           startSensors();
         } else {
           refs.gateNote.textContent = 'Permission denied. Reload Safari tab and tap Enable Motion again.';
@@ -280,11 +292,18 @@
       });
   });
 
+  if (refs.dismissGateBtn) {
+    refs.dismissGateBtn.addEventListener('click', function () {
+      refs.gate.hidden = true;
+    });
+  }
+
   // ---------- Controls ----------
 
   function setMode(mode, notifyDesktop) {
+    if (!Object.prototype.hasOwnProperty.call(MODE_HINTS, mode)) return;
     processor.setMode(mode);
-    refs.modeHint.textContent = MODE_HINTS[mode] || MODE_HINTS.all;
+    refs.modeHint.textContent = MODE_HINTS[mode];
     refs.modeBtns.forEach(function (btn) {
       btn.setAttribute('aria-pressed', btn.dataset.mode === mode ? 'true' : 'false');
     });
@@ -308,6 +327,9 @@
   refs.clutchBtn.addEventListener('click', function () {
     const next = !processor.clutchRequired;
     processor.setClutchRequired(next);
+    if (!next) {
+      refs.dialPad.classList.remove('is-clutched');
+    }
     refs.clutchBtn.setAttribute('aria-pressed', next ? 'true' : 'false');
     refs.clutchBtn.textContent = next ? 'Clutch: Hold' : 'Clutch: Off';
     refs.modeHint.textContent = next
@@ -315,7 +337,6 @@
       : MODE_HINTS[processor.mode];
   });
 
-  // Touch clutch on dial pad
   function onClutchDown(ev) {
     if (!processor.clutchRequired || !refs.gate.hidden) return;
     ev.preventDefault();
@@ -334,32 +355,36 @@
   refs.layoutBtn.addEventListener('click', function () {
     const next = desktopState.layout === 'reflow' ? 'fixed3' : 'reflow';
     desktopState.layout = next;
-    refs.layoutBtn.textContent = next === 'reflow' ? 'Reflow' : 'Lock 3×3';
+    const locked = next === 'fixed3';
+    refs.layoutBtn.textContent = locked ? 'Lock 3×3' : 'Reflow';
+    refs.layoutBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
     if (link) link.send({ t: 'act', cmd: 'layout', val: next });
     renderDial(processor.scale, processor.telemetry.roll, processor.telemetry.pitch, processor.telemetry.liftA, processor.telemetry.pullA);
   });
 
   refs.resetBtn.addEventListener('click', function () {
     processor.resetScale(Physics.DEFAULT_SCALE);
-    desktopState.cellW = desktopState.baseW || 420;
     renderDial(Physics.DEFAULT_SCALE, 0, 0, 0, 0);
     if (link) link.send({ t: 'act', cmd: 'reset' });
   });
 
-  // Manual touch slider fallback
-  refs.slider.addEventListener('pointerdown', function () { manualScrubbing = true; });
+  // Manual touch slider fallback (also dismisses permission gate so dial readout is visible)
+  refs.slider.addEventListener('pointerdown', function () {
+    manualScrubbing = true;
+    refs.gate.hidden = true;
+  });
   refs.slider.addEventListener('pointerup', function () { manualScrubbing = false; });
   refs.slider.addEventListener('change', function () { manualScrubbing = false; });
   refs.slider.addEventListener('input', function (ev) {
+    refs.gate.hidden = true;
     const nextScale = Number(ev.target.value) / 100;
     processor.resetScale(nextScale);
-    desktopState.cellW = Math.round((desktopState.baseW || 420) * nextScale);
     renderDial(nextScale, 0, 0, 0, 0);
     transmitMotion(processor.telemetry, true);
   });
 
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible' && sensorsActive && !wakeLock) {
+    if (document.visibilityState === 'visible' && sensorsActive && (!wakeLock || wakeLock.released)) {
       requestWakeLock();
     }
   });

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   iPhone Motion Grid Controller — Cell #2 & Expanded Pairing Studio
+   iPhone Motion Grid Controller — Cell #3 & Expanded Pairing Studio
    Strictly scoped to .cell--motion, .mg-*, .mg-dialog, .mg-hud, and
    opt-in .grid.is-motion-controlled CSS custom properties.
    Harmonized with index.html (#fafafa canvas, #ffffff cell, #e5e5e5 border)
@@ -50,6 +50,7 @@
   --mg-warn: #b45309;
   --mg-warn-bg: #fffbeb;
   --mg-warn-border: #fde68a;
+  --mg-focus: #2563eb;
 
   --mg-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   --mg-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -58,6 +59,13 @@
   font-family: var(--mg-sans);
   color: var(--mg-ink);
   -webkit-font-smoothing: antialiased;
+}
+
+.cell--motion :is(button, input):focus-visible,
+.mg-dialog :is(button, input):focus-visible,
+.mg-hud :is(button, input):focus-visible {
+  outline: 2px solid var(--mg-focus);
+  outline-offset: 1px;
 }
 
 .mg-mono {
@@ -112,6 +120,7 @@
 
 .mg-index {
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
   font-weight: 600;
   color: var(--mg-ink-3);
@@ -143,6 +152,7 @@
   padding: 0 7px;
   border-radius: 999px;
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.03em;
@@ -151,6 +161,11 @@
   color: var(--mg-ink-2);
   cursor: pointer;
   white-space: nowrap;
+  transition: filter var(--mg-ease), border-color var(--mg-ease);
+}
+
+.mg-pill:hover {
+  filter: brightness(0.96);
 }
 
 .mg-pill[data-state="live"] {
@@ -294,7 +309,7 @@
 .mg-ctrl-col {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
   gap: 7px;
   height: 100%;
   min-height: 0;
@@ -304,8 +319,8 @@
 .mg-readout-card {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 7px 8px;
+  gap: 3px;
+  padding: 6px 8px;
   border-radius: 5px;
   background: var(--mg-recess);
   border: 1px solid var(--mg-hairline);
@@ -326,10 +341,12 @@
   letter-spacing: -0.02em;
   line-height: 1;
   color: var(--mg-ink);
+  white-space: nowrap;
 }
 
 .mg-scale-chip {
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 10.5px;
   font-weight: 600;
   color: var(--mg-accent);
@@ -340,9 +357,18 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 4px;
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 9.5px;
   color: var(--mg-ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.mg-readout-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 3-axis accelerometer mini bars */
@@ -362,6 +388,7 @@
   display: flex;
   justify-content: space-between;
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 8.5px;
   color: var(--mg-ink-3);
 }
@@ -416,7 +443,7 @@
 .mg-seg-btn {
   flex: 1;
   height: 19px;
-  padding: 0 4px;
+  padding: 0 3px;
   border: 0;
   border-radius: 3px;
   background: transparent;
@@ -439,7 +466,7 @@
 .mg-scrub-wrap {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
 }
 
 .mg-scrub-label {
@@ -448,6 +475,7 @@
   font-family: var(--mg-mono);
   font-size: 9px;
   color: var(--mg-ink-3);
+  white-space: nowrap;
 }
 
 .mg-slider {
@@ -468,6 +496,7 @@
   border-top: 1px solid var(--mg-hairline);
   background: var(--mg-canvas);
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 9.5px;
   color: var(--mg-ink-3);
   flex-shrink: 0;
@@ -491,6 +520,7 @@
   background: var(--mg-bg);
   color: var(--mg-ink);
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-size: 9.5px;
   font-weight: 600;
   cursor: pointer;
@@ -507,36 +537,40 @@
   background: var(--mg-accent-soft);
 }
 
-/* Micro-cell takeover overlay when phone shrinks cells very small */
+/* Micro-cell takeover overlay when phone shrinks cells very small (140px..245px) */
 .mg-micro {
   display: none;
   flex: 1;
+  min-height: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 8px;
+  gap: 3px;
+  padding: 4px 6px;
   text-align: center;
 }
 
 .mg-micro-val {
   font-family: var(--mg-mono);
-  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
   font-weight: 700;
-  line-height: 1;
+  line-height: 1.05;
   color: var(--mg-ink);
 }
 
 .mg-micro-sub {
   font-family: var(--mg-mono);
-  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+  line-height: 1.1;
   color: var(--mg-accent);
   font-weight: 600;
 }
 
 .mg-micro-bar {
   width: 78%;
-  height: 4px;
+  height: 3px;
   border-radius: 99px;
   background: var(--mg-track);
   overflow: hidden;
@@ -548,21 +582,54 @@
   border-radius: 99px;
 }
 
-/* Container queries for shrinking/growing cells */
+/* Container queries for hero, compact, narrow & micro cell widths */
+@container mg-card (min-width: 520px) {
+  .mg-body {
+    padding: 16px 20px;
+    gap: 18px;
+    grid-template-columns: minmax(180px, 46%) minmax(0, 1fr);
+  }
+  .mg-qr-frame {
+    max-width: 248px;
+    padding: 8px;
+  }
+  .mg-ctrl-col {
+    gap: 12px;
+    max-width: 340px;
+  }
+  .mg-size-big {
+    font-size: 24px;
+  }
+}
+
 @container mg-card (max-width: 360px) {
-  .mg-header { padding: 6px 8px; }
-  .mg-body { padding: 7px 8px; gap: 7px; grid-template-columns: minmax(90px, 43%) minmax(0, 1fr); }
+  .mg-header { padding: 5px 8px; min-height: 28px; }
+  .mg-body { padding: 6px 8px; gap: 7px; grid-template-columns: minmax(86px, 42%) minmax(0, 1fr); }
   .mg-footer { padding: 4px 8px; }
   .mg-expand-label { display: none; }
   .mg-axes { display: none; }
-  .mg-size-big { font-size: 15px; }
+  .mg-size-big { font-size: 14px; }
+  .mg-ctrl-col { gap: 5px; }
+  .mg-readout-card { padding: 5px 6px; gap: 2px; }
+}
+
+@container mg-card (max-width: 300px) {
+  .mg-meta-label { display: none; }
+  .mg-scrub-hint { display: none; }
 }
 
 @container mg-card (max-width: 245px) {
+  .mg-header { padding: 4px 6px; min-height: 24px; }
   .mg-body { display: none; }
   .mg-footer { display: none; }
   .mg-actions .mg-icon-btn { display: none; }
   .mg-micro { display: flex; }
+}
+
+@container mg-card (max-width: 195px) {
+  .mg-actions .mg-pill { display: none; }
+  .mg-micro-bar { display: none; }
+  .mg-micro .mg-chip-btn { height: 17px; font-size: 8.5px; padding: 0 5px; }
 }
 
 /* ==========================================================================
@@ -604,6 +671,7 @@
 
 .mg-hud-val {
   font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
   font-weight: 600;
   letter-spacing: 0.01em;
 }
@@ -622,6 +690,10 @@
 
 .mg-hud-btn:hover {
   background: rgba(255, 255, 255, 0.18);
+}
+
+.mg-hud-btn[hidden] {
+  display: none;
 }
 
 /* ==========================================================================
@@ -745,6 +817,12 @@
   color: var(--mg-ink-2);
 }
 
+.mg-dlg-err {
+  font-family: var(--mg-mono);
+  font-size: 10.5px;
+  color: var(--mg-warn);
+}
+
 .mg-cmd-box {
   display: flex;
   align-items: center;
@@ -817,4 +895,14 @@
   height: 24px;
   padding: 0 8px;
   font-size: 11px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .grid.is-motion-controlled,
+  .mg-pill,
+  .mg-icon-btn,
+  .mg-qr-frame,
+  .mg-axis-bar {
+    transition: none !important;
+  }
 }
