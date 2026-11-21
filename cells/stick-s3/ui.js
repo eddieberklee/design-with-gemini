@@ -1218,10 +1218,6 @@
       kinArc.setAttribute('stroke-dasharray', kinArcLen.toFixed(1) + ' 320');
 
       applyAxisBarsToDom();
-      axesInlineEl.textContent =
-        'X' + formatSigned(state.ax) +
-        ' Y' + formatSigned(state.ay) +
-        ' Z' + formatSigned(state.az) + 'g';
 
       if (dialog.open) {
         heroSwatch.style.backgroundColor = col.hex;
