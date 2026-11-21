@@ -259,7 +259,8 @@ export function createBridgeServer(options = {}) {
     const { url: reqUrl, rawUrl, decodedPath } = parsedReq;
 
     if (decodedPath === '/api/motion-config') {
-      const isTls = Boolean(req.socket && req.socket.encrypted);
+      const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+      const isTls = Boolean(req.socket && req.socket.encrypted) || xfProto === 'https';
       const reqHost = typeof req.headers.host === 'string' && /^[A-Za-z0-9.\-:\[\]]+$/.test(req.headers.host)
         ? req.headers.host
         : `127.0.0.1:${state.httpPort}`;
@@ -504,8 +505,12 @@ export function createBridgeServer(options = {}) {
       return state;
     },
     close: async () => {
+      if (typeof httpServer.closeAllConnections === 'function') httpServer.closeAllConnections();
       await new Promise((r) => httpServer.close(() => r()));
-      if (httpsServer) await new Promise((r) => httpsServer.close(() => r()));
+      if (httpsServer) {
+        if (typeof httpsServer.closeAllConnections === 'function') httpsServer.closeAllConnections();
+        await new Promise((r) => httpsServer.close(() => r()));
+      }
     }
   };
 }
