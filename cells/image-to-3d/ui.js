@@ -28,8 +28,7 @@
     });
   }
 
-  function initImageTo3DCell() {
-    const root = document.getElementById('cell-image-to-3d');
+  function mountImageTo3DCell(root, cellIndex) {
     const NS = global.GeminiImageTo3D;
     if (!root || !NS || !NS.Client || !NS.Renderer) return;
 
@@ -39,7 +38,7 @@
     root.classList.add('ui-tile');
     root.innerHTML = [
       '<header class="ui-tile-head">',
-      '  <span class="ui-tile-index">11</span>',
+      '  <span class="ui-tile-index">' + cellIndex + '</span>',
       '  <h2 class="ui-tile-title">Image → 3D (4×)</h2>',
       '  <div class="ui-tile-actions">',
       '    <button type="button" class="ui-btn ui-btn--sm i3d-sync-btn" aria-pressed="true" title="Sync camera orbit across all 4 viewers">Sync</button>',
@@ -422,9 +421,17 @@
     refreshKeyState();
   }
 
+  function initAllImageTo3DCells() {
+    const nodes = document.querySelectorAll('.cell--image-to-3d');
+    for (let i = 0; i < nodes.length; i++) {
+      const idx = nodes[i].getAttribute('data-cell-index') || String(11 + i);
+      mountImageTo3DCell(nodes[i], idx);
+    }
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initImageTo3DCell);
+    document.addEventListener('DOMContentLoaded', initAllImageTo3DCells);
   } else {
-    initImageTo3DCell();
+    initAllImageTo3DCells();
   }
 })(window);
