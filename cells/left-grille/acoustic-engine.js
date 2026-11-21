@@ -620,9 +620,12 @@
             (this.fftRe[gb] * this.fftRe[gb] + this.fftIm[gb] * this.fftIm[gb]) / (QUANTUM * QUANTUM);
         }
         guardPow /= this.guardBins.length;
-        if (!this.floorsInitialized && this.framesProcessed >= 8) {
-          this.ambientGuardPow = Math.max(1e-15, guardPow);
-        } else if (!this.activeStroke) {
+        if (!this.floorsInitialized && eMid + eHf1 + eHf2 >= 1e-13) {
+          this.ambientGuardPow =
+            this.nonSilentWarmupFrames === 0
+              ? Math.max(1e-15, guardPow)
+              : 0.7 * this.ambientGuardPow + 0.3 * Math.max(1e-15, guardPow);
+        } else if (this.floorsInitialized && !this.activeStroke) {
           const gAlpha = guardPow < this.ambientGuardPow ? 0.15 : 0.008;
           this.ambientGuardPow += gAlpha * (guardPow - this.ambientGuardPow);
         }
