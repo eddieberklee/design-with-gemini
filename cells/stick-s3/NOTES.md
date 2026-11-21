@@ -8,7 +8,7 @@
 
 1. **`cells/stick-s3/firmware/src/color_math.h` & `main.cpp` (Flashed Embedded C++ Firmware)**:
    - Initializes `M5Unified` (`board_M5StickS3`) + tear-free 16-bit `M5Canvas` sprite (`135×240` portrait, `KEY1` under thumb) + `BLEDevice` GATT server (`"StickS3-Color"`).
-   - Samples the internal BMI270 6-axis accelerometer + gyroscope (`SDA=GPIO47`, `SCL=GPIO48`, `0x68`), negates raw proper-acceleration `imu.accel.x` (`tiltRightAx = -imu.accel.x`) so physical right-tilt maps intuitively to `+X` (`+tx`, right on the LCD/browser Gravity Dome, hue wheel, and 3D twin roll) and left-tilt maps to `-X`, applies an EMA filter (`alpha = 0.24`), computes kinetic shake energy, and maps `(tx, ty, az, kin)` into sRGB via `sticks3_color::mapImuToColor`.
+   - Samples the internal BMI270 6-axis accelerometer + gyroscope (`SDA=GPIO47`, `SCL=GPIO48`, `0x68`), negates raw proper-acceleration `imu.accel.x` and `imu.accel.y` (`tiltRightAx = -imu.accel.x`, `tiltUpAy = -imu.accel.y`) so physical right-tilt maps to `+X` (`+tx`) and forward/up-tilt maps to `+Y` (`+ty`) across the LCD/browser Gravity Dome, hue wheel, and 3D twin pitch/roll, applies an EMA filter (`alpha = 0.24`), computes kinetic shake energy, and maps `(tx, ty, az, kin)` into sRGB via `sticks3_color::mapImuToColor`.
    - Streams 50 Hz newline-delimited JSON packets (`{"t":"s3","seq":...}`) over native ESP32-S3 `USB-Serial/JTAG` (`115200`) and 30 Hz BLE GATT Notifications (`beb5483e-36e1-4688-b7f5-ea07361b26a8`), while accepting bidirectional JSON host commands (`mode`, `hold`, `tare`).
    - Physical hardware controls:
      - **`KEY1` (`M5.BtnA`, `GPIO11`) short press**: Freezes/unfreezes color (`HOLD`) and emits `"ev":"swatch"` to pin a Pantone swatch chip into the browser cell.
