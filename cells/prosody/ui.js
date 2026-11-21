@@ -78,7 +78,7 @@
       el(
         'div',
         'ps-key-panel-desc',
-        'Sends raw mic audio to gemini-2.5-flash so vocal stress & elongation map to button size. Saved to sessionStorage (shared with Cell 01).'
+        'Sends raw mic audio to gemini-3.8-flash so vocal stress & elongation map to button size. Saved to sessionStorage (shared with Cell 01).'
       )
     );
     const keyInput = el('input', 'ps-key-input');
