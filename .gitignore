@@ -11,6 +11,7 @@
 .worktrees
 .worktrees/
 .worktrees.noindex/
+.claude/
 
 # Secrets & local env
 .env

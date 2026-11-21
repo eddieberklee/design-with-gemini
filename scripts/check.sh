@@ -2,8 +2,8 @@
 # Repo check for design-with-gemini. Run from anywhere: `bash scripts/check.sh`.
 #
 #   1. Every stylesheet and script that index.html (and each standalone phone page)
-#      references exists, and every cell script/stylesheet on disk is either wired
-#      into a page or is a Node-only file (*.test.*, *.mjs).
+#      references exists, and every cell or shared UI script/stylesheet on disk is
+#      either wired into a page or is a Node-only file (*.test.*, *.mjs).
 #   2. Every .js / .mjs file parses (`node --check`).
 #   3. The page scripts, concatenated in index.html order, parse as ONE program.
 #      They are classic <script defer> files that share a single global scope, so a
@@ -107,7 +107,7 @@ if [ -s "$wired.missing" ]; then
 fi
 rm -f "$wired.missing"
 
-for f in $(git ls-files 'cells/*.js' 'cells/*.css'); do
+for f in $(git ls-files 'cells/*.js' 'cells/*.css' 'ui/*.js' 'ui/*.css'); do
   case "$f" in *.test.js) continue ;; esac
   grep -qxF "$f" "$wired" || bad "$f is not referenced by any page"
 done
