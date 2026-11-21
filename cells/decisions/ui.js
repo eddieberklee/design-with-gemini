@@ -2545,6 +2545,17 @@
       }
     }
 
+    let dialogClosePending = false;
+
+    function finalizeDialogClose() {
+      if (!dialogClosePending) return;
+      dialogClosePending = false;
+      app.showKeyPopover = false;
+      app.keyVisible = false;
+      renderAllCells();
+      restoreCardTriggerFocus();
+    }
+
     function openWorkbench(focusRole, opts) {
       app.returnFocusRole = focusRole || 'expand-btn';
       app.showKeyPopover = Boolean(opts && opts.openKeyPopover);
@@ -2557,6 +2568,7 @@
       renderWorkbenchLeft();
       renderWorkbenchRight();
 
+      dialogClosePending = true;
       if (!dialog.open) {
         dialog.showModal();
       }
@@ -2569,13 +2581,11 @@
       app.showKeyPopover = false;
       app.keyVisible = false;
       if (dialog.open) dialog.close();
+      finalizeDialogClose();
     }
 
     dialog.addEventListener('close', function () {
-      app.showKeyPopover = false;
-      app.keyVisible = false;
-      renderAllCells();
-      restoreCardTriggerFocus();
+      finalizeDialogClose();
     });
 
     dialog.addEventListener('cancel', function (e) {

@@ -96,6 +96,38 @@
     grid-column: 1 / -1;
     aspect-ratio: 16 / 10;
   }
+
+  .cell.cell--decisions-input .dc-input-body {
+    padding: 6px 10px 7px;
+    gap: 5px;
+  }
+
+  .cell.cell--decisions-input .dc-explainer {
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .cell.cell--decisions-input .dc-specimen-stage {
+    padding: 6px 8px;
+    gap: 8px;
+  }
+
+  .cell.cell--decisions-input .dc-specimen-quote {
+    font-size: 11px;
+    line-height: 1.3;
+    -webkit-line-clamp: 2;
+  }
+
+  .cell.cell--decisions-input .dc-flip-btn {
+    height: 25px;
+    font-size: 10.5px;
+  }
+
+  .cell.cell--decisions-input .dc-card-footer {
+    padding: 4px 10px;
+  }
 }
 
 /* Hover anticipation when hovering A/B flipper in Cell 1 */
@@ -180,6 +212,9 @@
   letter-spacing: 0.04em;
   color: var(--dc-ink-3);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .dc-step-pill--lead {
