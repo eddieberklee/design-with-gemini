@@ -1019,6 +1019,25 @@ test('Offline swatch-pin synchronous WCAG ink sync, unhold recovery, unit-disk p
     assert.equal(zFlipBtn.textContent, 'Z−');
     domePad.dispatchEvent({ type: 'dblclick' });
     assert.equal(zFlipBtn.textContent, 'Z+');
+
+    // 5. 3D Twin rotateX / rotateY polarity across face-up (az >= 0) & face-down (az < 0)
+    cellEl.querySelector('.s3-open-btn').click();
+    const twinRig = h.document.body.querySelector('.s3-twin-rig');
+    const ws = h.wsInstances[0];
+    ws.openNow();
+    ws.receiveJson({
+      t: 's3', seq: 1, ax: 0.4, ay: 0.5, az: 0.77,
+      tx: 0.4, ty: 0.5, r: 24.0, p: 30.0, kin: 0, m: 0, h: 0, hex: '#4488AA', bat: 80, ev: ''
+    });
+    h.stepFrame(64);
+    assert.equal(twinRig.style.transform, 'rotateX(30.0deg) rotateY(24.0deg)');
+
+    ws.receiveJson({
+      t: 's3', seq: 2, ax: -0.4, ay: 0.5, az: -0.77,
+      tx: -0.4, ty: 0.5, r: -24.0, p: 30.0, kin: 0, m: 0, h: 0, hex: '#224466', bat: 80, ev: ''
+    });
+    h.stepFrame(80);
+    assert.equal(twinRig.style.transform, 'rotateX(30.0deg) rotateY(204.0deg)');
   } finally {
     handle.destroy();
   }

@@ -187,7 +187,6 @@
       linkSource: 'none',
       bridgeReachable: false,
       portName: '',
-      statusDetail: '',
       packetHz: 0,
 
       // Race-immunity leases & dedup
@@ -1349,7 +1348,6 @@
         state.linkSource = st.source || 'none';
         state.bridgeReachable = Boolean(st.bridgeReachable);
         state.portName = st.portName || '';
-        state.statusDetail = st.detail || '';
         if (!state.hwConnected) {
           state.battery = -1;
           state.packetHz = 0;
