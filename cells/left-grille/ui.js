@@ -1444,7 +1444,8 @@
       let ok = true;
       if (autoArmed) {
         await disarmSharedBusForCell1();
-        if (mySeq !== calSessionSeq || !isSecondaryOpen) {
+        if (mySeq !== calSessionSeq) return;
+        if (!isSecondaryOpen) {
           calOpening = false;
           calBtn.setAttribute('aria-expanded', 'false');
           if (calAutoArmedMic) {
@@ -1457,7 +1458,8 @@
         }
         ok = await controller.start();
       }
-      if (mySeq !== calSessionSeq || !isSecondaryOpen || !ok || controller.state !== 'listening') {
+      if (mySeq !== calSessionSeq) return;
+      if (!isSecondaryOpen || !ok || controller.state !== 'listening') {
         calOpening = false;
         calBtn.setAttribute('aria-expanded', 'false');
         if (autoArmed) {
