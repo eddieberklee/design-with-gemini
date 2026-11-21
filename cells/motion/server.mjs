@@ -586,7 +586,9 @@ async function queryNgrokUrl(targetPort) {
   }
 }
 
-async function startNgrokTunnel(port) {
+// `onSpawn` receives the ngrok child as soon as it exists, so a Ctrl+C during the ~6s
+// tunnel poll can still kill it (otherwise the spawned ngrok outlives the bridge).
+async function startNgrokTunnel(port, onSpawn) {
   const existing = await queryNgrokUrl(port);
   if (existing) return { url: existing, child: null };
 
@@ -594,6 +596,7 @@ async function startNgrokTunnel(port) {
     stdio: ['ignore', 'ignore', 'ignore']
   });
   child.on('error', () => {});
+  if (typeof onSpawn === 'function') onSpawn(child);
 
   for (let i = 0; i < 24; i++) {
     await new Promise((r) => setTimeout(r, 250));
@@ -604,7 +607,18 @@ async function startNgrokTunnel(port) {
   return { url: '', child: null };
 }
 
-const isMain = process.argv[1] && path.resolve(process.argv[1]) === __filename;
+// Compare real paths: Node resolves import.meta.url through symlinks (e.g. macOS /tmp -> /private/tmp,
+// a symlinked checkout), so a plain path.resolve() comparison made the CLI exit silently with code 0.
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fs.realpathSync(__filename);
+  } catch (_e) {
+    return path.resolve(process.argv[1]) === __filename;
+  }
+}
+
+const isMain = isMainModule();
 if (isMain) {
   const args = process.argv.slice(2);
   const noNgrok = args.includes('--no-ngrok');
@@ -617,7 +631,8 @@ if (isMain) {
   (async () => {
     const st = await bridge.start();
     if (!noNgrok) {
-      const ng = await startNgrokTunnel(st.httpPort);
+      const ng = await startNgrokTunnel(st.httpPort, (child) => { ngrokChild = child; });
+      if (!ng.child) ngrokChild = null;
       if (ng.url) {
         st.publicHttpsOrigin = ng.url;
         st.tunnelSource = 'ngrok';

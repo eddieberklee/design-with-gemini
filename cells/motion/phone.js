@@ -61,6 +61,22 @@
   let desktopState = { cellW: 420, cols: 3, layout: 'reflow', baseW: 420, maxW: Physics.MAX_CELL_W };
   let wakeLock = null;
   let manualScrubbing = false;
+  let linkStatus = 'connecting';     // last aggregate status from Transport.createLink
+  let linkTransport = 'mqtt';
+  let desktopLive = false;            // true only while the desktop keeps sending 'state' feedback
+  let desktopLiveTimer = 0;
+  let motionListenerAttached = false;
+  let gotSensorSample = false;
+  let sensorProbeTimer = 0;
+  let heartbeatTimer = 0;
+
+  // The desktop sends 'state' every 220ms while it sees this phone; 3s of silence = desktop gone.
+  const DESKTOP_SILENCE_MS = 3000;
+  // After Enable, real hardware delivers devicemotion samples within a few frames.
+  const SENSOR_PROBE_MS = 2500;
+  // An idle phone (no sensor, slider untouched) sends nothing; the desktop drops a silent phone
+  // after 6.5s. A tiny heartbeat keeps the pairing alive, only while linked and visible.
+  const HEARTBEAT_MS = 2000;
 
   refs.sessionTag.textContent = sessionId ? 'SID ' + sessionId.slice(0, 4) : 'INVALID SID';
 
@@ -120,7 +136,7 @@
     const estPx = Physics.scaleToCellWidth(scale, desktopState.baseW, desktopState.maxW);
     refs.sizePx.textContent = estPx + ' px';
     refs.scaleVal.textContent = scale.toFixed(2) + '×';
-    refs.colsMeta.textContent = desktopState.cols + ' col · ' + (desktopState.layout === 'reflow' ? 'Reflow' : '3×3');
+    refs.colsMeta.textContent = desktopState.cols + ' col · ' + (desktopState.layout === 'reflow' ? 'Reflow' : 'Locked');
 
     if (!manualScrubbing) {
       refs.slider.value = String(Math.round(scale * 100));
@@ -131,14 +147,74 @@
     setBar(refs.bPull, refs.mPull, pullA, 10, '');
   }
 
+  function renderLayoutBtn() {
+    const locked = desktopState.layout === 'fixed3';
+    refs.layoutBtn.textContent = locked ? 'Lock ' + desktopState.cols + ' col' : 'Reflow';
+    refs.layoutBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+  }
+
   // ---------- Transport Connection ----------
 
-  function connect() {
+  // 'LIVE' only when the desktop grid is actually answering; a relay connection alone is
+  // 'WAIT DESKTOP' because nobody may be subscribed to this session.
+  function renderStatus() {
     if (!sessionId) {
       refs.status.dataset.state = 'warn';
       refs.statusText.textContent = 'BAD SID';
       return;
     }
+    const tag = linkTransport === 'local-ws' ? 'WS' : linkTransport === 'local-http' ? 'HTTPS' : 'MQTT';
+    if (linkStatus === 'ready' && desktopLive) {
+      refs.status.dataset.state = 'ready';
+      refs.statusText.textContent = 'LIVE · ' + tag;
+    } else if (linkStatus === 'ready') {
+      refs.status.dataset.state = 'connecting';
+      refs.statusText.textContent = 'WAIT DESKTOP · ' + tag;
+    } else if (linkStatus === 'failed') {
+      refs.status.dataset.state = 'warn';
+      refs.statusText.textContent = 'OFFLINE · TAP';
+    } else {
+      refs.status.dataset.state = 'connecting';
+      refs.statusText.textContent = 'LINKING';
+    }
+  }
+
+  function syncHeartbeat() {
+    const want = Boolean(link) && linkStatus === 'ready' && document.visibilityState !== 'hidden';
+    if (want && !heartbeatTimer) {
+      heartbeatTimer = setInterval(function () {
+        if (link) link.send({ t: 'hb', cid: clientInstanceId });
+      }, HEARTBEAT_MS);
+    } else if (!want && heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = 0;
+    }
+  }
+
+  function markDesktopSeen() {
+    desktopLive = true;
+    clearTimeout(desktopLiveTimer);
+    desktopLiveTimer = setTimeout(function () {
+      desktopLiveTimer = 0;
+      desktopLive = false;
+      renderStatus();
+    }, DESKTOP_SILENCE_MS);
+    renderStatus();
+  }
+
+  function connect() {
+    if (!sessionId) {
+      renderStatus();
+      return;
+    }
+    if (link) {
+      const old = link;
+      link = null;
+      try { old.close(); } catch (_e) {}
+    }
+    linkStatus = 'connecting';
+    renderStatus();
+    syncHeartbeat();
 
     const canLocal = transportParam === 'local' || transportParam === 'dual';
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -147,39 +223,39 @@
       : '';
     const httpBase = canLocal ? window.location.origin : '';
 
-    link = Transport.createLink({
+    const myLink = Transport.createLink({
       mode: canLocal ? 'dual' : 'mqtt',
       sessionId: sessionId,
       role: 'phone',
       wsUrl: wsUrl,
       httpBase: httpBase,
       onStatus: function (st, info) {
-        refs.status.dataset.state = st === 'ready' ? 'ready' : 'connecting';
-        if (st === 'ready') {
-          const tag = info && info.transport === 'local-ws'
-            ? 'LIVE · WS'
-            : info && info.transport === 'local-http'
-              ? 'LIVE · HTTPS'
-              : 'LIVE · MQTT';
-          refs.statusText.textContent = tag;
-          link.send({ t: 'hello', v: 1, cid: clientInstanceId, ua: isIOS ? 'ios' : 'web', secure: Boolean(window.isSecureContext) });
-        } else {
-          refs.statusText.textContent = 'LINKING';
+        if (link !== myLink) return;
+        const prevStatus = linkStatus;
+        const prevTransport = linkTransport;
+        linkStatus = st;
+        linkTransport = (info && info.transport) || 'mqtt';
+        renderStatus();
+        syncHeartbeat();
+        // The aggregate re-reports 'ready' whenever any sub-link changes (e.g. each MQTT retry
+        // while local WS is up); greet the desktop only when the usable path actually changes.
+        if (st === 'ready' && (prevStatus !== 'ready' || prevTransport !== linkTransport)) {
+          myLink.send({ t: 'hello', v: 1, cid: clientInstanceId, ua: isIOS ? 'ios' : 'web', secure: Boolean(window.isSecureContext) });
         }
       },
       onMessage: function (msg) {
+        if (link !== myLink) return;
         if (!msg || typeof msg !== 'object') return;
         if (msg.t === 'state') {
+          markDesktopSeen();
           if (Number.isFinite(msg.cellW)) desktopState.cellW = msg.cellW;
           if (Number.isFinite(msg.cols)) desktopState.cols = msg.cols;
           if (Number.isFinite(msg.baseW)) desktopState.baseW = msg.baseW;
           if (Number.isFinite(msg.maxW)) desktopState.maxW = msg.maxW;
           if (msg.layout === 'reflow' || msg.layout === 'fixed3') {
             desktopState.layout = msg.layout;
-            const locked = msg.layout === 'fixed3';
-            refs.layoutBtn.textContent = locked ? 'Lock 3×3' : 'Reflow';
-            refs.layoutBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
           }
+          renderLayoutBtn();
           if (typeof msg.mode === 'string' && Object.prototype.hasOwnProperty.call(MODE_HINTS, msg.mode) && msg.mode !== processor.mode) {
             setMode(msg.mode, false);
           }
@@ -199,8 +275,15 @@
         }
       }
     });
-    link.start();
+    link = myLink;
+    myLink.start();
   }
+
+  // A link that hit the transport retry ceiling restarts only on a user tap or when the page
+  // becomes visible again (never on a timer).
+  refs.status.addEventListener('click', function () {
+    if (linkStatus === 'failed') connect();
+  });
 
   function transmitMotion(tel, force) {
     if (!link) return;
@@ -238,29 +321,55 @@
     } catch (_e) {}
   }
 
+  function onDeviceMotion(ev) {
+    if (!ev) return;
+    const accG = ev.accelerationIncludingGravity || {};
+    if (!gotSensorSample && Number.isFinite(accG.x) && Number.isFinite(accG.y) && Number.isFinite(accG.z)) {
+      gotSensorSample = true;
+      clearTimeout(sensorProbeTimer);
+      sensorProbeTimer = 0;
+    }
+    if (manualScrubbing) return;
+    const acc = ev.acceleration || {};
+    const tel = processor.ingestMotion({
+      ax: acc.x,
+      ay: acc.y,
+      az: acc.z,
+      gx: accG.x,
+      gy: accG.y,
+      gz: accG.z,
+      ts: ev.timeStamp || Date.now(),
+      isIOS: isIOS
+    });
+    renderDial(tel.scale, tel.roll, tel.pitch, tel.liftA, tel.pullA);
+    transmitMotion(tel, false);
+  }
+
+  // Permission granted (or not needed) does not mean a sensor exists: desktop browsers and
+  // insecure contexts never fire usable devicemotion samples. Re-open the gate with an
+  // explanation instead of leaving a dead dial.
+  function onSensorProbeTimeout() {
+    sensorProbeTimer = 0;
+    if (gotSensorSample) return;
+    sensorsActive = false;
+    refs.gate.hidden = false;
+    refs.gateNote.textContent = 'No motion sensor data from this browser. Use Manual Trim below, or open this page in iPhone Safari over HTTPS.';
+  }
+
   function startSensors() {
     if (sensorsActive) return;
     sensorsActive = true;
     refs.gate.hidden = true;
     requestWakeLock();
 
-    window.addEventListener('devicemotion', function (ev) {
-      if (!ev || manualScrubbing) return;
-      const acc = ev.acceleration || {};
-      const accG = ev.accelerationIncludingGravity || {};
-      const tel = processor.ingestMotion({
-        ax: acc.x,
-        ay: acc.y,
-        az: acc.z,
-        gx: accG.x,
-        gy: accG.y,
-        gz: accG.z,
-        ts: ev.timeStamp || Date.now(),
-        isIOS: isIOS
-      });
-      renderDial(tel.scale, tel.roll, tel.pitch, tel.liftA, tel.pullA);
-      transmitMotion(tel, false);
-    });
+    if (!motionListenerAttached) {
+      motionListenerAttached = true;
+      window.addEventListener('devicemotion', onDeviceMotion);
+    }
+    if (!gotSensorSample) {
+      clearTimeout(sensorProbeTimer);
+      sensorProbeTimer = setTimeout(onSensorProbeTimeout, SENSOR_PROBE_MS);
+    }
   }
 
   // CRITICAL iOS Safari requirement: requestPermission() MUST run directly inside click handler
@@ -297,6 +406,14 @@
       refs.gate.hidden = true;
     });
   }
+
+  // The slider and "Use Touch Slider Only" hide the gate; tapping the dial brings Enable Motion back
+  // so dismissing it is never a dead end.
+  refs.dialPad.addEventListener('click', function (ev) {
+    if (sensorsActive || !refs.gate.hidden) return;
+    if (ev && ev.target && refs.gate.contains(ev.target)) return;
+    refs.gate.hidden = false;
+  });
 
   // ---------- Controls ----------
 
@@ -358,9 +475,7 @@
   refs.layoutBtn.addEventListener('click', function () {
     const next = desktopState.layout === 'reflow' ? 'fixed3' : 'reflow';
     desktopState.layout = next;
-    const locked = next === 'fixed3';
-    refs.layoutBtn.textContent = locked ? 'Lock 3×3' : 'Reflow';
-    refs.layoutBtn.setAttribute('aria-pressed', locked ? 'true' : 'false');
+    renderLayoutBtn();
     if (link) link.send({ t: 'act', cmd: 'layout', val: next });
     renderDial(processor.scale, processor.telemetry.roll, processor.telemetry.pitch, processor.telemetry.liftA, processor.telemetry.pullA);
   });
@@ -395,9 +510,12 @@
   });
 
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible' && sensorsActive && (!wakeLock || wakeLock.released)) {
+    syncHeartbeat();
+    if (document.visibilityState !== 'visible') return;
+    if (sensorsActive && (!wakeLock || wakeLock.released)) {
       requestWakeLock();
     }
+    if (linkStatus === 'failed') connect();
   });
 
   renderDial(Physics.DEFAULT_SCALE, 0, 0, 0, 0);

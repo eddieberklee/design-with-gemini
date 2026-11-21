@@ -406,8 +406,10 @@
     return true;
   };
 
+  // baseCellWidth is the measured 1.00x tile width. It is clamped only to the same
+  // [MIN_CELL_W, MAX_CELL_W] range as the output so a 177px phone-width tile reports 177px, not 180px.
   function scaleToCellWidth(scale, baseCellWidth, maxContainerWidth) {
-    const base = clamp(Number.isFinite(baseCellWidth) && baseCellWidth > 0 ? baseCellWidth : 420, 180, 600);
+    const base = clamp(Number.isFinite(baseCellWidth) && baseCellWidth > 0 ? baseCellWidth : 420, MIN_CELL_W, MAX_CELL_W);
     const maxIn = Number.isFinite(maxContainerWidth) && maxContainerWidth > 0 ? maxContainerWidth : MAX_CELL_W;
     const maxW = Math.max(MIN_CELL_W, Math.min(MAX_CELL_W, maxIn));
     const s = Number.isFinite(scale) ? clamp(scale, MIN_SCALE, MAX_SCALE) : DEFAULT_SCALE;

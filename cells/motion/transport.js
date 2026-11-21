@@ -22,6 +22,10 @@
   const TOPIC_PREFIX = 'dwg-motion-v1/';
   const SESSION_ID_RE = /^[A-Z0-9]{6,12}$/;
   const MAX_MQTT_RXBUF = 65536;
+  // Retry ceilings (resident-cost rule: every reconnect loop settles in a terminal 'failed' state)
+  const MQTT_MAX_ATTEMPTS = 6;        // 2 full rounds of the 3-broker failover list
+  const LOCAL_WS_MAX_ATTEMPTS = 4;    // local /ws reconnects when no HTTP fallback exists
+  const LOCAL_HTTP_MAX_ERRORS = 3;    // consecutive EventSource errors before the SSE fallback gives up
 
   function isValidSessionId(sid) {
     return typeof sid === 'string' && SESSION_ID_RE.test(sid);
@@ -210,16 +214,27 @@
     this.reconnectTimer = null;
     this.connectTimer = null;
     this.retryDelay = 800;
+    // Retry ceiling: consecutive connection attempts that never reach SUBACK before giving up
+    // with a terminal 'failed' status. Reset on every successful subscribe and on start().
+    this.maxAttempts = Number.isFinite(opts.maxAttempts) && opts.maxAttempts > 0 ? opts.maxAttempts : MQTT_MAX_ATTEMPTS;
+    this.failedAttempts = 0;
   }
 
   MqttRelayTransport.prototype.start = function () {
     this.closed = false;
+    this.failedAttempts = 0;
+    this.retryDelay = 800;
     this._connect();
   };
 
   MqttRelayTransport.prototype._connect = function () {
     if (this.closed) return;
     this._clearTimers();
+    if (this.ws) {
+      const prev = this.ws;
+      this.ws = null;
+      try { prev.close(); } catch (_e) {}
+    }
     const url = this.brokers[this.brokerIdx % this.brokers.length];
     this.onStatus('connecting', { transport: 'mqtt', broker: url });
 
@@ -295,6 +310,7 @@
           self.connectTimer = null;
           self.ready = true;
           self.retryDelay = 800;
+          self.failedAttempts = 0;
           self.onStatus('ready', { transport: 'mqtt', broker: url });
           if (self.pingTimer) clearInterval(self.pingTimer);
           self.pingTimer = setInterval(function () {
@@ -328,6 +344,12 @@
   MqttRelayTransport.prototype._scheduleReconnect = function (reason) {
     if (this.closed) return;
     const self = this;
+    this.failedAttempts++;
+    if (this.failedAttempts >= this.maxAttempts) {
+      this._clearTimers();
+      this.onStatus('failed', { transport: 'mqtt', reason: reason, attempts: this.failedAttempts });
+      return;
+    }
     this.onStatus('reconnecting', { transport: 'mqtt', reason: reason });
     this.reconnectTimer = setTimeout(function () {
       self._connect();
@@ -383,10 +405,15 @@
     this.httpFailures = 0;
     this.openGuard = null;
     this.reconnectTimer = null;
+    this.maxWsAttempts = Number.isFinite(opts.maxWsAttempts) && opts.maxWsAttempts > 0 ? opts.maxWsAttempts : LOCAL_WS_MAX_ATTEMPTS;
+    this.maxHttpErrors = Number.isFinite(opts.maxHttpErrors) && opts.maxHttpErrors > 0 ? opts.maxHttpErrors : LOCAL_HTTP_MAX_ERRORS;
   }
 
   LocalBridgeTransport.prototype.start = function () {
     this.closed = false;
+    this.wsFailures = 0;
+    this.httpFailures = 0;
+    this.useHttpFallback = false;
     if (this.wsUrl) {
       this._connectWs();
     } else if (this.httpBase) {
@@ -396,6 +423,7 @@
 
   LocalBridgeTransport.prototype._connectWs = function () {
     if (this.closed) return;
+    this.reconnectTimer = null;
     if (this.openGuard) { clearTimeout(this.openGuard); this.openGuard = null; }
     this.onStatus('connecting', { transport: 'local-ws', url: this.wsUrl });
     let ws;
@@ -444,9 +472,15 @@
   };
 
   LocalBridgeTransport.prototype._onWsFail = function () {
+    if (this.closed) return;
     this.wsFailures++;
     if (this.wsFailures >= 2 && this.httpBase) {
       this._startHttpFallback();
+      return;
+    }
+    if (this.wsFailures >= this.maxWsAttempts) {
+      this.ready = false;
+      this.onStatus('failed', { transport: 'local-ws', attempts: this.wsFailures });
       return;
     }
     const self = this;
@@ -487,12 +521,23 @@
         es.onerror = function () {
           if (self.es !== es || self.closed) return;
           self.ready = false;
+          self.httpFailures++;
+          // EventSource reconnects on its own forever; cap it. readyState 2 = CLOSED (browser gave up).
+          if (es.readyState === 2 || self.httpFailures >= self.maxHttpErrors) {
+            self.es = null;
+            try { es.close(); } catch (_e) {}
+            self.onStatus('failed', { transport: 'local-http', attempts: self.httpFailures });
+            return;
+          }
           self.onStatus('reconnecting', { transport: 'local-http' });
         };
       } catch (_e) {
         this.ready = false;
-        this.onStatus('reconnecting', { transport: 'local-http' });
+        this.onStatus('failed', { transport: 'local-http' });
       }
+    } else {
+      this.ready = false;
+      this.onStatus('failed', { transport: 'local-http', reason: 'no EventSource' });
     }
   };
 
@@ -567,14 +612,30 @@
     const statusMap = {};
     function reportStatus(kind, state, meta) {
       statusMap[kind] = { state: state, meta: meta };
-      if (opts.onStatus) {
-        const active = statusMap.local && statusMap.local.state === 'ready'
-          ? { state: 'ready', transport: statusMap.local.meta.transport, meta: statusMap.local.meta }
-          : statusMap.mqtt && statusMap.mqtt.state === 'ready'
-            ? { state: 'ready', transport: 'mqtt', meta: statusMap.mqtt.meta }
-            : { state: state, transport: (meta && meta.transport) || kind, meta: meta };
-        opts.onStatus(active.state, active);
+      if (!opts.onStatus) return;
+      let active;
+      if (statusMap.local && statusMap.local.state === 'ready') {
+        active = { state: 'ready', transport: statusMap.local.meta.transport, meta: statusMap.local.meta };
+      } else if (statusMap.mqtt && statusMap.mqtt.state === 'ready') {
+        active = { state: 'ready', transport: 'mqtt', meta: statusMap.mqtt.meta };
+      } else {
+        // 'failed' is terminal for the whole link only when every sub-link has given up;
+        // a dead local bridge must not report offline while MQTT is still connecting.
+        const alive = links.filter(function (l) {
+          return !statusMap[l.kind] || statusMap[l.kind].state !== 'failed';
+        });
+        if (alive.length === 0) {
+          active = { state: 'failed', transport: (meta && meta.transport) || kind, meta: meta };
+        } else if (state === 'failed') {
+          const other = statusMap[alive[0].kind];
+          active = other
+            ? { state: other.state, transport: (other.meta && other.meta.transport) || alive[0].kind, meta: other.meta }
+            : { state: 'connecting', transport: alive[0].kind, meta: null };
+        } else {
+          active = { state: state, transport: (meta && meta.transport) || kind, meta: meta };
+        }
       }
+      opts.onStatus(active.state, active);
     }
 
     if ((mode === 'local' || mode === 'dual') && (opts.wsUrl || opts.httpBase)) {
@@ -617,6 +678,11 @@
       },
       close: function () {
         links.forEach(function (l) { l.inst.close(); });
+      },
+      // Last status of one sub-link ('local' | 'mqtt'), e.g. to relink after a bridge restart
+      // while the aggregate still reads 'ready' on MQTT.
+      subStatus: function (kind) {
+        return statusMap[kind] ? statusMap[kind].state : '';
       }
     };
   }

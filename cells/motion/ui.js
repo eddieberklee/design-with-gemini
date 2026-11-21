@@ -10,6 +10,12 @@
   const STORAGE_SESSION_KEY = 'mg_session_id_v1';
   const LOCAL_BRIDGE_DEFAULT = 'http://127.0.0.1:8443';
   const MAX_QR_URL_BYTES = 213;
+  // index.html geometry: `.grid { gap: 4px }`, 2 columns below 768px, 3 columns from 768px.
+  const GRID_GAP_PX = 4;
+  const NATURAL_COLS_QUERY = '(min-width: 768px)';
+  // Single neutral threshold: below it the grid is uncontrolled and the HUD/reset chip are idle.
+  const NEUTRAL_SCALE_EPS = 0.005;
+  const PHONE_TIMEOUT_MS = 6500;
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -192,8 +198,8 @@
       cols: 3,
       controlled: false,
 
-      // Link & phone status
-      linkState: 'connecting',
+      // Link & phone status ('idle' = no link open: no scannable QR URL, or tab hidden)
+      linkState: 'idle',
       linkTransport: 'mqtt',
       phoneConnected: false,
       lastPhoneMs: 0,
@@ -221,6 +227,7 @@
     let rafId = 0;
     let lastRafTs = 0;
     let link = null;
+    let linkKey = '';
     let hzTimer = 0;
     let feedbackTimer = 0;
     let bridgePollTimer = 0;
@@ -232,17 +239,43 @@
     let lastDialogTrigger = null;
     let unmounted = false;
 
-    // Measure baseline 3-column cell width from original index.html geometry (never inflated by .is-motion-controlled)
-    function measureBaseCellWidth() {
+    function isOffNeutral(scaleVal) {
+      return Math.abs(scaleVal - Physics.DEFAULT_SCALE) >= NEUTRAL_SCALE_EPS;
+    }
+
+    // Column count index.html renders at 1.00x. Uses the same media query as the page CSS
+    // (viewport width incl. scrollbar), not documentElement.clientWidth.
+    function naturalColumnCount() {
+      try {
+        if (typeof root.matchMedia === 'function') {
+          return root.matchMedia(NATURAL_COLS_QUERY).matches ? 3 : 2;
+        }
+      } catch (_e) {}
+      const docW = document.documentElement.clientWidth || window.innerWidth;
+      return docW >= 768 ? 3 : 2;
+    }
+
+    // Content width of the grid. `.grid.is-motion-controlled` keeps index.html's width/max-width,
+    // so this is the same value in both modes. Falls back to the index.html formula when layout
+    // is unavailable.
+    function gridContentWidth() {
+      // Fractional width: clientWidth rounds (1324.8px -> 1325) and a rounded-up track would not fit.
+      const measured = typeof gridEl.getBoundingClientRect === 'function'
+        ? gridEl.getBoundingClientRect().width
+        : gridEl.clientWidth;
+      if (Number.isFinite(measured) && measured > 0) return measured;
       const bodyStyle = window.getComputedStyle(document.body);
       const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
       const docW = document.documentElement.clientWidth || window.innerWidth;
-      const contentW = Math.max(240, docW - padX);
-      const baselineGridW = Math.min(contentW, docW * 0.92, 1600);
-      const naturalCols = docW >= 768 ? 3 : 2;
-      const gap = 4;
-      const naturalW = Math.round((baselineGridW - gap * (naturalCols - 1)) / naturalCols);
-      state.baseCellW = Physics.clamp(naturalW, 180, 560);
+      return Math.max(240, Math.min(docW - padX, docW * 0.92, 1600));
+    }
+
+    // Baseline 1.00x cell width: floor of the real track width, so reflow at 1.00x fits exactly
+    // the natural column count (a 1px round-up would drop a column).
+    function measureBaseCellWidth() {
+      const naturalCols = naturalColumnCount();
+      const naturalW = Math.floor((gridContentWidth() - GRID_GAP_PX * (naturalCols - 1)) / naturalCols);
+      state.baseCellW = Physics.clamp(naturalW, Physics.MIN_CELL_W, Physics.MAX_CELL_W);
       if (!state.controlled) {
         state.currentCellW = state.baseCellW;
         state.cols = naturalCols;
@@ -250,14 +283,10 @@
     }
 
     function computeMaxCellWidth() {
-      const bodyStyle = window.getComputedStyle(document.body);
-      const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
-      const docW = document.documentElement.clientWidth || window.innerWidth;
-      const avail = Math.max(240, Math.min(docW - padX, docW * 0.92, 1600));
+      const avail = gridContentWidth();
       if (state.layout === 'fixed3') {
-        const fixedCols = docW >= 768 ? 3 : 2;
-        const gap = 4;
-        return Math.max(Physics.MIN_CELL_W, Math.floor((avail - gap * (fixedCols - 1)) / fixedCols));
+        const fixedCols = naturalColumnCount();
+        return Math.max(Physics.MIN_CELL_W, Math.floor((avail - GRID_GAP_PX * (fixedCols - 1)) / fixedCols));
       }
       return Math.min(Physics.MAX_CELL_W, Math.floor(avail));
     }
@@ -266,26 +295,25 @@
       const clampedScale = Physics.clamp(scaleVal, Physics.MIN_SCALE, Physics.MAX_SCALE);
       state.scale = clampedScale;
 
-      const docW = document.documentElement.clientWidth || window.innerWidth;
       const maxCellW = computeMaxCellWidth();
       state.maxCellW = maxCellW;
       const cellW = Physics.scaleToCellWidth(clampedScale, state.baseCellW, maxCellW);
       state.currentCellW = cellW;
 
-      const isNearDefault = Math.abs(clampedScale - 1.0) < 0.008 && !forceActive && !state.phoneConnected;
+      const isNearDefault = !isOffNeutral(clampedScale) && !forceActive && !state.phoneConnected;
       if (isNearDefault) {
         state.controlled = false;
         gridEl.classList.remove('is-motion-controlled');
         gridEl.style.removeProperty('--mg-cell-w');
         gridEl.removeAttribute('data-motion-layout');
-        state.cols = docW >= 768 ? 3 : 2;
+        state.cols = naturalColumnCount();
       } else {
         state.controlled = true;
         gridEl.classList.add('is-motion-controlled');
         gridEl.setAttribute('data-motion-layout', state.layout);
         gridEl.style.setProperty('--mg-cell-w', cellW + 'px');
         if (state.layout === 'fixed3') {
-          state.cols = docW >= 768 ? 3 : 2;
+          state.cols = naturalColumnCount();
         } else {
           const gridAvail = gridEl.clientWidth || maxCellW;
           state.cols = Math.max(1, Math.floor((gridAvail + 4) / (cellW + 4)));
@@ -309,7 +337,7 @@
       const dt = Math.min(0.05, Math.max(0.001, (now - lastRafTs) / 1000));
       lastRafTs = now;
       const moving = spring.step(dt);
-      applyGridSize(spring.value, state.phoneConnected || Math.abs(spring.target - 1.0) >= 0.008);
+      applyGridSize(spring.value, state.phoneConnected || isOffNeutral(spring.target));
       if (moving && !unmounted) {
         rafId = requestAnimationFrame(tickSpring);
       } else {
@@ -325,7 +353,7 @@
           rafId = 0;
         }
         spring.snap(clamped);
-        applyGridSize(clamped, Math.abs(clamped - 1.0) >= 0.008 || state.phoneConnected);
+        applyGridSize(clamped, isOffNeutral(clamped) || state.phoneConnected);
       } else {
         spring.setTarget(clamped);
         ensureSpringRunning();
@@ -407,7 +435,8 @@
       }
 
       renderQrTargets();
-      updateLiveDom();
+      // Opens the relay only once a phone can actually find this session (scannable QR URL).
+      syncTransport(false);
     }
 
     function probeLocalBridge() {
@@ -469,7 +498,11 @@
                 recomputeQrUrl();
               }
               if (cfg.desktopWsUrl !== prevWs) {
-                connectTransport();
+                syncTransport(false);
+              } else if (link && typeof link.subStatus === 'function' && link.subStatus('local') === 'failed') {
+                // Bridge restarted at the same URL after the local sub-link hit its retry ceiling
+                // (the aggregate may still be 'ready' on MQTT): relink so LOCAL WS comes back.
+                syncTransport(true);
               }
               // If ngrok tunnel is still starting up, re-probe briefly to upgrade QR from LAN self-signed to ngrok
               if (cfg.tunnelPending && bridgePollAttempts < 6 && !unmounted) {
@@ -494,32 +527,118 @@
 
     // ---------- Transport Lifecycle ----------
 
-    function connectTransport() {
-      if (link) {
-        link.close();
-        link = null;
-      }
+    function isPageHidden() {
+      return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    }
 
-      const hasBridge = Boolean(state.bridgeConfig && state.bridgeConfig.desktopWsUrl);
+    function hasBridgeWs() {
+      return Boolean(state.bridgeConfig && state.bridgeConfig.desktopWsUrl);
+    }
+
+    // Identity of the link we want right now; '' means no link (no scannable QR, hidden tab, unmounted).
+    function desiredLinkKey() {
+      if (unmounted || !state.qrUrl || isPageHidden()) return '';
+      return [
+        state.sessionId,
+        hasBridgeWs() ? state.bridgeConfig.desktopWsUrl : '',
+        hasBridgeWs() ? (state.bridgeConfig.desktopHttpBase || '') : ''
+      ].join('|');
+    }
+
+    function closeLink() {
+      if (link) {
+        const old = link;
+        link = null;
+        try { old.close(); } catch (_e) {}
+      }
+      linkKey = '';
+      state.linkState = 'idle';
+    }
+
+    function openLink(key) {
+      const hasBridge = hasBridgeWs();
       const wsUrl = hasBridge
         ? state.bridgeConfig.desktopWsUrl + '?s=' + encodeURIComponent(state.sessionId) + '&role=desktop'
         : '';
       const httpBase = hasBridge ? state.bridgeConfig.desktopHttpBase : '';
 
-      link = Transport.createLink({
+      const myLink = Transport.createLink({
         mode: hasBridge ? 'dual' : 'mqtt',
         sessionId: state.sessionId,
         role: 'desktop',
         wsUrl: wsUrl,
         httpBase: httpBase,
         onStatus: function (st, info) {
+          if (link !== myLink || unmounted) return;
           state.linkState = st;
           state.linkTransport = (info && info.transport) || 'mqtt';
           updateLiveDom();
         },
-        onMessage: handlePhoneMessage
+        onMessage: function (msg) {
+          if (link !== myLink || unmounted) return;
+          handlePhoneMessage(msg);
+        }
       });
-      link.start();
+      link = myLink;
+      linkKey = key;
+      state.linkState = 'connecting';
+      state.linkTransport = hasBridge ? 'local-ws' : 'mqtt';
+      myLink.start();
+    }
+
+    // Reconcile the open link with desiredLinkKey(). force=true restarts a link that reached
+    // the transport retry ceiling ('failed'); otherwise a failed link stays down until the user
+    // asks (pill, QR, Retry Bridge) so nothing reconnects forever while the tile sits idle.
+    function syncTransport(force) {
+      const key = desiredLinkKey();
+      if (!force && key === linkKey && (key === '' || link)) {
+        updateLiveDom();
+        return;
+      }
+      closeLink();
+      if (key) openLink(key);
+      updateLiveDom();
+    }
+
+    function onPhoneHzTick() {
+      const now = Date.now();
+      const elapsed = Math.max(250, now - state.lastHzTick);
+      state.rxHz = Math.round((state.rxCount * 1000) / elapsed);
+      state.rxCount = 0;
+      state.lastHzTick = now;
+
+      if (state.phoneConnected && now - state.lastPhoneMs > PHONE_TIMEOUT_MS) {
+        setPhoneConnected(false);
+      } else if (state.phoneConnected) {
+        updateLiveDom();
+      }
+    }
+
+    // Rate meter, phone liveness and desktop->phone feedback run only while a phone is paired
+    // and the tab is visible.
+    function syncPhoneTimers() {
+      const want = state.phoneConnected && !unmounted && !isPageHidden();
+      if (want && !hzTimer) {
+        state.rxCount = 0;
+        state.lastHzTick = Date.now();
+        hzTimer = setInterval(onPhoneHzTick, 1000);
+        feedbackTimer = setInterval(sendFeedbackToPhone, 220);
+      } else if (!want && hzTimer) {
+        clearInterval(hzTimer);
+        hzTimer = 0;
+        clearInterval(feedbackTimer);
+        feedbackTimer = 0;
+      }
+    }
+
+    function setPhoneConnected(next) {
+      if (state.phoneConnected === next) return;
+      state.phoneConnected = next;
+      if (!next) {
+        state.rxHz = 0;
+        applyGridSize(state.scale, false);
+      }
+      syncPhoneTimers();
     }
 
     function handlePhoneMessage(msg) {
@@ -527,7 +646,7 @@
       const now = Date.now();
       state.lastPhoneMs = now;
       if (!state.phoneConnected) {
-        state.phoneConnected = true;
+        setPhoneConnected(true);
         closeStudio();
         sendFeedbackToPhone();
       }
@@ -567,25 +686,6 @@
         updateLiveDom();
       }
     }
-
-    hzTimer = setInterval(function () {
-      const now = Date.now();
-      const elapsed = Math.max(250, now - state.lastHzTick);
-      state.rxHz = Math.round((state.rxCount * 1000) / elapsed);
-      state.rxCount = 0;
-      state.lastHzTick = now;
-
-      if (state.phoneConnected && now - state.lastPhoneMs > 6500) {
-        state.phoneConnected = false;
-        applyGridSize(state.scale, false);
-      } else if (state.phoneConnected) {
-        updateLiveDom();
-      }
-    }, 1000);
-
-    feedbackTimer = setInterval(function () {
-      if (state.phoneConnected) sendFeedbackToPhone();
-    }, 220);
 
     // ---------- Build DOM (Zero innerHTML interpolation) ----------
 
@@ -677,6 +777,9 @@
       } else if (state.linkState === 'ready') {
         refs.statusPill.dataset.state = 'ready';
         refs.statusText.textContent = 'SCAN QR';
+      } else if (state.linkState === 'failed') {
+        refs.statusPill.dataset.state = 'warn';
+        refs.statusText.textContent = 'OFFLINE';
       } else {
         refs.statusPill.dataset.state = 'warn';
         refs.statusText.textContent = 'LINKING';
@@ -686,7 +789,7 @@
       const pxLabel = state.currentCellW + ' px';
       refs.sizeBig.textContent = pxLabel;
       refs.scaleChip.textContent = scaleLabel;
-      refs.gridMeta.textContent = state.cols + ' col · ' + (state.layout === 'reflow' ? 'Reflow' : '3×3');
+      refs.gridMeta.textContent = state.cols + ' col · ' + (state.layout === 'reflow' ? 'Reflow' : 'Locked');
 
       refs.microVal.textContent = pxLabel;
       refs.microSub.textContent = scaleLabel + ' · ' + state.cols + 'c';
@@ -706,7 +809,8 @@
       });
 
       const isLocked3 = state.layout === 'fixed3';
-      refs.layoutBtn.textContent = isLocked3 ? 'Lock 3×3' : 'Reflow';
+      // fixed3 locks the natural column count: 3 from 768px, 2 below (motion.css media query).
+      refs.layoutBtn.textContent = isLocked3 ? 'Lock ' + naturalColumnCount() + ' col' : 'Reflow';
       refs.layoutBtn.classList.toggle('is-active', isLocked3);
       refs.layoutBtn.setAttribute('aria-pressed', isLocked3 ? 'true' : 'false');
 
@@ -715,9 +819,14 @@
         : state.linkTransport === 'local-http'
           ? 'LOCAL HTTPS'
           : 'MQTT WSS';
-      refs.footerLink.textContent = txName + ' · ' + state.sessionId.slice(0, 4);
+      const linkLabel = !link
+        ? 'NO LINK'
+        : state.linkState === 'failed'
+          ? txName + ' OFFLINE'
+          : txName;
+      refs.footerLink.textContent = linkLabel + ' · ' + state.sessionId.slice(0, 4);
 
-      const isOffset = Math.abs(state.scale - 1.0) >= 0.02;
+      const isOffset = isOffNeutral(state.scale);
       refs.resetBtn.classList.toggle('is-active', isOffset);
 
       const showHud = isOffset || state.phoneConnected;
@@ -730,7 +839,7 @@
     // Build Cell #3 Card
     clearNode(rootEl);
 
-    refs.statusText = el('span', { textContent: 'LINKING' });
+    refs.statusText = el('span', { textContent: 'SETUP' });
     refs.statusPill = el('button', {
       type: 'button',
       className: 'mg-pill',
@@ -879,13 +988,13 @@
       })
     ]);
 
-    refs.footerLink = el('span', { textContent: 'MQTT WSS' });
+    refs.footerLink = el('span', { textContent: 'NO LINK' });
     refs.layoutBtn = el('button', {
       type: 'button',
       className: 'mg-chip-btn',
       textContent: 'Reflow',
       'aria-pressed': 'false',
-      title: 'Toggle between responsive column reflow and locked 3x3 grid',
+      title: 'Toggle between responsive column reflow and the locked natural column count',
       onClick: function () {
         state.layout = state.layout === 'reflow' ? 'fixed3' : 'reflow';
         applyGridSize(state.scale, state.controlled);
@@ -1018,10 +1127,8 @@
               onClick: function () {
                 state.sessionId = Transport.generateSessionId(8);
                 safeStorageSet('sessionStorage', STORAGE_SESSION_KEY, state.sessionId);
-                state.phoneConnected = false;
-                applyGridSize(state.scale, false);
+                setPhoneConnected(false);
                 recomputeQrUrl();
-                connectTransport();
               }
             }),
             el('button', {
@@ -1032,6 +1139,7 @@
               onClick: function () {
                 bridgePollAttempts = 0;
                 probeLocalBridge();
+                retryFailedLink();
               }
             })
           ])
@@ -1097,11 +1205,17 @@
       }
       bridgePollAttempts = 0;
       probeLocalBridge();
+      retryFailedLink();
       if (typeof refs.dialog.showModal === 'function') {
         if (!refs.dialog.open) refs.dialog.showModal();
       } else {
         refs.dialog.setAttribute('open', '');
       }
+    }
+
+    // User-initiated restart of a link that hit the transport retry ceiling.
+    function retryFailedLink() {
+      if (state.linkState === 'failed') syncTransport(true);
     }
 
     function closeStudio() {
@@ -1142,6 +1256,25 @@
       else updateLiveDom();
     }
 
+    // Hidden tab: drop the relay link and every phone timer (a paused liveness timer could never
+    // time the phone out, so the phone is marked disconnected). Visible again: reopen the link only
+    // if one is wanted; a link that already hit its retry ceiling stays down until the user retries.
+    function onVisibilityChange() {
+      if (unmounted) return;
+      if (isPageHidden()) {
+        setPhoneConnected(false);
+        if (state.linkState === 'failed') {
+          updateLiveDom();
+          return;
+        }
+      } else if (state.linkState === 'failed' && link) {
+        updateLiveDom();
+        return;
+      }
+      syncPhoneTimers();
+      syncTransport(false);
+    }
+
     function stopRuntime() {
       probeSeq++;
       clearInterval(hzTimer);
@@ -1162,19 +1295,14 @@
         cancelAnimationFrame(rafId);
         rafId = 0;
       }
-      if (link) {
-        link.close();
-        link = null;
-      }
-    }
-
-    function onBeforeUnload() {
-      stopRuntime();
+      closeLink();
     }
 
     window.addEventListener('keydown', onWindowKeydown);
     window.addEventListener('resize', onWindowResize);
-    window.addEventListener('beforeunload', onBeforeUnload);
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
 
     function unmount() {
       if (unmounted) return;
@@ -1182,7 +1310,9 @@
       stopRuntime();
       window.removeEventListener('keydown', onWindowKeydown);
       window.removeEventListener('resize', onWindowResize);
-      window.removeEventListener('beforeunload', onBeforeUnload);
+      if (typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
       if (refs.dialog) {
         try {
           if (refs.dialog.open && typeof refs.dialog.close === 'function') refs.dialog.close();
@@ -1205,7 +1335,6 @@
 
     measureBaseCellWidth();
     recomputeQrUrl();
-    connectTransport();
     probeLocalBridge();
 
     return unmount;

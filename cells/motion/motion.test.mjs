@@ -511,7 +511,196 @@ test('Transport cleans up openGuard timer and handles malformed MQTT frames & su
   }
 });
 
-test('mountMotionCell survives throwing storage getters and unmounts cleanly without leaking DOM or timers', () => {
+// ---------- 5. Retry ceilings, aggregate link status, cell-width truth ----------
+
+function withFakeTimers(fn) {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  const realSetInterval = globalThis.setInterval;
+  const realClearInterval = globalThis.clearInterval;
+  const timers = new Map();
+  let nextId = 1;
+  globalThis.setTimeout = (cb, ms) => { const id = nextId++; timers.set(id, { cb, ms, kind: 't' }); return id; };
+  globalThis.clearTimeout = (id) => { timers.delete(id); };
+  globalThis.setInterval = (cb, ms) => { const id = nextId++; timers.set(id, { cb, ms, kind: 'i' }); return id; };
+  globalThis.clearInterval = (id) => { timers.delete(id); };
+  const clock = {
+    timers,
+    pending: () => timers.size,
+    // Fire the oldest pending one-shot timer (reconnect / connect guard)
+    fireNext() {
+      for (const [id, t] of timers) {
+        if (t.kind === 't') { timers.delete(id); t.cb(); return true; }
+      }
+      return false;
+    }
+  };
+  try {
+    return fn(clock);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    globalThis.setInterval = realSetInterval;
+    globalThis.clearInterval = realClearInterval;
+  }
+}
+
+test('scaleToCellWidth reports the measured 1.00x width at phone sizes (no 180px floor)', () => {
+  // 390px viewport: 358px grid, 2 columns, gap 4 -> 177px tiles
+  assert.equal(Physics.scaleToCellWidth(1.0, 177, 358), 177);
+  assert.equal(Physics.scaleToCellWidth(1.0, 150, 358), 150);
+  assert.equal(Physics.scaleToCellWidth(0.34, 177, 358), Physics.MIN_CELL_W);
+  assert.equal(Physics.scaleToCellWidth(2.15, 488, 1472), Physics.MAX_CELL_W);
+  assert.equal(Physics.scaleToCellWidth(1.0, NaN, NaN), 420);
+});
+
+test('MqttRelayTransport stops at its retry ceiling with a terminal failed status and start() re-arms', () => {
+  const prevWs = globalThis.WebSocket;
+  const sockets = [];
+  function DeadWs(url) { this.url = url; this.readyState = 0; sockets.push(this); }
+  DeadWs.prototype.send = function () {};
+  DeadWs.prototype.close = function () {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    if (this.onclose) this.onclose({});
+  };
+  globalThis.WebSocket = DeadWs;
+  try {
+    withFakeTimers((clock) => {
+      const statuses = [];
+      const mqtt = new Transport.MqttRelayTransport({
+        sessionId: 'ABCD1234',
+        role: 'desktop',
+        maxAttempts: 4,
+        onStatus: (st) => statuses.push(st)
+      });
+      mqtt.start();
+      // Each attempt: the broker never answers -> connect guard fires -> close -> reconnect timer
+      for (let i = 0; i < 20 && clock.fireNext(); i++) { /* drain */ }
+      assert.equal(statuses[statuses.length - 1], 'failed');
+      assert.equal(statuses.filter((s) => s === 'failed').length, 1);
+      assert.equal(sockets.length, 4, 'exactly maxAttempts sockets, then stop');
+      assert.equal(clock.pending(), 0, 'no reconnect or ping timer may survive the ceiling');
+      // Broker failover still rotates across the list
+      assert.deepEqual(sockets.slice(0, 3).map((w) => w.url), Transport.MQTT_BROKERS);
+
+      mqtt.start();
+      assert.equal(sockets.length, 5, 'start() re-arms after failed');
+      assert.equal(statuses[statuses.length - 1], 'connecting');
+      mqtt.close();
+      assert.equal(clock.pending(), 0);
+    });
+  } finally {
+    globalThis.WebSocket = prevWs;
+  }
+});
+
+test('LocalBridgeTransport caps WS reconnects and closes a failing EventSource fallback', () => {
+  const prevWs = globalThis.WebSocket;
+  const prevEs = globalThis.EventSource;
+  const sockets = [];
+  function DeadWs() { this.readyState = 0; sockets.push(this); }
+  DeadWs.prototype.close = function () {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    if (this.onclose) this.onclose({});
+  };
+  const sources = [];
+  function FakeEs(url) { this.url = url; this.readyState = 0; this.closed = false; sources.push(this); }
+  FakeEs.prototype.close = function () { this.closed = true; this.readyState = 2; };
+  globalThis.WebSocket = DeadWs;
+  globalThis.EventSource = FakeEs;
+  try {
+    withFakeTimers((clock) => {
+      // (a) No HTTP fallback: WS retries stop at the ceiling
+      const st1 = [];
+      const wsOnly = new Transport.LocalBridgeTransport({
+        sessionId: 'ABCD1234', role: 'desktop', wsUrl: 'ws://127.0.0.1:1/ws', maxWsAttempts: 3,
+        onStatus: (st) => st1.push(st)
+      });
+      wsOnly.start();
+      for (let i = 0; i < 20 && clock.fireNext(); i++) { /* drain */ }
+      assert.equal(st1[st1.length - 1], 'failed');
+      assert.equal(sockets.length, 3);
+      assert.equal(clock.pending(), 0);
+
+      // (b) WS fails twice -> SSE fallback; repeated EventSource errors close it (no endless auto-retry)
+      const st2 = [];
+      const withHttp = new Transport.LocalBridgeTransport({
+        sessionId: 'ABCD1234', role: 'desktop', wsUrl: 'ws://127.0.0.1:1/ws', httpBase: 'http://127.0.0.1:1',
+        onStatus: (st) => st2.push(st)
+      });
+      withHttp.start();
+      for (let i = 0; i < 20 && clock.fireNext(); i++) { /* drain */ }
+      assert.equal(sources.length, 1);
+      const es = sources[0];
+      es.onerror();
+      es.onerror();
+      assert.equal(es.closed, false);
+      assert.equal(st2[st2.length - 1], 'reconnecting');
+      es.onerror();
+      assert.equal(es.closed, true, 'EventSource must be closed at the error ceiling');
+      assert.equal(st2[st2.length - 1], 'failed');
+      assert.equal(clock.pending(), 0);
+      withHttp.close();
+    });
+  } finally {
+    globalThis.WebSocket = prevWs;
+    globalThis.EventSource = prevEs;
+  }
+});
+
+test('createLink reports failed only when every sub-link has failed', () => {
+  const prevWs = globalThis.WebSocket;
+  const sockets = [];
+  function PendingWs(url) { this.url = url; this.readyState = 0; sockets.push(this); }
+  PendingWs.prototype.send = function () {};
+  PendingWs.prototype.close = function () {
+    if (this.readyState === 3) return;
+    this.readyState = 3;
+    if (this.onclose) this.onclose({});
+  };
+  globalThis.WebSocket = PendingWs;
+  try {
+    withFakeTimers((clock) => {
+      const seen = [];
+      const link = Transport.createLink({
+        mode: 'dual', sessionId: 'ABCD1234', role: 'desktop', wsUrl: 'ws://127.0.0.1:1/ws', httpBase: '',
+        onStatus: (st, info) => seen.push(st + ':' + info.transport)
+      });
+      link.start();
+      const fireWhere = (pred) => {
+        for (const [id, t] of clock.timers) {
+          if (t.kind === 't' && pred(t)) { clock.timers.delete(id); t.cb(); return true; }
+        }
+        return false;
+      };
+      // Kill the local bridge until it hits its ceiling; local reconnect timers are 1000ms.
+      for (let i = 0; i < 10; i++) {
+        sockets.filter((w) => w.url.startsWith('ws://') && w.readyState !== 3).forEach((w) => w.close());
+        if (!fireWhere((t) => t.ms === 1000)) break;
+      }
+      assert.equal(sockets.filter((w) => w.url.startsWith('ws://')).length, 4);
+      assert.ok(!seen.includes('failed:local-ws'), 'local failure alone must not fail the link: ' + seen.join(','));
+      assert.equal(seen[seen.length - 1], 'connecting:mqtt');
+      assert.equal(link.subStatus('local'), 'failed', 'sub-link status stays observable for relink decisions');
+
+      // Now exhaust MQTT as well -> the whole link reports failed exactly once
+      for (let i = 0; i < 20; i++) {
+        sockets.filter((w) => w.url.startsWith('wss://') && w.readyState !== 3).forEach((w) => w.close());
+        if (!fireWhere((t) => t.ms !== 1000)) break;
+      }
+      assert.equal(seen[seen.length - 1], 'failed:mqtt');
+      assert.equal(seen.filter((x) => x.startsWith('failed')).length, 1);
+      assert.equal(clock.pending(), 0);
+      link.close();
+    });
+  } finally {
+    globalThis.WebSocket = prevWs;
+  }
+});
+
+function makeUiHarness(location) {
   const uiSource = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
 
   function makeNode(tag) {
@@ -587,8 +776,10 @@ test('mountMotionCell survives throwing storage getters and unmounts cleanly wit
   gridEl.appendChild(cellEl);
   body.appendChild(gridEl);
 
+  const docListeners = {};
   const doc = {
     readyState: 'loading',
+    visibilityState: 'visible',
     body,
     documentElement: { clientWidth: 1280 },
     activeElement: body,
@@ -597,8 +788,12 @@ test('mountMotionCell survives throwing storage getters and unmounts cleanly wit
     createTextNode: (txt) => ({ nodeType: 3, textContent: String(txt) }),
     getElementById: () => null,
     querySelector: (sel) => (sel === '.grid' || sel === 'main.grid' ? gridEl : null),
-    addEventListener: () => {}
+    addEventListener: (t, fn) => { (docListeners[t] = docListeners[t] || []).push(fn); },
+    removeEventListener: (t, fn) => {
+      if (docListeners[t]) docListeners[t] = docListeners[t].filter((f) => f !== fn);
+    }
   };
+  const links = { opened: 0, closed: 0, last: null };
 
   let activeIntervals = 0;
   const winListeners = {};
@@ -608,12 +803,17 @@ test('mountMotionCell survives throwing storage getters and unmounts cleanly wit
       Physics,
       Transport: {
         ...Transport,
-        createLink: () => ({ start() {}, send() { return true; }, close() {} })
+        createLink: (opts) => {
+          links.opened++;
+          const l = { opts, open: true, start() {}, send() { return true; }, close() { if (this.open) { this.open = false; links.closed++; } } };
+          links.last = l;
+          return l;
+        }
       }
     },
     document: doc,
     navigator: { clipboard: null },
-    location: { protocol: 'https:', hostname: 'example.com', origin: 'https://example.com', pathname: '/' },
+    location,
     innerWidth: 1280,
     performance: { now: () => 1000 },
     getComputedStyle: () => ({ paddingLeft: '24px', paddingRight: '24px' }),
@@ -641,22 +841,83 @@ test('mountMotionCell survives throwing storage getters and unmounts cleanly wit
 
   vm.runInNewContext(uiSource, win);
 
-  const unmount1 = win.MotionGrid.UI.mountMotionCell(cellEl);
+  return {
+    win, doc, body, gridEl, cellEl, links, winListeners, docListeners,
+    intervals: () => activeIntervals,
+    setVisibility(v) {
+      doc.visibilityState = v;
+      (docListeners.visibilitychange || []).slice().forEach((fn) => fn({ type: 'visibilitychange' }));
+    }
+  };
+}
+
+const HTTPS_ORIGIN = { protocol: 'https:', hostname: 'example.com', origin: 'https://example.com', pathname: '/' };
+
+test('mountMotionCell survives throwing storage getters and unmounts cleanly without leaking DOM or timers', () => {
+  const h = makeUiHarness(HTTPS_ORIGIN);
+  const unmount1 = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
   assert.equal(typeof unmount1, 'function');
-  assert.equal(activeIntervals, 2);
+  // Idle tile: relay link open (scannable HTTPS QR exists) but no periodic timers until a phone pairs
+  assert.equal(h.intervals(), 0);
+  assert.equal(h.links.opened, 1);
   // body has [gridEl, hud, dialog]
-  assert.equal(body.children.length, 3);
+  assert.equal(h.body.children.length, 3);
 
-  // Mounting a second time without manual unmount must auto-clean prior HUD, dialog, and intervals
-  const unmount2 = win.MotionGrid.UI.mountMotionCell(cellEl);
-  assert.equal(activeIntervals, 2);
-  assert.equal(body.children.length, 3);
+  // A phone message starts the 1Hz liveness + 220ms feedback timers
+  h.links.last.opts.onMessage({ t: 'hello', v: 1 });
+  assert.equal(h.intervals(), 2);
 
-  // Explicit unmount removes HUD, dialog, intervals, and window listeners
+  // Mounting a second time without manual unmount must auto-clean prior HUD, dialog, link and intervals
+  const unmount2 = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
+  assert.equal(h.intervals(), 0);
+  assert.equal(h.links.opened, 2);
+  assert.equal(h.links.closed, 1);
+  assert.equal(h.body.children.length, 3);
+  h.links.last.opts.onMessage({ t: 'hello', v: 1 });
+  assert.equal(h.intervals(), 2);
+
+  // Explicit unmount removes HUD, dialog, intervals, link, and window/document listeners
   unmount2();
-  assert.equal(activeIntervals, 0);
-  assert.equal(body.children.length, 1);
-  assert.equal((winListeners.keydown || []).length, 0);
-  assert.equal((winListeners.resize || []).length, 0);
-  assert.equal((winListeners.beforeunload || []).length, 0);
+  assert.equal(h.intervals(), 0);
+  assert.equal(h.links.closed, 2);
+  assert.equal(h.body.children.length, 1);
+  assert.equal((h.winListeners.keydown || []).length, 0);
+  assert.equal((h.winListeners.resize || []).length, 0);
+  assert.equal((h.winListeners.beforeunload || []).length, 0);
+  assert.equal((h.docListeners.visibilitychange || []).length, 0);
+});
+
+test('mountMotionCell drops link and phone timers while hidden and reopens only what it suspended', () => {
+  const h = makeUiHarness(HTTPS_ORIGIN);
+  const unmount = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
+  const first = h.links.last;
+  first.opts.onMessage({ t: 'hello', v: 1 });
+  assert.equal(h.intervals(), 2);
+
+  h.setVisibility('hidden');
+  assert.equal(h.intervals(), 0, 'hidden tab must stop liveness/feedback intervals');
+  assert.equal(first.open, false, 'hidden tab must close the relay link');
+  assert.equal(h.links.opened, 1);
+
+  h.setVisibility('visible');
+  assert.equal(h.links.opened, 2, 'visible again reopens the link it suspended');
+  assert.equal(h.intervals(), 0, 'phone timers restart only when the phone talks again');
+
+  // A link that reached the transport retry ceiling is not reopened by visibility churn
+  const second = h.links.last;
+  second.opts.onStatus('failed', { transport: 'mqtt' });
+  h.setVisibility('hidden');
+  h.setVisibility('visible');
+  assert.equal(h.links.opened, 2, 'failed link stays down until the user retries');
+
+  unmount();
+  assert.equal(h.intervals(), 0);
+});
+
+test('mountMotionCell opens no relay link when no scannable QR URL exists (file:// setup state)', () => {
+  const h = makeUiHarness({ protocol: 'file:', hostname: '', origin: 'null', pathname: '/x/index.html' });
+  const unmount = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
+  assert.equal(h.links.opened, 0, 'no public broker connection while the tile can only show SETUP');
+  assert.equal(h.intervals(), 0);
+  unmount();
 });

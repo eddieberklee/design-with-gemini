@@ -199,6 +199,10 @@ html, body {
   font-size: 13.5px;
   font-weight: 600;
   color: var(--accent);
+  /* Opaque chip: the same-colour bubble reticle rests at dial centre, directly under this line */
+  background: #181816;
+  border-radius: 4px;
+  padding: 0 5px;
 }
 
 .ph-cols-meta {

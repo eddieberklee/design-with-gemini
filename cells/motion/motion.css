@@ -617,7 +617,9 @@
   .mg-header { padding: 4px 6px; min-height: 24px; }
   .mg-body { display: none; }
   .mg-footer { display: none; }
-  .mg-actions .mg-icon-btn { display: none; }
+  /* Keep the compact "↗" studio button: at 2-column phone widths (177px tiles) it is the only
+     route to the QR / pairing studio once the pill hides below 195px. */
+  .mg-actions .mg-icon-btn { height: 20px; padding: 0 6px; }
   .mg-micro { display: flex; }
 }
 
