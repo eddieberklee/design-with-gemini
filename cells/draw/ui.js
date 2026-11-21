@@ -72,24 +72,29 @@
         sample &&
         typeof sample.timeStamp === 'number' &&
         Number.isFinite(sample.timeStamp) &&
-        sample.timeStamp >= 0
+        sample.timeStamp > 0
       ) {
-        if (sample.timeStamp > 0 || !fallbackEvent || !(fallbackEvent.timeStamp > 0)) {
-          return sample.timeStamp;
-        }
+        return sample.timeStamp;
       }
       if (
         fallbackEvent &&
         typeof fallbackEvent.timeStamp === 'number' &&
         Number.isFinite(fallbackEvent.timeStamp) &&
-        fallbackEvent.timeStamp >= 0
+        fallbackEvent.timeStamp > 0
       ) {
         return fallbackEvent.timeStamp;
       }
       if (win && win.performance && typeof win.performance.now === 'function') {
-        return win.performance.now();
+        const now = win.performance.now();
+        if (typeof now === 'number' && Number.isFinite(now)) {
+          return now;
+        }
       }
       return Date.now();
+    }
+
+    function resolvePointerId(e) {
+      return e && Number.isFinite(e.pointerId) ? e.pointerId : 1;
     }
 
     function buildPenNibSvg(doc) {
@@ -170,10 +175,12 @@
       const engine = Engine.createEngine(customOptions && customOptions.engineOptions);
       const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
 
+      let destroyed = false;
       let activePointerId = null;
       let cssW = 0;
       let cssH = 0;
       let currentDpr = 1;
+      let watchedRawDpr = 0;
       let currentInk = Engine.DEFAULT_INK;
       let clearTimerId = 0;
       let announceTimerId = 0;
@@ -189,6 +196,7 @@
       }
 
       function announcePolite(message) {
+        if (destroyed) return;
         if (announceTimerId && win && typeof win.clearTimeout === 'function') {
           win.clearTimeout(announceTimerId);
           announceTimerId = 0;
@@ -198,6 +206,7 @@
         if (win && typeof win.setTimeout === 'function') {
           announceTimerId = win.setTimeout(function () {
             announceTimerId = 0;
+            if (destroyed) return;
             liveStatus.textContent = message;
           }, 16);
           if (announceTimerId && typeof announceTimerId.unref === 'function') {
@@ -219,13 +228,30 @@
             }
           }
         }
-        const isDark =
-          (typeof rootEl.getAttribute === 'function' && rootEl.getAttribute('data-theme') === 'dark') ||
-          (doc.body && typeof doc.body.getAttribute === 'function' && doc.body.getAttribute('data-theme') === 'dark') ||
-          (doc.documentElement &&
+        let resolvedTheme = null;
+        let cursor = rootEl;
+        while (cursor && cursor !== doc) {
+          if (typeof cursor.getAttribute === 'function') {
+            const attr = cursor.getAttribute('data-theme');
+            if (attr === 'dark' || attr === 'light') {
+              resolvedTheme = attr;
+              break;
+            }
+          }
+          cursor = cursor.parentElement || cursor.parentNode;
+        }
+        if (!resolvedTheme) {
+          if (doc.body && typeof doc.body.getAttribute === 'function' && doc.body.getAttribute('data-theme') === 'dark') {
+            resolvedTheme = 'dark';
+          } else if (
+            doc.documentElement &&
             typeof doc.documentElement.getAttribute === 'function' &&
-            doc.documentElement.getAttribute('data-theme') === 'dark');
-        currentInk = isDark ? '#f5f5f3' : Engine.DEFAULT_INK;
+            doc.documentElement.getAttribute('data-theme') === 'dark'
+          ) {
+            resolvedTheme = 'dark';
+          }
+        }
+        currentInk = resolvedTheme === 'dark' ? '#f5f5f3' : Engine.DEFAULT_INK;
         return currentInk;
       }
 
@@ -253,6 +279,7 @@
       }
 
       function unbindDprMediaListener() {
+        watchedRawDpr = 0;
         if (!dprMediaQuery) return;
         if (typeof dprMediaQuery.removeEventListener === 'function') {
           dprMediaQuery.removeEventListener('change', onDprMediaChange);
@@ -264,9 +291,14 @@
 
       function bindDprMediaListener(rawDpr) {
         unbindDprMediaListener();
-        if (!win || typeof win.matchMedia !== 'function') return;
+        if (destroyed || !win || typeof win.matchMedia !== 'function') return;
         const safeDpr = Number.isFinite(rawDpr) && rawDpr > 0 ? rawDpr : 1;
-        const mq = win.matchMedia('(resolution: ' + safeDpr + 'dppx)');
+        watchedRawDpr = safeDpr;
+        const minDpr = Math.max(0.001, safeDpr - 0.001).toFixed(4);
+        const maxDpr = (safeDpr + 0.001).toFixed(4);
+        const mq = win.matchMedia(
+          '(min-resolution: ' + minDpr + 'dppx) and (max-resolution: ' + maxDpr + 'dppx)'
+        );
         if (!mq) return;
         if (typeof mq.addEventListener === 'function') {
           mq.addEventListener('change', onDprMediaChange);
@@ -278,12 +310,17 @@
       }
 
       function onDprMediaChange() {
-        const rawDpr = win && typeof win.devicePixelRatio === 'number' ? win.devicePixelRatio : 1;
+        if (destroyed) return;
+        const rawDpr =
+          win && typeof win.devicePixelRatio === 'number' && Number.isFinite(win.devicePixelRatio) && win.devicePixelRatio > 0
+            ? win.devicePixelRatio
+            : 1;
         bindDprMediaListener(rawDpr);
         syncCanvasBackingStore(false);
       }
 
       function syncCanvasBackingStore(forceReplay) {
+        if (destroyed) return;
         const rect = measureRect();
         if (!(rect.width > 0) || !(rect.height > 0)) {
           if (activePointerId !== null) {
@@ -292,8 +329,11 @@
           return;
         }
 
-        const rawDpr = win && typeof win.devicePixelRatio === 'number' ? win.devicePixelRatio : 1;
-        const dpr = Math.min(Math.max(rawDpr || 1, 1), 3);
+        const rawDpr =
+          win && typeof win.devicePixelRatio === 'number' && Number.isFinite(win.devicePixelRatio) && win.devicePixelRatio > 0
+            ? win.devicePixelRatio
+            : 1;
+        const dpr = Math.min(Math.max(rawDpr, 1), 3);
         const targetW = Math.max(1, Math.round(rect.width * dpr));
         const targetH = Math.max(1, Math.round(rect.height * dpr));
 
@@ -308,8 +348,8 @@
 
         cssW = rect.width;
         cssH = rect.height;
-        if (dpr !== currentDpr) {
-          currentDpr = dpr;
+        currentDpr = dpr;
+        if (watchedRawDpr === 0 || Math.abs(rawDpr - watchedRawDpr) > 0.0005) {
           bindDprMediaListener(rawDpr);
         }
 
@@ -349,6 +389,7 @@
       }
 
       function tryReleasePointerCapture(pointerId) {
+        if (!Number.isFinite(pointerId)) return;
         try {
           if (
             typeof canvas.hasPointerCapture === 'function' &&
@@ -368,90 +409,137 @@
         activePointerId = null;
 
         let finalInput = null;
-        if (finalEvent && Number.isFinite(finalEvent.clientX) && Number.isFinite(finalEvent.clientY)) {
+        if (!destroyed) {
           const rect = measureRect();
           if (rect.width > 0 && rect.height > 0) {
-            finalInput = {
-              clientX: finalEvent.clientX,
-              clientY: finalEvent.clientY,
-              rect: rect,
-              pointerType: finalEvent.pointerType || 'mouse',
-              pressure: typeof finalEvent.pressure === 'number' ? finalEvent.pressure : 0,
-              timeMs: resolveEventTimeMs(finalEvent, null, win)
-            };
+            if (Math.abs(rect.width - cssW) > 0.05 || Math.abs(rect.height - cssH) > 0.05) {
+              syncCanvasBackingStore(false);
+            }
+            if (
+              finalEvent &&
+              Number.isFinite(finalEvent.clientX) &&
+              Number.isFinite(finalEvent.clientY)
+            ) {
+              finalInput = {
+                clientX: finalEvent.clientX,
+                clientY: finalEvent.clientY,
+                rect: rect,
+                pointerType: finalEvent.pointerType || 'mouse',
+                pressure:
+                  typeof finalEvent.pressure === 'number' && Number.isFinite(finalEvent.pressure)
+                    ? finalEvent.pressure
+                    : 0,
+                timeMs: resolveEventTimeMs(finalEvent, null, win)
+              };
+            }
           }
         }
 
         const result = engine.endStroke(finalInput);
-        if (result && ctx && cssW > 0 && cssH > 0) {
+        if (!destroyed && result && ctx && cssW > 0 && cssH > 0) {
           for (let i = 0; i < result.ops.length; i++) {
             Engine.drawOp(ctx, result.ops[i], cssW, cssH, currentInk);
           }
         }
 
         tryReleasePointerCapture(endedPointerId);
-        syncUiState();
+        if (!destroyed) {
+          syncUiState();
+        }
       }
 
       function onPointerDown(e) {
-        if (!e) return;
-        if (e.pointerType === 'mouse' && typeof e.button === 'number' && e.button !== 0) {
+        if (destroyed || !e) return;
+        if (typeof e.button === 'number' && e.button !== 0) {
           return;
         }
+
+        let preemptedPalm = false;
         if (activePointerId !== null) {
-          return;
+          const currentActive = engine.getActiveStroke();
+          if (
+            e.pointerType === 'pen' &&
+            currentActive &&
+            currentActive.pointerType === 'touch' &&
+            currentActive.isDot
+          ) {
+            const palmPointerId = activePointerId;
+            activePointerId = null;
+            engine.cancelStroke();
+            tryReleasePointerCapture(palmPointerId);
+            preemptedPalm = true;
+          } else {
+            return;
+          }
         }
 
         cancelClearVeil();
-        syncCanvasBackingStore(false);
+        syncCanvasBackingStore(preemptedPalm);
         const rect = measureRect();
-        if (!(rect.width > 0) || !(rect.height > 0)) return;
+        if (!(rect.width > 0) || !(rect.height > 0)) {
+          if (preemptedPalm) syncUiState();
+          return;
+        }
+        if (Math.abs(rect.width - cssW) > 0.05 || Math.abs(rect.height - cssH) > 0.05) {
+          syncCanvasBackingStore(false);
+        }
 
         readInkColor();
-        activePointerId = typeof e.pointerId === 'number' ? e.pointerId : 1;
-
-        try {
-          if (typeof canvas.setPointerCapture === 'function' && typeof e.pointerId === 'number') {
-            canvas.setPointerCapture(e.pointerId);
-          }
-        } catch (_err) {
-          // Ignore synthetic events without active browser pointer registry
-        }
 
         const op = engine.beginStroke({
           clientX: e.clientX,
           clientY: e.clientY,
           rect: rect,
           pointerType: e.pointerType || 'mouse',
-          pressure: typeof e.pressure === 'number' ? e.pressure : 0,
+          pressure:
+            typeof e.pressure === 'number' && Number.isFinite(e.pressure) ? e.pressure : 0,
           timeMs: resolveEventTimeMs(e, null, win)
         });
 
         if (!op) {
-          activePointerId = null;
+          if (preemptedPalm) syncUiState();
           return;
+        }
+
+        activePointerId = resolvePointerId(e);
+
+        try {
+          if (typeof canvas.setPointerCapture === 'function' && Number.isFinite(e.pointerId)) {
+            canvas.setPointerCapture(e.pointerId);
+          }
+        } catch (_err) {
+          // Ignore synthetic events without active browser pointer registry
         }
 
         announcePolite('');
         syncUiState();
 
-        if (ctx) {
-          Engine.drawOp(ctx, op, rect.width, rect.height, currentInk);
+        if (ctx && cssW > 0 && cssH > 0) {
+          Engine.drawOp(ctx, op, cssW, cssH, currentInk);
         }
       }
 
       function onPointerMove(e) {
-        if (!e || activePointerId === null) return;
-        const pid = typeof e.pointerId === 'number' ? e.pointerId : 1;
+        if (destroyed || !e || activePointerId === null) return;
+        const pid = resolvePointerId(e);
         if (pid !== activePointerId) return;
 
-        if (e.pointerType === 'mouse' && typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+        if (
+          (e.pointerType === 'mouse' || e.pointerType === 'pen') &&
+          typeof e.buttons === 'number' &&
+          (e.buttons & 1) === 0
+        ) {
           finalizeActiveStroke(null);
           return;
         }
 
         const rect = measureRect();
         if (!(rect.width > 0) || !(rect.height > 0)) return;
+
+        if (Math.abs(rect.width - cssW) > 0.05 || Math.abs(rect.height - cssH) > 0.05) {
+          syncCanvasBackingStore(false);
+        }
+        if (!(cssW > 0) || !(cssH > 0)) return;
 
         const coalesced =
           typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
@@ -465,36 +553,36 @@
             rect: rect,
             pointerType: sample.pointerType || e.pointerType || 'mouse',
             pressure:
-              typeof sample.pressure === 'number'
+              typeof sample.pressure === 'number' && Number.isFinite(sample.pressure)
                 ? sample.pressure
-                : typeof e.pressure === 'number'
+                : typeof e.pressure === 'number' && Number.isFinite(e.pressure)
                   ? e.pressure
                   : 0,
             timeMs: resolveEventTimeMs(sample, e, win)
           });
           if (op && ctx) {
-            Engine.drawOp(ctx, op, rect.width, rect.height, currentInk);
+            Engine.drawOp(ctx, op, cssW, cssH, currentInk);
           }
         }
       }
 
       function onPointerUp(e) {
-        if (!e || activePointerId === null) return;
-        const pid = typeof e.pointerId === 'number' ? e.pointerId : 1;
+        if (destroyed || !e || activePointerId === null) return;
+        const pid = resolvePointerId(e);
         if (pid !== activePointerId) return;
         finalizeActiveStroke(e);
       }
 
       function onPointerCancel(e) {
-        if (!e || activePointerId === null) return;
-        const pid = typeof e.pointerId === 'number' ? e.pointerId : 1;
+        if (destroyed || !e || activePointerId === null) return;
+        const pid = resolvePointerId(e);
         if (pid !== activePointerId) return;
         finalizeActiveStroke(null);
       }
 
       function onLostPointerCapture(e) {
-        if (!e || activePointerId === null) return;
-        const pid = typeof e.pointerId === 'number' ? e.pointerId : 1;
+        if (destroyed || !e || activePointerId === null) return;
+        const pid = resolvePointerId(e);
         if (pid !== activePointerId) return;
         finalizeActiveStroke(null);
       }
@@ -518,6 +606,7 @@
       }
 
       function clearCanvas() {
+        if (destroyed) return false;
         if (clearBtn.getAttribute('aria-disabled') === 'true' || engine.isEmpty()) {
           return false;
         }
@@ -542,6 +631,7 @@
           rootEl.classList.add('is-clearing');
           clearTimerId = win.setTimeout(function () {
             clearTimerId = 0;
+            if (destroyed) return;
             rootEl.classList.remove('is-clearing');
           }, CLEAR_FADE_MS);
           if (clearTimerId && typeof clearTimerId.unref === 'function') {
@@ -556,20 +646,24 @@
       }
 
       function onWindowBlur() {
+        if (destroyed) return;
         finalizeActiveStroke(null);
       }
 
       function onVisibilityChange() {
+        if (destroyed) return;
         if (doc.hidden || doc.visibilityState === 'hidden') {
           finalizeActiveStroke(null);
         }
       }
 
       function onWindowResize() {
+        if (destroyed) return;
         syncCanvasBackingStore(false);
       }
 
       function onThemeMutation() {
+        if (destroyed) return;
         const prevInk = currentInk;
         const nextInk = readInkColor();
         if (nextInk !== prevInk && ctx && cssW > 0 && cssH > 0) {
@@ -623,25 +717,45 @@
         (typeof MutationObserver === 'function' ? MutationObserver : null);
       if (MutationObserverCtor) {
         themeObserver = new MutationObserverCtor(onThemeMutation);
-        const obsOpts = { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] };
-        if (doc.documentElement) themeObserver.observe(doc.documentElement, obsOpts);
-        if (doc.body) themeObserver.observe(doc.body, obsOpts);
-        themeObserver.observe(rootEl, obsOpts);
+        const ancestorOpts = { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] };
+        const selfOpts = { attributes: true, attributeFilter: ['data-theme', 'style'] };
+        if (doc.documentElement) themeObserver.observe(doc.documentElement, ancestorOpts);
+        if (doc.body && doc.body !== doc.documentElement) {
+          themeObserver.observe(doc.body, ancestorOpts);
+        }
+        const parentEl = rootEl.parentElement || rootEl.parentNode;
+        if (
+          parentEl &&
+          parentEl !== rootEl &&
+          parentEl !== doc &&
+          parentEl !== doc.body &&
+          parentEl !== doc.documentElement
+        ) {
+          themeObserver.observe(parentEl, ancestorOpts);
+        }
+        themeObserver.observe(rootEl, selfOpts);
       }
 
-      const initRawDpr = win && typeof win.devicePixelRatio === 'number' ? win.devicePixelRatio : 1;
-      bindDprMediaListener(initRawDpr);
       syncCanvasBackingStore(true);
+      if (watchedRawDpr === 0) {
+        const initRawDpr =
+          win && typeof win.devicePixelRatio === 'number' && Number.isFinite(win.devicePixelRatio) && win.devicePixelRatio > 0
+            ? win.devicePixelRatio
+            : 1;
+        bindDprMediaListener(initRawDpr);
+      }
       syncUiState();
 
       function destroy() {
+        if (destroyed) return;
+        finalizeActiveStroke(null);
+        destroyed = true;
         cancelClearVeil();
         if (announceTimerId && win && typeof win.clearTimeout === 'function') {
           win.clearTimeout(announceTimerId);
           announceTimerId = 0;
         }
         unbindDprMediaListener();
-        finalizeActiveStroke(null);
         canvas.removeEventListener('pointerdown', onPointerDown);
         canvas.removeEventListener('pointermove', onPointerMove);
         canvas.removeEventListener('pointerup', onPointerUp);
@@ -681,6 +795,7 @@
         engine: engine,
         clear: clearCanvas,
         resize: function () {
+          if (destroyed) return;
           syncCanvasBackingStore(true);
         },
         refreshTheme: onThemeMutation,

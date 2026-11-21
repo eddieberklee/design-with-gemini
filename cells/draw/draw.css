@@ -6,7 +6,8 @@
    and sibling Swiss-Braun tokens (#141413 ink, #d4d4d0 strong border).
    ========================================================================== */
 
-.cell--draw {
+.cell--draw,
+.cell.cell--draw {
   --dw-paper: #ffffff;
   --dw-ink: #141413;
   --dw-ink-muted: #6e6e6a;
@@ -23,6 +24,7 @@
   position: relative;
   overflow: hidden;
   background: var(--dw-paper);
+  border-color: var(--dw-border);
   color: var(--dw-ink);
   color-scheme: light;
   container-type: inline-size;
@@ -37,18 +39,22 @@
 }
 
 [data-theme="dark"] .cell--draw,
-.cell--draw[data-theme="dark"] {
+[data-theme="dark"] .cell.cell--draw,
+.cell--draw[data-theme="dark"],
+.cell.cell--draw[data-theme="dark"] {
   --dw-paper: #141413;
   --dw-ink: #f5f5f3;
   --dw-ink-muted: #9a9a94;
   --dw-border: #2a2a28;
-  --dw-border-strong: #3d3d39;
+  --dw-border-strong: #4a4a45;
   --dw-border-hover: #575752;
   --dw-pill-bg: rgba(28, 28, 26, 0.86);
   --dw-pill-bg-idle: rgba(24, 24, 22, 0.68);
   --dw-pill-bg-hover: rgba(38, 38, 35, 0.94);
   --dw-pill-bg-active: rgba(48, 48, 44, 0.98);
   --dw-focus: #60a5fa;
+  background: var(--dw-paper);
+  border-color: var(--dw-border);
   color-scheme: dark;
 }
 
@@ -276,7 +282,13 @@
 }
 
 @media (forced-colors: active) {
+  .cell--draw,
+  .cell.cell--draw {
+    forced-color-adjust: none;
+  }
+
   .dw-clear {
+    forced-color-adjust: auto;
     background: ButtonFace;
     color: ButtonText;
     border: 1px solid ButtonText;

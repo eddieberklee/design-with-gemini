@@ -75,13 +75,6 @@
       };
     }
 
-    function denormalizePoint(pt, width, height) {
-      return {
-        x: pt.u * width,
-        y: pt.v * height
-      };
-    }
-
     function computeBaseWidth(width, height) {
       const w = Number.isFinite(width) && width > 0 ? width : 320;
       const h = Number.isFinite(height) && height > 0 ? height : 240;
@@ -98,11 +91,16 @@
           ? opts.prevFactor
           : null;
 
-      if (pointerType === 'pen' && typeof pressure === 'number' && Number.isFinite(pressure) && pressure > 0) {
-        const p = clamp(pressure, 0.05, 1.0);
-        const shaped = Math.pow(p, 0.68);
-        const targetPen = PEN_WIDTH_MIN + (PEN_WIDTH_MAX - PEN_WIDTH_MIN) * shaped;
-        return prev !== null ? prev * 0.45 + targetPen * 0.55 : targetPen;
+      if (pointerType === 'pen') {
+        if (typeof pressure === 'number' && Number.isFinite(pressure) && pressure > 0) {
+          const p = clamp(pressure, 0.05, 1.0);
+          const shaped = Math.pow(p, 0.68);
+          const targetPen = PEN_WIDTH_MIN + (PEN_WIDTH_MAX - PEN_WIDTH_MIN) * shaped;
+          return prev !== null ? prev * 0.45 + targetPen * 0.55 : targetPen;
+        }
+        if (prev !== null) {
+          return Math.max(PEN_WIDTH_MIN, prev * 0.92);
+        }
       }
 
       const vel =
@@ -334,14 +332,14 @@
       let totalVertices = 0;
       let compactCursor = 0;
 
-      function enforceVertexBudget(refW, refH) {
+      function enforceVertexBudget() {
         if (totalVertices <= maxTotalVertices) return;
         while (totalVertices > maxTotalVertices && compactCursor < strokes.length - 1) {
           const s = strokes[compactCursor];
           compactCursor += 1;
           if (!s || s.isDot || s.budgetCompacted || s.points.length <= 2) continue;
           const prevLen = s.points.length;
-          s.points = compactPointsRDP(s.points, refW, refH, BUDGET_RDP_EPSILON_PX);
+          s.points = compactPointsRDP(s.points, s.refW, s.refH, BUDGET_RDP_EPSILON_PX);
           s.budgetCompacted = true;
           totalVertices -= prevLen - s.points.length;
         }
@@ -371,7 +369,9 @@
             : TOUCHDOWN_WIDTH_FACTOR;
 
         const timeMs =
-          typeof input.timeMs === 'number' && Number.isFinite(input.timeMs) ? input.timeMs : 0;
+          typeof input.timeMs === 'number' && Number.isFinite(input.timeMs) && input.timeMs >= 0
+            ? input.timeMs
+            : 0;
 
         const pt = { u: norm.u, v: norm.v, w: initialW };
         activeStroke = {
@@ -411,10 +411,11 @@
           return null;
         }
 
-        const timeMs =
+        const rawTimeMs =
           typeof input.timeMs === 'number' && Number.isFinite(input.timeMs)
             ? input.timeMs
             : activeStroke.lastTimeMs + 8;
+        const timeMs = Math.max(activeStroke.lastTimeMs, rawTimeMs);
         const dtMs = Math.max(1, timeMs - activeStroke.lastTimeMs);
         const instVel = distPx / dtMs;
         activeStroke.velEma =
@@ -500,18 +501,26 @@
           isDot: activeStroke.isDot || compacted.length === 1,
           isActive: false,
           budgetCompacted: false,
+          refW: refW,
+          refH: refH,
           points: compacted
         };
 
         strokes.push(finalized);
         totalVertices += compacted.length;
         activeStroke = null;
-        enforceVertexBudget(refW, refH);
+        enforceVertexBudget();
 
         return {
           stroke: finalized,
           ops: ops
         };
+      }
+
+      function cancelStroke() {
+        if (!activeStroke) return false;
+        activeStroke = null;
+        return true;
       }
 
       function clear() {
@@ -545,6 +554,7 @@
         beginStroke: beginStroke,
         appendPoint: appendPoint,
         endStroke: endStroke,
+        cancelStroke: cancelStroke,
         clear: clear,
         isEmpty: isEmpty,
         getStrokes: getStrokes,
@@ -565,7 +575,6 @@
       MAX_TOTAL_VERTICES: MAX_TOTAL_VERTICES,
       DEFAULT_INK: DEFAULT_INK,
       normalizePoint: normalizePoint,
-      denormalizePoint: denormalizePoint,
       computeBaseWidth: computeBaseWidth,
       computeStrokeWidthFactor: computeStrokeWidthFactor,
       compactPointsRDP: compactPointsRDP,

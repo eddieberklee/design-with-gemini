@@ -75,31 +75,71 @@ function createSimulatedDom(initialRect, initialInk) {
   let resizeCallback = null;
   let mutationCallback = null;
   let dprChangeHandlers = [];
+  const dprQueries = [];
+  const observedTargets = [];
+  let computedStyleCalls = 0;
+  let nextTimerId = 1;
+  const activeTimers = new Map();
   const getContextArgs = [];
   const ctx2d = createMockContext2D();
   const winListeners = new Map();
   const docListeners = new Map();
 
-  function createClassList() {
+  function notifyAttributeMutation(target, attrName) {
+    if (!mutationCallback) return;
+    for (const entry of observedTargets) {
+      if (entry.target === target) {
+        const filter = entry.opts && entry.opts.attributeFilter;
+        if (!Array.isArray(filter) || filter.includes(attrName)) {
+          mutationCallback([{ type: 'attributes', target: target, attributeName: attrName }]);
+          return;
+        }
+      }
+    }
+  }
+
+  function createClassList(ownerGetter) {
     const set = new Set();
     return {
       add() {
-        for (let i = 0; i < arguments.length; i++) set.add(String(arguments[i]));
+        let changed = false;
+        for (let i = 0; i < arguments.length; i++) {
+          const name = String(arguments[i]);
+          if (!set.has(name)) {
+            set.add(name);
+            changed = true;
+          }
+        }
+        if (changed) notifyAttributeMutation(ownerGetter(), 'class');
       },
       remove() {
-        for (let i = 0; i < arguments.length; i++) set.delete(String(arguments[i]));
+        let changed = false;
+        for (let i = 0; i < arguments.length; i++) {
+          const name = String(arguments[i]);
+          if (set.delete(name)) {
+            changed = true;
+          }
+        }
+        if (changed) notifyAttributeMutation(ownerGetter(), 'class');
       },
       toggle(name, force) {
+        const key = String(name);
         if (force === undefined) {
-          if (set.has(name)) {
-            set.delete(name);
+          if (set.has(key)) {
+            set.delete(key);
+            notifyAttributeMutation(ownerGetter(), 'class');
             return false;
           }
-          set.add(name);
+          set.add(key);
+          notifyAttributeMutation(ownerGetter(), 'class');
           return true;
         }
-        if (force) set.add(name);
-        else set.delete(name);
+        const had = set.has(key);
+        if (force) set.add(key);
+        else set.delete(key);
+        if (had !== Boolean(force)) {
+          notifyAttributeMutation(ownerGetter(), 'class');
+        }
         return Boolean(force);
       },
       contains(name) {
@@ -114,14 +154,19 @@ function createSimulatedDom(initialRect, initialInk) {
   function makeElement(tagName, namespaceURI) {
     const attrs = new Map();
     const listeners = new Map();
-    const classList = createClassList();
+    let el = null;
+    const classList = createClassList(() => el);
     const capturedPointers = new Set();
 
-    const el = {
+    el = {
       tagName: String(tagName).toUpperCase(),
+      nodeType: 1,
       namespaceURI: namespaceURI || 'http://www.w3.org/1999/xhtml',
       children: [],
       parentNode: null,
+      get parentElement() {
+        return el.parentNode && el.parentNode.nodeType === 1 ? el.parentNode : null;
+      },
       ownerDocument: null,
       type: '',
       disabled: false,
@@ -134,12 +179,20 @@ function createSimulatedDom(initialRect, initialInk) {
         return classList.toArray().join(' ');
       },
       set className(val) {
-        const existing = classList.toArray();
-        for (const c of existing) classList.remove(c);
-        String(val || '')
+        const nextTokens = String(val || '')
           .split(/\s+/)
-          .filter(Boolean)
-          .forEach((c) => classList.add(c));
+          .filter(Boolean);
+        const prev = classList.toArray().join(' ');
+        const existing = classList.toArray();
+        for (const c of existing) {
+          if (!nextTokens.includes(c)) classList.remove(c);
+        }
+        for (const c of nextTokens) {
+          if (!classList.contains(c)) classList.add(c);
+        }
+        if (prev !== classList.toArray().join(' ')) {
+          attrs.set('class', classList.toArray().join(' '));
+        }
       },
       get textContent() {
         if (el.children.length === 0) return el._text;
@@ -154,9 +207,14 @@ function createSimulatedDom(initialRect, initialInk) {
       },
       setAttribute(k, v) {
         const str = String(v);
+        const prev = attrs.get(k);
         attrs.set(k, str);
         if (k === 'class') {
           el.className = str;
+          return;
+        }
+        if (prev !== str) {
+          notifyAttributeMutation(el, k);
         }
       },
       getAttribute(k) {
@@ -258,12 +316,14 @@ function createSimulatedDom(initialRect, initialInk) {
   }
 
   const doc = {
+    nodeType: 9,
     readyState: 'complete',
     hidden: false,
     visibilityState: 'visible',
     documentElement: null,
     body: null,
     defaultView: null,
+    docListeners: docListeners,
     _byId: new Map(),
     createElement(tag) {
       const node = makeElement(tag);
@@ -299,11 +359,15 @@ function createSimulatedDom(initialRect, initialInk) {
   doc.body = doc.createElement('body');
   doc.documentElement.appendChild(doc.body);
 
+  const mainGrid = doc.createElement('main');
+  mainGrid.className = 'grid';
+  doc.body.appendChild(mainGrid);
+
   const section = doc.createElement('section');
   section.setAttribute('id', 'cell-draw');
   section.className = 'cell cell--draw';
   section.setAttribute('aria-label', 'Freehand Drawing Sketchpad');
-  doc.body.appendChild(section);
+  mainGrid.appendChild(section);
   doc._byId.set('cell-draw', section);
 
   const win = {
@@ -311,13 +375,29 @@ function createSimulatedDom(initialRect, initialInk) {
     devicePixelRatio: 2,
     performance: { now: () => 1000 },
     winListeners: winListeners,
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
+    setTimeout(fn, delay) {
+      const id = nextTimerId++;
+      const handle = setTimeout(() => {
+        activeTimers.delete(id);
+        fn();
+      }, delay);
+      activeTimers.set(id, handle);
+      return id;
+    },
+    clearTimeout(id) {
+      if (activeTimers.has(id)) {
+        clearTimeout(activeTimers.get(id));
+        activeTimers.delete(id);
+      }
+    },
     matchMedia(query) {
-      if (String(query).includes('prefers-reduced-motion')) {
+      const q = String(query);
+      if (q.includes('prefers-reduced-motion')) {
         return { matches: reducedMotion };
       }
+      dprQueries.push(q);
       return {
+        media: q,
         matches: true,
         addEventListener(type, fn) {
           if (type === 'change') dprChangeHandlers.push(fn);
@@ -330,6 +410,7 @@ function createSimulatedDom(initialRect, initialInk) {
       };
     },
     getComputedStyle() {
+      computedStyleCalls += 1;
       return {
         getPropertyValue(prop) {
           return prop === '--dw-ink' ? ' ' + inkVar + ' ' : '';
@@ -364,9 +445,12 @@ function createSimulatedDom(initialRect, initialInk) {
       constructor(cb) {
         mutationCallback = cb;
       }
-      observe() {}
+      observe(target, opts) {
+        observedTargets.push({ target, opts });
+      }
       disconnect() {
         mutationCallback = null;
+        observedTargets.length = 0;
       }
     }
   };
@@ -376,12 +460,30 @@ function createSimulatedDom(initialRect, initialInk) {
   return {
     win,
     doc,
+    mainGrid,
     section,
     ctx2d,
     getContextArgs,
+    dprQueries,
+    observedTargets,
+    getComputedStyleCalls() {
+      return computedStyleCalls;
+    },
+    getActiveTimerCount() {
+      return activeTimers.size;
+    },
+    hasResizeObserver() {
+      return resizeCallback !== null;
+    },
+    hasMutationObserver() {
+      return mutationCallback !== null;
+    },
     setRect(nextRect) {
       currentRect = Object.assign({}, currentRect, nextRect);
       if (resizeCallback) resizeCallback();
+    },
+    setRectSilently(nextRect) {
+      currentRect = Object.assign({}, currentRect, nextRect);
     },
     setDpr(nextDpr) {
       win.devicePixelRatio = nextDpr;
@@ -803,9 +905,756 @@ test('Classic <script defer> IIFE execution over file:// with zero DOM string in
   assert.equal(dom.section.querySelectorAll('canvas').length, 1);
 
   assert.ok(cssSrc.includes('.cell--draw'));
+  assert.ok(cssSrc.includes('.cell.cell--draw'));
   assert.ok(cssSrc.includes('#6e6e6a'));
   assert.ok(cssSrc.includes('var(--dw-focus)'));
   assert.ok(cssSrc.includes('@media (pointer: coarse)'));
   assert.ok(cssSrc.includes('@media (forced-colors: active)'));
   assert.ok(cssSrc.includes('prefers-reduced-motion: reduce'));
+  assert.equal(Engine.denormalizePoint, undefined);
+});
+
+test('5-path stroke termination matrix: window pointerup outside canvas, pointercancel, lostpointercapture, blur & visibilitychange', () => {
+  const dom = createSimulatedDom({ left: 10, top: 20, width: 400, height: 300 }, '#141413');
+  const instance = UI.mount(dom.section, { engine: Engine });
+
+  // 1. window pointerup outside canvas appends final out-of-bounds endpoint & releases capture
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 101,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 100,
+    clientY: 120,
+    timeStamp: 10
+  });
+  assert.equal(instance.canvas.hasPointerCapture(101), true);
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 101,
+    pointerType: 'mouse',
+    buttons: 1,
+    clientX: 250,
+    clientY: 180,
+    timeStamp: 20
+  });
+  dom.win.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 101,
+    pointerType: 'mouse',
+    clientX: 460,
+    clientY: 360,
+    timeStamp: 30
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.canvas.hasPointerCapture(101), false);
+  assert.equal(instance.engine.getStrokeCount(), 1);
+  const s0 = instance.engine.getStrokes()[0];
+  assert.ok(s0.points[s0.points.length - 1].u > 1, 'Outside window pointerup preserves unclamped u > 1');
+
+  // 2a. canvas pointercancel
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 102,
+    pointerType: 'touch',
+    clientX: 80,
+    clientY: 80,
+    timeStamp: 40
+  });
+  instance.canvas.dispatchEvent({
+    type: 'pointercancel',
+    pointerId: 102,
+    pointerType: 'touch',
+    timeStamp: 50
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.canvas.hasPointerCapture(102), false);
+  assert.equal(instance.engine.getStrokeCount(), 2);
+
+  // 2b. window pointercancel
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 103,
+    pointerType: 'touch',
+    clientX: 90,
+    clientY: 90,
+    timeStamp: 60
+  });
+  dom.win.dispatchEvent({
+    type: 'pointercancel',
+    pointerId: 103,
+    pointerType: 'touch',
+    timeStamp: 70
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.canvas.hasPointerCapture(103), false);
+  assert.equal(instance.engine.getStrokeCount(), 3);
+
+  // 3. canvas lostpointercapture
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 104,
+    pointerType: 'pen',
+    button: 0,
+    pressure: 0.5,
+    clientX: 140,
+    clientY: 140,
+    timeStamp: 80
+  });
+  instance.canvas.dispatchEvent({
+    type: 'lostpointercapture',
+    pointerId: 104,
+    pointerType: 'pen',
+    timeStamp: 90
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.engine.getStrokeCount(), 4);
+
+  // 4. window blur
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 105,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 160,
+    clientY: 160,
+    timeStamp: 100
+  });
+  dom.win.dispatchEvent({ type: 'blur' });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.canvas.hasPointerCapture(105), false);
+  assert.equal(instance.engine.getStrokeCount(), 5);
+
+  // 5. document visibilitychange (ignores visible, finalizes on hidden)
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 106,
+    pointerType: 'touch',
+    clientX: 180,
+    clientY: 180,
+    timeStamp: 110
+  });
+  dom.doc.hidden = false;
+  dom.doc.visibilityState = 'visible';
+  dom.doc.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(dom.section.classList.contains('is-drawing'), true);
+
+  dom.doc.hidden = true;
+  dom.doc.visibilityState = 'hidden';
+  dom.doc.dispatchEvent({ type: 'visibilitychange' });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.canvas.hasPointerCapture(106), false);
+  assert.equal(instance.engine.getStrokeCount(), 6);
+
+  instance.destroy();
+});
+
+test('Re-mount idempotency, full listener/observer/timer teardown & post-destroy() no-op guard', async () => {
+  assert.equal(UI.mountDrawCell, UI.mount);
+
+  const dom = createSimulatedDom({ left: 0, top: 0, width: 360, height: 270 }, '#141413');
+  const first = UI.mount(dom.section, { engine: Engine });
+
+  //Initial 2x mount binds DPR media query strictly ONCE using ±0.001dppx range syntax
+  assert.equal(dom.dprQueries.length, 1);
+  assert.equal(dom.dprQueries[0], '(min-resolution: 1.9990dppx) and (max-resolution: 2.0010dppx)');
+
+  // Start stroke on first mount, then re-mount on same rootEl
+  first.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 7,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 40,
+    clientY: 40,
+    timeStamp: 10
+  });
+  assert.equal(first.canvas.hasPointerCapture(7), true);
+
+  const second = UI.mountDrawCell(dom.section, { engine: Engine });
+  assert.notEqual(second, first);
+  assert.equal(first.canvas.hasPointerCapture(7), false);
+  assert.equal(dom.section.querySelectorAll('canvas').length, 1);
+  assert.equal(dom.section.querySelectorAll('button').length, 1);
+  assert.equal(dom.getDprHandlerCount(), 1);
+  assert.equal((dom.win.winListeners.get('pointerup') || []).length, 1);
+  assert.equal((dom.win.winListeners.get('pointercancel') || []).length, 1);
+  assert.equal((dom.win.winListeners.get('blur') || []).length, 1);
+  assert.equal((dom.win.winListeners.get('resize') || []).length, 1);
+  assert.equal((dom.doc.docListeners.get('visibilitychange') || []).length, 1);
+
+  // Schedule both 130ms clear veil timer and 16ms aria-live timer, plus an active stroke
+  second.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 8,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 60,
+    clientY: 60,
+    timeStamp: 20
+  });
+  second.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 8,
+    pointerType: 'mouse',
+    clientX: 60,
+    clientY: 60,
+    timeStamp: 30
+  });
+  second.clearBtn.click();
+  assert.equal(dom.getActiveTimerCount(), 2, 'Both clear veil and polite announce timers active');
+
+  second.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 9,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 90,
+    clientY: 90,
+    timeStamp: 35
+  });
+  assert.equal(second.canvas.hasPointerCapture(9), true);
+
+  second.destroy();
+
+  // Verify 100% teardown of capture, timers, observers, and listeners
+  assert.equal(second.canvas.hasPointerCapture(9), false);
+  assert.equal(dom.getActiveTimerCount(), 0);
+  assert.equal(dom.getDprHandlerCount(), 0);
+  assert.equal(dom.hasResizeObserver(), false);
+  assert.equal(dom.hasMutationObserver(), false);
+  assert.equal(dom.section.__geminiDrawInstance, undefined);
+
+  for (const [, handlers] of second.canvas.listeners) {
+    assert.equal(handlers.length, 0);
+  }
+  for (const [, handlers] of second.clearBtn.listeners) {
+    assert.equal(handlers.length, 0);
+  }
+  for (const [, handlers] of dom.win.winListeners) {
+    assert.equal(handlers.length, 0);
+  }
+  for (const [, handlers] of dom.doc.docListeners) {
+    assert.equal(handlers.length, 0);
+  }
+
+  // Post-destroy() public API calls must NOT resurrect DPR listeners, timers, or redraws
+  dom.ctx2d.calls.length = 0;
+  dom.win.devicePixelRatio = 2.200000047683716;
+  assert.equal(second.clear(), false);
+  second.resize();
+  second.refreshTheme();
+  second.destroy();
+
+  assert.equal(dom.getDprHandlerCount(), 0);
+  assert.equal(dom.getActiveTimerCount(), 0);
+  assert.equal(dom.ctx2d.calls.length, 0);
+
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(second.liveStatus.textContent, '');
+});
+
+test('Stylus buttons, pen hover drop, lift-off tail taper, palm-before-pen preemption, pointerId===0, NaN safety, clear races & mid-stroke resize', () => {
+  // Pen lift-off tail taper: pressure===0 with prev!==null tapers by 0.92x instead of flaring to [0.82x..1.12x]
+  const hairlineLift = Engine.computeStrokeWidthFactor({
+    pointerType: 'pen',
+    pressure: 0,
+    velocityPxPerMs: 0.02,
+    prevFactor: 0.58
+  });
+  assert.ok(Math.abs(hairlineLift - Math.max(Engine.PEN_WIDTH_MIN, 0.58 * 0.92)) < 1e-9);
+  assert.ok(hairlineLift < 0.58, 'Hairline pen lift-off must taper thinner, never flare up');
+
+  const dom = createSimulatedDom({ left: 10, top: 20, width: 400, height: 300 }, '#141413');
+  const instance = UI.mount(dom.section, { engine: Engine });
+
+  // Verify MutationObserver observes html, body, and main.grid with class, but rootEl WITHOUT class
+  const rootObs = dom.observedTargets.find((o) => o.target === dom.section);
+  const gridObs = dom.observedTargets.find((o) => o.target === dom.mainGrid);
+  assert.ok(rootObs && gridObs);
+  assert.deepEqual(rootObs.opts.attributeFilter, ['data-theme', 'style']);
+  assert.deepEqual(gridObs.opts.attributeFilter, ['data-theme', 'class', 'style']);
+
+  // Fractional zoom DPR range query (e.g. 110% Retina zoom = 2.200000047683716)
+  dom.setDpr(2.200000047683716);
+  assert.equal(
+    dom.dprQueries[dom.dprQueries.length - 1],
+    '(min-resolution: 2.1990dppx) and (max-resolution: 2.2010dppx)'
+  );
+  dom.setDpr(2);
+
+  // Reject middle-click (button: 1), pen barrel (button: 2), and pen eraser (button: 5)
+  for (const rejected of [
+    { pointerId: 1, pointerType: 'mouse', button: 1, buttons: 4 },
+    { pointerId: 2, pointerType: 'pen', button: 2, buttons: 2, pressure: 0.6 },
+    { pointerId: 3, pointerType: 'pen', button: 5, buttons: 32, pressure: 0.6 }
+  ]) {
+    instance.canvas.dispatchEvent(
+      Object.assign({ type: 'pointerdown', clientX: 80, clientY: 80, timeStamp: 10 }, rejected)
+    );
+  }
+  assert.equal(instance.engine.isEmpty(), true);
+
+  // NaN clientX fails beginStroke BEFORE setPointerCapture (zero capture leak)
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 77,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: NaN,
+    clientY: 100,
+    timeStamp: 12
+  });
+  assert.equal(instance.canvas.hasPointerCapture(77), false);
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+
+  // pointerId: NaN normalizes safely without locking activePointerId to NaN
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: NaN,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 50,
+    clientY: 50,
+    timeStamp: 14
+  });
+  instance.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: NaN,
+    pointerType: 'mouse',
+    clientX: 50,
+    clientY: 50,
+    timeStamp: 16
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.engine.getStrokeCount(), 1);
+  instance.clear();
+
+  // pointerId === 0 (falsy valid pointer ID) + monotonic timestamps + timeStamp===0 fallback
+  const stylesBeforeZeroStroke = dom.getComputedStyleCalls();
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 0,
+    pointerType: 'touch',
+    button: 0,
+    clientX: 60,
+    clientY: 70,
+    timeStamp: 0 // 0 falls back to win.performance.now() (1000)
+  });
+  assert.equal(instance.canvas.hasPointerCapture(0), true);
+  assert.equal(instance.engine.getActiveStroke().lastTimeMs, 1000);
+  // Toggling is-drawing / has-ink on rootEl triggered only the single explicit readInkColor() call, zero observer self-triggers
+  assert.equal(dom.getComputedStyleCalls() - stylesBeforeZeroStroke, 1);
+
+  // Concurrent pointerId: 1 ignored while pointerId: 0 owns active stroke
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 1,
+    pointerType: 'touch',
+    clientX: 200,
+    clientY: 200,
+    timeStamp: 1010
+  });
+  assert.equal(instance.engine.getActiveStroke().points.length, 1);
+
+  // Coalesced samples with timeStamp: 0 (uses parent 1020) and out-of-order 1012 (clamped monotonically to 1020)
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 0,
+    pointerType: 'touch',
+    clientX: 130,
+    clientY: 110,
+    timeStamp: 1020,
+    getCoalescedEvents: () => [
+      { clientX: 90, clientY: 90, timeStamp: 0 },
+      { clientX: 110, clientY: 100, timeStamp: 1012 },
+      { clientX: 130, clientY: 110, timeStamp: 1028 }
+    ]
+  });
+  assert.equal(instance.engine.getActiveStroke().lastTimeMs, 1028);
+  assert.equal(instance.engine.getVertexCount(), 4);
+
+  instance.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 0,
+    pointerType: 'touch',
+    clientX: 140,
+    clientY: 115,
+    timeStamp: 1036
+  });
+  assert.equal(instance.canvas.hasPointerCapture(0), false);
+  assert.equal(instance.engine.getStrokeCount(), 1);
+
+  // iPad palm-before-pen preemption: accidental palm touch dot (< 1.25px) is discarded when pen arrives
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 41,
+    pointerType: 'touch',
+    button: 0,
+    clientX: 300,
+    clientY: 240,
+    timeStamp: 1100
+  });
+  assert.equal(instance.canvas.hasPointerCapture(41), true);
+  assert.equal(instance.engine.getActiveStroke().isDot, true);
+
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 42,
+    pointerType: 'pen',
+    button: 0,
+    buttons: 1,
+    pressure: 0.2,
+    clientX: 120,
+    clientY: 140,
+    timeStamp: 1104
+  });
+  assert.equal(instance.canvas.hasPointerCapture(41), false, 'Palm pointer capture released');
+  assert.equal(instance.canvas.hasPointerCapture(42), true, 'Stylus pointer capture acquired');
+  assert.equal(instance.engine.getActiveStroke().pointerType, 'pen');
+  assert.equal(instance.engine.getStrokeCount(), 1, 'Palm dot discarded, prior stroke preserved');
+
+  // Trailing palm move/up ignored while pen draws and tapers on lift-off
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 41,
+    pointerType: 'touch',
+    clientX: 340,
+    clientY: 260,
+    timeStamp: 1110
+  });
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 42,
+    pointerType: 'pen',
+    buttons: 1,
+    pressure: 0.15,
+    clientX: 160,
+    clientY: 155,
+    timeStamp: 1112
+  });
+  const penMidW = instance.engine.getActiveStroke().points[1].w;
+  instance.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 42,
+    pointerType: 'pen',
+    pressure: 0,
+    clientX: 175,
+    clientY: 160,
+    timeStamp: 1120
+  });
+  assert.equal(instance.engine.getStrokeCount(), 2);
+  const penPts = instance.engine.getStrokes()[1].points;
+  assert.ok(penPts[penPts.length - 1].w <= penMidW, 'Pen lift-off pressure:0 tapers without flaring');
+
+  // Active finger curve beyond 1.25px (isDot === false) is NOT cancelled by stray pen contact
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 45,
+    pointerType: 'touch',
+    button: 0,
+    clientX: 50,
+    clientY: 50,
+    timeStamp: 1150
+  });
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 45,
+    pointerType: 'touch',
+    clientX: 80,
+    clientY: 70,
+    timeStamp: 1160
+  });
+  assert.equal(instance.engine.getActiveStroke().isDot, false);
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 46,
+    pointerType: 'pen',
+    button: 0,
+    buttons: 1,
+    pressure: 0.5,
+    clientX: 200,
+    clientY: 200,
+    timeStamp: 1165
+  });
+  assert.equal(instance.engine.getActiveStroke().pointerType, 'touch');
+  instance.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 45,
+    pointerType: 'touch',
+    clientX: 85,
+    clientY: 75,
+    timeStamp: 1170
+  });
+  assert.equal(instance.engine.getStrokeCount(), 3);
+
+  // Pen hover dropped-release (buttons === 0 on pen pointermove) terminates immediately
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 48,
+    pointerType: 'pen',
+    button: 0,
+    buttons: 1,
+    pressure: 0.5,
+    clientX: 90,
+    clientY: 90,
+    timeStamp: 1200
+  });
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 48,
+    pointerType: 'pen',
+    buttons: 0,
+    pressure: 0,
+    clientX: 150,
+    clientY: 150,
+    timeStamp: 1216
+  });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.engine.getStrokeCount(), 4);
+
+  // Mid-stroke clearCanvas() + rapid clear -> draw -> clear phase alternation within 130ms
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 60,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 100,
+    clientY: 100,
+    timeStamp: 1300
+  });
+  assert.equal(instance.canvas.hasPointerCapture(60), true);
+  const phaseBeforeFirstRapidClear = dom.section.getAttribute('data-clear-phase');
+  assert.equal(instance.clear(), true);
+  assert.equal(instance.canvas.hasPointerCapture(60), false);
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(dom.section.classList.contains('is-clearing'), true);
+  const phaseFirstRapidClear = dom.section.getAttribute('data-clear-phase');
+  assert.notEqual(phaseFirstRapidClear, phaseBeforeFirstRapidClear);
+
+  // Trailing move from cleared stroke ignored
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 60,
+    pointerType: 'mouse',
+    buttons: 1,
+    clientX: 180,
+    clientY: 180,
+    timeStamp: 1310
+  });
+  assert.equal(instance.engine.isEmpty(), true);
+
+  // Immediate new stroke during 130ms veil cancels is-clearing, then second clear flips phase again
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 61,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 110,
+    clientY: 110,
+    timeStamp: 1320
+  });
+  assert.equal(dom.section.classList.contains('is-clearing'), false);
+
+  // Mid-stroke resize BEFORE ResizeObserver fires syncs backing store & transform on pointermove and pointerup
+  dom.setRectSilently({ width: 600, height: 450 });
+  instance.canvas.dispatchEvent({
+    type: 'pointermove',
+    pointerId: 61,
+    pointerType: 'mouse',
+    buttons: 1,
+    clientX: 310,
+    clientY: 245,
+    timeStamp: 1336
+  });
+  assert.equal(instance.canvas.width, 1200);
+  assert.equal(instance.canvas.height, 900);
+
+  dom.setRectSilently({ width: 500, height: 375 });
+  instance.canvas.dispatchEvent({
+    type: 'pointerup',
+    pointerId: 61,
+    pointerType: 'mouse',
+    clientX: 260,
+    clientY: 207.5,
+    timeStamp: 1352
+  });
+  assert.equal(instance.canvas.width, 1000);
+  assert.equal(instance.canvas.height, 750);
+
+  assert.equal(instance.clear(), true);
+  assert.equal(dom.section.classList.contains('is-clearing'), true);
+  assert.notEqual(dom.section.getAttribute('data-clear-phase'), phaseFirstRapidClear);
+
+  // Ancestor main.grid [data-theme="dark"] triggers observer & attribute fallback when CSS var absent
+  dom.setInk('');
+  dom.mainGrid.setAttribute('data-theme', 'dark');
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown',
+    pointerId: 62,
+    pointerType: 'mouse',
+    button: 0,
+    buttons: 1,
+    clientX: 70,
+    clientY: 70,
+    timeStamp: 1400
+  });
+  assert.ok(dom.ctx2d.calls.some((c) => c.fillStyle === '#f5f5f3'));
+
+  instance.destroy();
+});
+
+test('Per-stroke authoring (refW, refH) budget compaction & 1-to-1 live incremental vs renderStroke parity', () => {
+  // 1. Older 960x720 stroke retains fine 2px waves when budget triggers later at 140x105
+  const budgeted = Engine.createEngine({ maxTotalVertices: 25, rdpEpsilonPx: 0.01 });
+  const largeRect = { left: 0, top: 0, width: 960, height: 720 };
+  const microRect = { left: 0, top: 0, width: 140, height: 105 };
+
+  budgeted.beginStroke({ clientX: 40, clientY: 360, rect: largeRect, pointerType: 'mouse', timeMs: 0 });
+  for (let i = 1; i <= 20; i++) {
+    budgeted.appendPoint({
+      clientX: 40 + i * 40,
+      clientY: 360 + (i % 2 === 0 ? 2.4 : -2.4), // 2.4px > 0.85px at 960x720, but only 0.35px (< 0.85px) if mis-scaled at 140x105!
+      rect: largeRect,
+      pointerType: 'mouse',
+      timeMs: i * 8
+    });
+  }
+  budgeted.endStroke(null);
+  assert.equal(budgeted.getStrokes()[0].refW, 960);
+  assert.equal(budgeted.getStrokes()[0].refH, 720);
+
+  budgeted.beginStroke({ clientX: 10, clientY: 50, rect: microRect, pointerType: 'mouse', timeMs: 300 });
+  for (let i = 1; i <= 15; i++) {
+    budgeted.appendPoint({
+      clientX: 10 + i * 8,
+      clientY: 50 + (i % 2 === 0 ? 3 : -3),
+      rect: microRect,
+      pointerType: 'mouse',
+      timeMs: 300 + i * 8
+    });
+  }
+  budgeted.endStroke(null);
+  assert.equal(budgeted.getStrokes()[0].budgetCompacted, true);
+  assert.ok(
+    budgeted.getStrokes()[0].points.length >= 18,
+    '960x720 stroke compacted at its own (960, 720) scale preserves 2.4px detail'
+  );
+
+  // 2. Exact 1-to-1 draw call parity between live incremental ops and renderStroke (active & finalized)
+  const rect = { left: 0, top: 0, width: 400, height: 300 };
+  const samples = [
+    [{ x: 100, y: 100, t: 10 }],
+    [
+      { x: 50, y: 60, t: 10 },
+      { x: 110, y: 90, t: 22 }
+    ],
+    [
+      { x: 40, y: 50, t: 10 },
+      { x: 75, y: 85, t: 18 },
+      { x: 130, y: 70, t: 28 },
+      { x: 190, y: 130, t: 40 },
+      { x: 245, y: 115, t: 50 },
+      { x: 300, y: 165, t: 62 }
+    ]
+  ];
+
+  for (const seq of samples) {
+    const eng = Engine.createEngine({ rdpEpsilonPx: 0 });
+    const liveCtx = createMockContext2D();
+
+    const op0 = eng.beginStroke({
+      clientX: seq[0].x,
+      clientY: seq[0].y,
+      rect,
+      pointerType: 'mouse',
+      timeMs: seq[0].t
+    });
+    Engine.drawOp(liveCtx, op0, rect.width, rect.height, '#141413');
+
+    for (let i = 1; i < seq.length; i++) {
+      const op = eng.appendPoint({
+        clientX: seq[i].x,
+        clientY: seq[i].y,
+        rect,
+        pointerType: 'mouse',
+        timeMs: seq[i].t
+      });
+      if (op) Engine.drawOp(liveCtx, op, rect.width, rect.height, '#141413');
+    }
+
+    // Active mid-stroke parity check (before endStroke)
+    const activeReplayCtx = createMockContext2D();
+    Engine.renderStroke(activeReplayCtx, eng.getActiveStroke(), rect.width, rect.height, '#141413');
+    assert.deepEqual(liveCtx.calls, activeReplayCtx.calls);
+
+    // Finalized stroke parity check (after endStroke)
+    const ended = eng.endStroke(null);
+    for (const op of ended.ops) {
+      Engine.drawOp(liveCtx, op, rect.width, rect.height, '#141413');
+    }
+    const finalReplayCtx = createMockContext2D();
+    Engine.renderStroke(finalReplayCtx, ended.stroke, rect.width, rect.height, '#141413');
+    assert.deepEqual(liveCtx.calls, finalReplayCtx.calls);
+  }
+});
+
+test('Dark-mode CSS specificity & forced-colors contract beat index.html .cell rule', () => {
+  const indexHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
+  const drawCss = fs.readFileSync(path.join(__dirname, 'draw.css'), 'utf8');
+
+  const linkIdx = indexHtml.indexOf('cells/draw/draw.css');
+  const styleIdx = indexHtml.indexOf('<style>');
+  assert.ok(linkIdx > 0 && styleIdx > linkIdx, 'index.html inline <style> appears after draw.css link');
+  assert.match(indexHtml, /\.cell\s*\{[^}]*background:\s*#ffffff/s);
+
+  function selectorSpecificity(sel) {
+    const clean = sel.replace(/:not\(([^)]*)\)/g, ' $1 ');
+    const ids = (clean.match(/#[a-zA-Z0-9_-]+/g) || []).length;
+    const classesAndAttrs =
+      (clean.match(/\.[a-zA-Z0-9_-]+/g) || []).length +
+      (clean.match(/\[[^\]]+\]/g) || []).length +
+      (clean.match(/:(?!:)[a-zA-Z0-9_-]+/g) || []).length;
+    return [ids, classesAndAttrs];
+  }
+
+  const indexCellSpec = selectorSpecificity('.cell');
+  const lightDrawSpec = selectorSpecificity('.cell.cell--draw');
+  const darkAncestorSpec = selectorSpecificity('[data-theme="dark"] .cell.cell--draw');
+  const darkSelfSpec = selectorSpecificity('.cell.cell--draw[data-theme="dark"]');
+
+  assert.deepEqual(indexCellSpec, [0, 1]);
+  assert.deepEqual(lightDrawSpec, [0, 2]);
+  assert.deepEqual(darkAncestorSpec, [0, 3]);
+  assert.deepEqual(darkSelfSpec, [0, 3]);
+
+  // Verify light rule includes .cell.cell--draw with background & border-color
+  assert.match(
+    drawCss,
+    /\.cell--draw,\s*\.cell\.cell--draw\s*\{[^}]*background:\s*var\(--dw-paper\);[^}]*border-color:\s*var\(--dw-border\);/s
+  );
+
+  // Verify dark rule includes .cell.cell--draw specificity, #4a4a45 strong border, background & border-color
+  assert.match(
+    drawCss,
+    /\[data-theme="dark"\]\s*\.cell\.cell--draw,\s*\.cell--draw\[data-theme="dark"\],\s*\.cell\.cell--draw\[data-theme="dark"\]\s*\{[^}]*--dw-paper:\s*#141413;[^}]*--dw-ink:\s*#f5f5f3;[^}]*--dw-border:\s*#2a2a28;[^}]*--dw-border-strong:\s*#4a4a45;[^}]*background:\s*var\(--dw-paper\);[^}]*border-color:\s*var\(--dw-border\);/s
+  );
+
+  // Verify @media (forced-colors: active) locks paper surface while preserving native system Clear button colors
+  const forcedMatch = drawCss.match(/@media\s*\(forced-colors:\s*active\)\s*\{([\s\S]*?)\n\}/);
+  assert.ok(forcedMatch, '@media (forced-colors: active) block exists');
+  assert.match(
+    forcedMatch[1],
+    /\.cell--draw,\s*\.cell\.cell--draw\s*\{\s*forced-color-adjust:\s*none;\s*\}/
+  );
+  assert.match(forcedMatch[1], /\.dw-clear\s*\{[^}]*forced-color-adjust:\s*auto;/s);
 });
