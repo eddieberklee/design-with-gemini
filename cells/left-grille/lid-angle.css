@@ -1,0 +1,679 @@
+/* ==========================================================================
+   Secondary Grid Cell 06 — MacBook Lid Angle Sensor (`lid-angle.css`)
+   Strictly scoped to `.la-cell` / `.la-stage` with `position: absolute; inset: 0`
+   to guarantee exact 4:3 `.cell` geometry across 150px–2560px container widths.
+   ========================================================================== */
+
+.la-cell {
+  --la-bg: #ffffff;
+  --la-well: #f5f5f3;
+  --la-well-border: #e4e4e0;
+  --la-border: #e5e5e5;
+  --la-ink: #141413;
+  --la-ink-sec: #52524e;
+  --la-ink-muted: #63635f;
+  --la-cobalt: #0052cc;
+  --la-cobalt-soft: rgba(0, 82, 204, 0.12);
+  --la-vermilion: #c93700;
+  --la-vermilion-soft: rgba(201, 55, 0, 0.12);
+  --la-emerald: #047857;
+  --la-emerald-soft: rgba(4, 120, 87, 0.12);
+  --la-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --la-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  font-family: var(--la-sans);
+  color: var(--la-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.la-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: clamp(5px, 2.2cqw, 11px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  row-gap: clamp(4px, 1.5cqw, 8px);
+  background: var(--la-bg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   1. Top Micro-Bezel
+   -------------------------------------------------------------------------- */
+
+.la-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.la-bezel-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.la-bezel-right {
+  flex: 0 1 auto;
+}
+
+.la-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(18px, 5cqw, 23px);
+  padding: 0 clamp(5px, 1.6cqw, 8px);
+  border-radius: 5px;
+  border: 1px solid var(--la-well-border);
+  background: var(--la-well);
+  color: var(--la-ink);
+  font-family: var(--la-mono);
+  font-size: clamp(8px, 2.1cqw, 10.5px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.la-btn:hover {
+  background: #ecece8;
+}
+
+.la-btn:focus-visible {
+  outline: 2px solid var(--la-cobalt);
+  outline-offset: 1px;
+}
+
+.la-btn--sonar[data-active="true"] {
+  background: var(--la-ink);
+  border-color: var(--la-ink);
+  color: #ffffff;
+}
+
+.la-btn--hid[data-live="true"] {
+  background: var(--la-emerald-soft);
+  border-color: rgba(4, 120, 87, 0.35);
+  color: var(--la-emerald);
+}
+
+.la-dot {
+  width: 5.5px;
+  height: 5.5px;
+  border-radius: 50%;
+  background: #8e8e88;
+  flex: 0 0 auto;
+}
+
+.la-btn--sonar[data-active="true"] .la-dot {
+  background: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.32);
+}
+
+.la-btn--hid[data-live="true"] .la-dot--hid {
+  background: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.28);
+}
+
+.la-source-badge {
+  font-family: var(--la-mono);
+  font-size: clamp(7.5px, 2cqw, 10px);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--la-well-border);
+  background: var(--la-well);
+  color: var(--la-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.la-source-badge[data-source="sonar"] {
+  color: var(--la-cobalt);
+  background: var(--la-cobalt-soft);
+  border-color: rgba(0, 82, 204, 0.28);
+}
+
+.la-source-badge[data-source="hid"] {
+  color: var(--la-emerald);
+  background: var(--la-emerald-soft);
+  border-color: rgba(4, 120, 87, 0.32);
+}
+
+.la-source-badge[data-source="drag"] {
+  color: var(--la-vermilion);
+  background: var(--la-vermilion-soft);
+  border-color: rgba(201, 55, 0, 0.28);
+}
+
+.la-kicker {
+  font-family: var(--la-mono);
+  font-size: clamp(8.5px, 2cqw, 10.5px);
+  font-weight: 600;
+  color: var(--la-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------------------
+   2. Main Body: Side-Elevation Hinge SVG + Swiss Telemetry Column
+   -------------------------------------------------------------------------- */
+
+.la-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  column-gap: clamp(5px, 2cqw, 10px);
+  min-height: 0;
+  min-width: 0;
+}
+
+.la-diagram-well {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--la-well);
+  border: 1px solid var(--la-well-border);
+  border-radius: 6px;
+  padding: clamp(3px, 1.2cqw, 6px);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.la-hinge-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+  overflow: visible;
+}
+
+.la-hinge-svg:active {
+  cursor: grabbing;
+}
+
+.la-hinge-svg:focus-visible {
+  outline: 2px solid var(--la-cobalt);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.la-drag-hint {
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  font-family: var(--la-mono);
+  font-size: clamp(7px, 1.7cqw, 8.5px);
+  color: var(--la-ink-muted);
+  pointer-events: none;
+  letter-spacing: 0.02em;
+}
+
+/* SVG Architectural Styling */
+.la-arc-track {
+  fill: none;
+  stroke: #d8d8d2;
+  stroke-width: 1;
+  stroke-dasharray: 2.2 2.4;
+}
+
+.la-arc-sector {
+  fill: rgba(20, 20, 19, 0.055);
+  transition: fill 150ms ease;
+}
+
+.la-stage[data-source="sonar"] .la-arc-sector {
+  fill: rgba(0, 82, 204, 0.09);
+}
+
+.la-stage[data-source="hid"] .la-arc-sector {
+  fill: rgba(4, 120, 87, 0.10);
+}
+
+.la-stage[data-source="drag"] .la-arc-sector {
+  fill: rgba(201, 55, 0, 0.09);
+}
+
+.la-arc-active {
+  fill: none;
+  stroke: var(--la-ink-sec);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.la-stage[data-source="sonar"] .la-arc-active {
+  stroke: var(--la-cobalt);
+}
+
+.la-stage[data-source="hid"] .la-arc-active {
+  stroke: var(--la-emerald);
+}
+
+.la-stage[data-source="drag"] .la-arc-active {
+  stroke: var(--la-vermilion);
+}
+
+.la-tick {
+  stroke: #c4c4bc;
+  stroke-width: 0.9;
+}
+
+.la-tick--major {
+  stroke: #8c8c84;
+  stroke-width: 1.25;
+}
+
+.la-arc-label {
+  font-family: var(--la-mono);
+  font-size: 7.5px;
+  font-weight: 600;
+  fill: var(--la-ink-muted);
+}
+
+.la-cal-pip {
+  fill: #d4d4cc;
+  stroke: var(--la-well);
+  stroke-width: 0.8;
+}
+
+.la-cal-pip[data-locked="true"] {
+  fill: var(--la-emerald);
+}
+
+.la-sonar-ray {
+  fill: none;
+  stroke: var(--la-cobalt);
+  stroke-width: 1.2;
+  stroke-dasharray: 2.5 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.la-stage[data-source="drag"] .la-sonar-ray {
+  stroke: var(--la-vermilion);
+}
+
+.la-sonar-pulse {
+  fill: none;
+  stroke: var(--la-cobalt);
+  stroke-width: 1;
+  pointer-events: none;
+}
+
+.la-stage[data-source="drag"] .la-sonar-pulse {
+  stroke: var(--la-vermilion);
+}
+
+.la-desk-line {
+  stroke: #dcdcd6;
+  stroke-width: 1;
+}
+
+.la-chassis-foot {
+  fill: #52524e;
+}
+
+.la-base-shell {
+  fill: #e3e3de;
+  stroke: #7a7a74;
+  stroke-width: 1.1;
+}
+
+.la-key-deck {
+  stroke: #262624;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.la-spk-dot {
+  fill: var(--la-cobalt);
+}
+
+.la-lid-shell {
+  fill: #242422;
+  stroke: #141413;
+  stroke-width: 0.7;
+}
+
+.la-lid-glass {
+  stroke: #9ec5ff;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+
+.la-lid-handle-halo {
+  fill: rgba(201, 55, 0, 0.16);
+  transition: fill 120ms ease;
+}
+
+.la-stage[data-source="sonar"] .la-lid-handle-halo {
+  fill: rgba(0, 82, 204, 0.16);
+}
+
+.la-stage[data-source="hid"] .la-lid-handle-halo {
+  fill: rgba(4, 120, 87, 0.16);
+}
+
+.la-lid-handle-dot {
+  fill: var(--la-vermilion);
+  stroke: #ffffff;
+  stroke-width: 1;
+}
+
+.la-stage[data-source="sonar"] .la-lid-handle-dot {
+  fill: var(--la-cobalt);
+}
+
+.la-stage[data-source="hid"] .la-lid-handle-dot {
+  fill: var(--la-emerald);
+}
+
+.la-hinge-outer {
+  fill: #1c1c1a;
+  stroke: #ffffff;
+  stroke-width: 1.1;
+}
+
+.la-hinge-pin {
+  fill: #e4e4e0;
+}
+
+/* Telemetry Readout Column */
+.la-readout {
+  display: grid;
+  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
+  row-gap: clamp(4px, 1.4cqw, 7px);
+  min-height: 0;
+  min-width: 0;
+}
+
+.la-hero-card,
+.la-metrics {
+  background: var(--la-well);
+  border: 1px solid var(--la-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.5cqw, 8px) clamp(5px, 1.8cqw, 9px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.la-label {
+  font-family: var(--la-mono);
+  font-size: clamp(7px, 1.8cqw, 9px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--la-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.la-angle-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 1px;
+  line-height: 1;
+  min-width: 0;
+}
+
+.la-angle-num {
+  font-family: var(--la-mono);
+  font-size: clamp(16px, 7.6cqw, 34px);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--la-ink);
+}
+
+.la-stage[data-source="hid"] .la-angle-num {
+  color: var(--la-emerald);
+}
+
+.la-stage[data-source="sonar"] .la-angle-num {
+  color: var(--la-cobalt);
+}
+
+.la-stage[data-source="drag"] .la-angle-num {
+  color: var(--la-vermilion);
+}
+
+.la-angle-deg {
+  font-family: var(--la-mono);
+  font-size: clamp(11px, 3.8cqw, 18px);
+  font-weight: 600;
+  color: var(--la-ink-muted);
+}
+
+.la-posture {
+  font-family: var(--la-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9.5px);
+  font-weight: 600;
+  color: var(--la-ink-sec);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.la-metric-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.la-metric-key {
+  font-family: var(--la-mono);
+  font-size: clamp(7px, 1.7cqw, 9px);
+  font-weight: 600;
+  color: var(--la-ink-muted);
+  letter-spacing: 0.03em;
+}
+
+.la-metric-val {
+  font-family: var(--la-mono);
+  font-size: clamp(8px, 2.2cqw, 11px);
+  font-weight: 700;
+  color: var(--la-ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.la-meter-track {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #e2e2dc;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.la-meter-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--la-cobalt);
+  transition: width 80ms linear, background-color 150ms ease;
+}
+
+.la-stage[data-source="hid"] .la-meter-fill {
+  background: var(--la-emerald);
+}
+
+.la-stage[data-source="drag"] .la-meter-fill {
+  background: var(--la-vermilion);
+}
+
+/* --------------------------------------------------------------------------
+   3. Bottom 2-Point Calibration Bar
+   -------------------------------------------------------------------------- */
+
+.la-cal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.la-cal-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.la-cal-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(18px, 4.6cqw, 22px);
+  padding: 0 clamp(5px, 1.5cqw, 8px);
+  border-radius: 4px;
+  border: 1px solid var(--la-border);
+  background: #ffffff;
+  color: var(--la-ink-sec);
+  font-family: var(--la-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9.5px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.la-cal-btn:hover {
+  background: var(--la-well);
+  color: var(--la-ink);
+  border-color: #d4d4ce;
+}
+
+.la-cal-btn:focus-visible {
+  outline: 2px solid var(--la-cobalt);
+  outline-offset: 1px;
+}
+
+.la-cal-btn[data-calibrated="true"] {
+  border-color: rgba(4, 120, 87, 0.35);
+  color: var(--la-ink);
+}
+
+.la-cal-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #c8c8c0;
+  flex: 0 0 auto;
+}
+
+.la-cal-btn[data-calibrated="true"] .la-cal-dot {
+  background: var(--la-emerald);
+}
+
+.la-cal-short {
+  display: none;
+}
+
+.la-cal-note {
+  font-family: var(--la-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9.5px);
+  color: var(--la-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  text-align: right;
+}
+
+/* --------------------------------------------------------------------------
+   4. Container-Query Responsiveness (down to 150px) & Reduced Motion
+   -------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .la-meter-fill,
+  .la-btn,
+  .la-cal-btn,
+  .la-arc-sector {
+    transition: none;
+  }
+}
+
+@container (max-width: 340px) {
+  .la-cal-long {
+    display: none;
+  }
+  .la-cal-short {
+    display: inline;
+  }
+  .la-drag-hint {
+    display: none;
+  }
+}
+
+@container (max-width: 265px) {
+  .la-kicker,
+  .la-cal-note,
+  .la-posture {
+    display: none;
+  }
+  .la-body {
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+    column-gap: 5px;
+  }
+}
+
+@container (max-width: 210px) {
+  .la-metrics,
+  .la-cal-btn--reset {
+    display: none;
+  }
+  .la-readout {
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .la-hero-card {
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+  }
+  .la-label {
+    display: none;
+  }
+}
+
+@container (max-width: 175px) {
+  .la-btn--hid {
+    display: none;
+  }
+  .la-stage {
+    padding: 4px;
+    row-gap: 3px;
+  }
+  .la-body {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    column-gap: 4px;
+  }
+  .la-angle-num {
+    font-size: clamp(11px, 7.4cqw, 16px);
+  }
+  .la-angle-deg {
+    font-size: clamp(8.5px, 4.5cqw, 11px);
+  }
+}

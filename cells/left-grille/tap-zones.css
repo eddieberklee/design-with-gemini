@@ -1,0 +1,596 @@
+/* ==========================================================================
+   Secondary Grid Cell 02 — Chassis Tap Zones (`cells/left-grille/tap-zones.css`)
+   Strictly scoped to `.tz-cell` with `position: absolute; inset: 0;` stage lock
+   so the parent `.cell` maintains exact `4:3` aspect-ratio parity with `.grid`.
+   Swiss/Braun light palette matching `left-grille.css`.
+   ========================================================================== */
+
+.tz-cell {
+  --tz-bg: #ffffff;
+  --tz-well: #f5f5f3;
+  --tz-well-border: #e4e4e0;
+  --tz-border: #e5e5e5;
+  --tz-ink: #141413;
+  --tz-ink-sec: #52524e;
+  --tz-ink-muted: #63635f; /* >= 5.5:1 WCAG AA on #ffffff & #f5f5f3 */
+  --tz-cobalt: #0052cc;
+  --tz-cobalt-soft: rgba(0, 82, 204, 0.13);
+  --tz-vermilion: #c93700;
+  --tz-vermilion-soft: rgba(201, 55, 0, 0.13);
+  --tz-ok: #047857;
+  --tz-amber: #9a4700;
+  --tz-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --tz-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  font-family: var(--tz-sans);
+  color: var(--tz-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tz-stage {
+  position: absolute;
+  inset: 0;
+  padding: clamp(5px, 2.1cqw, 11px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  row-gap: clamp(4px, 1.5cqw, 8px);
+  background: var(--tz-bg);
+  user-select: none;
+  -webkit-user-select: none;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ==========================================================================
+   1. TOP MICRO-BEZEL
+   ========================================================================== */
+
+.tz-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tz-bezel-group {
+  display: flex;
+  align-items: center;
+  gap: clamp(3px, 1.2cqw, 6px);
+  min-width: 0;
+}
+
+.tz-bezel-group--right {
+  flex: 0 1 auto;
+  justify-content: flex-end;
+}
+
+.tz-kicker {
+  font-family: var(--tz-mono);
+  font-size: clamp(8px, 2.2cqw, 10.5px);
+  font-weight: 700;
+  color: var(--tz-ink-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.03em;
+  flex: 0 0 auto;
+}
+
+.tz-title {
+  font-size: clamp(10px, 2.7cqw, 12px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--tz-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tz-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(18px, 5cqw, 23px);
+  padding: 0 clamp(5px, 1.6cqw, 8px);
+  border-radius: 5px;
+  border: 1px solid var(--tz-well-border);
+  background: var(--tz-well);
+  color: var(--tz-ink);
+  font-family: var(--tz-mono);
+  font-size: clamp(8px, 2.1cqw, 10.5px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.tz-btn:hover {
+  background: #ecece8;
+}
+
+.tz-btn:focus-visible {
+  outline: 2px solid var(--tz-cobalt);
+  outline-offset: 1px;
+}
+
+.tz-btn--arm[data-armed="true"] {
+  background: var(--tz-ink);
+  border-color: var(--tz-ink);
+  color: #ffffff;
+}
+
+.tz-btn--arm[data-armed="requesting"] {
+  border-color: rgba(0, 82, 204, 0.45);
+  color: var(--tz-cobalt);
+}
+
+.tz-btn--cal[data-calibrated="true"] {
+  border-color: rgba(4, 120, 87, 0.35);
+  color: var(--tz-ok);
+  background: rgba(4, 120, 87, 0.08);
+}
+
+.tz-btn--cal[aria-expanded="true"] {
+  background: var(--tz-cobalt);
+  border-color: var(--tz-cobalt);
+  color: #ffffff;
+}
+
+.tz-dot {
+  width: 5.5px;
+  height: 5.5px;
+  border-radius: 50%;
+  background: #8e8e88;
+  flex: 0 0 auto;
+}
+
+.tz-btn--arm[data-armed="true"] .tz-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+}
+
+.tz-status {
+  font-family: var(--tz-mono);
+  font-size: clamp(7.5px, 2cqw, 10px);
+  color: var(--tz-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tz-status[data-veto="true"] {
+  color: var(--tz-amber);
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   2. MACBOOK PRO UNIBODY CHASSIS MAP STAGE
+   ========================================================================== */
+
+.tz-map-well {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--tz-well);
+  border: 1px solid var(--tz-well-border);
+  border-radius: 6px;
+  padding: clamp(3px, 1.4cqw, 7px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.tz-chassis-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: visible;
+}
+
+.tz-mic-tag {
+  font-family: var(--tz-mono);
+  font-size: 6.4px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  fill: var(--tz-cobalt);
+  pointer-events: none;
+}
+
+.tz-prop-ray {
+  stroke: var(--tz-cobalt);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  pointer-events: none;
+  transition: opacity 280ms ease;
+}
+
+.tz-prop-ray[data-accent="vermilion"] {
+  stroke: var(--tz-vermilion);
+}
+
+/* Interactive 4-Zone Hit Areas */
+.tz-zone {
+  cursor: pointer;
+  outline: none;
+}
+
+.tz-zone-rect {
+  fill: rgba(255, 255, 255, 0.25);
+  stroke: rgba(20, 20, 19, 0.2);
+  stroke-width: 1;
+  stroke-dasharray: 2.8 2.2;
+  transition: fill 140ms ease, stroke 140ms ease, stroke-width 140ms ease;
+}
+
+.tz-zone--cobalt:hover .tz-zone-rect,
+.tz-zone--cobalt:focus-visible .tz-zone-rect {
+  fill: rgba(0, 82, 204, 0.11);
+  stroke: var(--tz-cobalt);
+  stroke-dasharray: none;
+  stroke-width: 1.35;
+}
+
+.tz-zone--vermilion:hover .tz-zone-rect,
+.tz-zone--vermilion:focus-visible .tz-zone-rect {
+  fill: rgba(201, 55, 0, 0.11);
+  stroke: var(--tz-vermilion);
+  stroke-dasharray: none;
+  stroke-width: 1.35;
+}
+
+.tz-zone--cobalt[data-active="true"] .tz-zone-rect {
+  fill: rgba(0, 82, 204, 0.18);
+  stroke: var(--tz-cobalt);
+  stroke-dasharray: none;
+  stroke-width: 1.6;
+}
+
+.tz-zone--vermilion[data-active="true"] .tz-zone-rect {
+  fill: rgba(201, 55, 0, 0.18);
+  stroke: var(--tz-vermilion);
+  stroke-dasharray: none;
+  stroke-width: 1.6;
+}
+
+.tz-zone[data-cal-target="true"] .tz-zone-rect {
+  fill: rgba(0, 82, 204, 0.2);
+  stroke: var(--tz-cobalt);
+  stroke-dasharray: none;
+  stroke-width: 1.8;
+  animation: tz-cal-beacon 1.05s ease-in-out infinite;
+}
+
+.tz-zone-dot {
+  fill: #8d8d86;
+  transition: fill 140ms ease, r 140ms ease;
+  pointer-events: none;
+}
+
+.tz-zone--cobalt[data-active="true"] .tz-zone-dot,
+.tz-zone--cobalt:hover .tz-zone-dot {
+  fill: var(--tz-cobalt);
+}
+
+.tz-zone--vermilion[data-active="true"] .tz-zone-dot,
+.tz-zone--vermilion:hover .tz-zone-dot {
+  fill: var(--tz-vermilion);
+}
+
+.tz-zone-code {
+  font-family: var(--tz-mono);
+  font-size: 7.2px;
+  font-weight: 700;
+  fill: var(--tz-ink-muted);
+  pointer-events: none;
+}
+
+.tz-zone-label {
+  font-family: var(--tz-mono);
+  font-size: 7.4px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  fill: var(--tz-ink-sec);
+  pointer-events: none;
+}
+
+.tz-zone--cobalt[data-active="true"] .tz-zone-label,
+.tz-zone--cobalt[data-active="true"] .tz-zone-code {
+  fill: var(--tz-cobalt);
+}
+
+.tz-zone--vermilion[data-active="true"] .tz-zone-label,
+.tz-zone--vermilion[data-active="true"] .tz-zone-code {
+  fill: var(--tz-vermilion);
+}
+
+.tz-zone-cal-mark {
+  font-family: var(--tz-mono);
+  font-size: 8px;
+  font-weight: 700;
+  fill: var(--tz-ok);
+  pointer-events: none;
+}
+
+/* Concentric Glowing Tap Ripple */
+.tz-ripple {
+  fill: none;
+  stroke-width: 1.8;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.tz-zone--cobalt .tz-ripple {
+  stroke: var(--tz-cobalt);
+}
+
+.tz-zone--vermilion .tz-ripple {
+  stroke: var(--tz-vermilion);
+}
+
+.tz-zone--pulse .tz-ripple--outer {
+  animation: tz-ripple-expand 680ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.tz-zone--pulse .tz-ripple--inner {
+  animation: tz-ripple-expand 520ms 60ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes tz-ripple-expand {
+  0% {
+    opacity: 0.92;
+    transform: scale(0.75);
+    stroke-width: 2.4;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(4.2);
+    stroke-width: 0.4;
+  }
+}
+
+@keyframes tz-cal-beacon {
+  0%, 100% {
+    fill-opacity: 0.14;
+  }
+  50% {
+    fill-opacity: 0.34;
+  }
+}
+
+/* Docked Calibration Prompt Banner (keeps Chassis Map visible underneath!) */
+.tz-cal-bar {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 4px 6px;
+  border-radius: 5px;
+  border: 1px solid rgba(0, 82, 204, 0.32);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 6px rgba(20, 20, 19, 0.08);
+  z-index: 3;
+  min-width: 0;
+}
+
+.tz-cal-bar[hidden] {
+  display: none !important;
+}
+
+.tz-cal-msg {
+  font-family: var(--tz-mono);
+  font-size: clamp(7.5px, 2cqw, 10px);
+  font-weight: 600;
+  color: var(--tz-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.tz-cal-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.tz-mini-btn {
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--tz-border);
+  background: #ffffff;
+  color: var(--tz-ink-sec);
+  font-family: var(--tz-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tz-mini-btn:hover {
+  background: var(--tz-well);
+  color: var(--tz-ink);
+}
+
+.tz-mini-btn:focus-visible {
+  outline: 2px solid var(--tz-cobalt);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   3. BOTTOM TELEMETRY STRIP
+   ========================================================================== */
+
+.tz-telemetry {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(3px, 1.2cqw, 5px);
+  min-width: 0;
+}
+
+.tz-card {
+  background: var(--tz-well);
+  border: 1px solid var(--tz-well-border);
+  border-radius: 5px;
+  padding: clamp(3px, 1.2cqw, 6px) clamp(4px, 1.6cqw, 8px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tz-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.tz-label {
+  font-family: var(--tz-mono);
+  font-size: clamp(7px, 1.8cqw, 9px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--tz-ink-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tz-conf-pill {
+  font-family: var(--tz-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9.5px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--tz-ink-sec);
+  background: #ffffff;
+  border: 1px solid var(--tz-well-border);
+  border-radius: 3px;
+  padding: 0 3.5px;
+  line-height: 1.35;
+  flex: 0 0 auto;
+}
+
+.tz-conf-pill[data-accent="cobalt"] {
+  color: var(--tz-cobalt);
+  border-color: rgba(0, 82, 204, 0.3);
+  background: var(--tz-cobalt-soft);
+}
+
+.tz-conf-pill[data-accent="vermilion"] {
+  color: var(--tz-vermilion);
+  border-color: rgba(201, 55, 0, 0.3);
+  background: var(--tz-vermilion-soft);
+}
+
+.tz-metric-val {
+  font-family: var(--tz-mono);
+  font-size: clamp(9.5px, 2.9cqw, 14px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--tz-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.15;
+}
+
+.tz-zone-val[data-accent="cobalt"] {
+  color: var(--tz-cobalt);
+}
+
+.tz-zone-val[data-accent="vermilion"] {
+  color: var(--tz-vermilion);
+}
+
+.tz-metric-sub {
+  font-family: var(--tz-mono);
+  font-size: clamp(7px, 1.75cqw, 9px);
+  font-variant-numeric: tabular-nums;
+  color: var(--tz-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tz-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   4. REDUCED MOTION & RESPONSIVE @CONTAINER BREAKPOINTS (down to 150px)
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .tz-zone--pulse .tz-ripple--outer,
+  .tz-zone--pulse .tz-ripple--inner,
+  .tz-zone[data-cal-target="true"] .tz-zone-rect {
+    animation: none;
+  }
+  .tz-prop-ray,
+  .tz-zone-rect {
+    transition: none;
+  }
+}
+
+@container (max-width: 310px) {
+  .tz-status {
+    display: none;
+  }
+}
+
+@container (max-width: 245px) {
+  .tz-title,
+  .tz-metric-sub {
+    display: none;
+  }
+  .tz-telemetry {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  }
+}
+
+@container (max-width: 190px) {
+  .tz-stage {
+    padding: 4px;
+    row-gap: 3px;
+  }
+  .tz-kicker {
+    display: none;
+  }
+  .tz-telemetry {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  }
+  .tz-telemetry .tz-card:last-child {
+    display: none;
+  }
+  .tz-cal-bar {
+    padding: 3px 4px;
+  }
+}

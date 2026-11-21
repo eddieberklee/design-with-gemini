@@ -234,6 +234,86 @@ body:has(main.grid[hidden]) .mg-hud {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.lg-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.lg-bus-meta {
+  font-family: var(--lg-mono);
+  font-size: 10.5px;
+  color: var(--lg-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.lg-bus-meta[data-error="true"] {
+  color: var(--lg-down);
+  font-weight: 600;
+}
+
+.lg-arm-array-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--lg-border);
+  background: #ffffff;
+  color: var(--lg-ink);
+  font-family: var(--lg-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.lg-arm-array-btn:hover {
+  background: var(--lg-well);
+  border-color: #d4d4d0;
+}
+
+.lg-arm-array-btn:focus-visible {
+  outline: 2px solid var(--lg-up);
+  outline-offset: 2px;
+}
+
+.lg-arm-array-btn[data-armed="true"] {
+  background: var(--lg-ink);
+  border-color: var(--lg-ink);
+  color: #ffffff;
+}
+
+.lg-arm-array-btn[data-armed="true"]:hover {
+  background: #262624;
+  border-color: #262624;
+}
+
+.lg-arm-array-btn[data-state="requesting"] .lg-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.28);
+}
+
+.lg-arm-array-btn[data-state="listening"] .lg-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+}
+
+.lg-arm-array-btn[data-state="error"] {
+  border-color: rgba(201, 55, 0, 0.45);
+}
+
+.lg-arm-array-btn[data-state="error"] .lg-dot {
+  background: var(--lg-down);
 }
 
 .lg-back-btn {
@@ -298,6 +378,12 @@ body:has(main.grid[hidden]) .mg-hud {
   color: var(--lg-ink-sec);
 }
 
+@media (max-width: 680px) {
+  .lg-bus-meta {
+    display: none;
+  }
+}
+
 @media (max-width: 560px) {
   .lg-kbd-hint {
     display: none;
@@ -305,10 +391,12 @@ body:has(main.grid[hidden]) .mg-hud {
 }
 
 /* ==========================================================================
-   3. SECONDARY GRID CELL 1 — LEFT GRILLE INSTRUMENT (`#lg-sec-cell-1`)
-   Strict `aspect-ratio: 4 / 3` lock via `position: absolute; inset: 0;`
+   3. SECONDARY GRID CELLS (`#lg-sec-cell-1` .. `#lg-sec-cell-9`)
+   Strict `aspect-ratio: 4 / 3` lock + `position: relative; overflow: hidden; container-type: inline-size;`
    ========================================================================== */
 
+#left-grille-secondary-grid > .cell,
+.lg-sec-slot,
 .lg-instrument-cell {
   position: relative;
   overflow: hidden;

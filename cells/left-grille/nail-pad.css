@@ -1,0 +1,761 @@
+/* ==========================================================================
+   Secondary Grid Cell 03 — Nail Scratch vs Soft Finger Tap (`cells/left-grille/nail-pad.css`)
+   Strictly scoped to `.np-cell` / `.np-stage` so sibling `.cell` cards stay pure.
+   ========================================================================== */
+
+.np-cell {
+  --np-bg: #ffffff;
+  --np-well: #f5f5f3;
+  --np-well-border: #e4e4e0;
+  --np-border: #e5e5e5;
+  --np-hairline: #efefef;
+  --np-ink: #141413;
+  --np-ink-sec: #52524e;
+  --np-ink-muted: #63635f;
+  --np-pad: #0052cc;                  /* Cobalt — Soft Finger Pad Tap */
+  --np-pad-soft: rgba(0, 82, 204, 0.11);
+  --np-nail: #047857;                 /* Emerald — Rigid Keratin Nail Tap */
+  --np-nail-soft: rgba(4, 120, 87, 0.12);
+  --np-scratch: #c93700;              /* Vermilion — Sustained Nail Scratch */
+  --np-scratch-soft: rgba(201, 55, 0, 0.11);
+  --np-amber: #9a4700;
+  --np-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --np-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  font-family: var(--np-sans);
+  color: var(--np-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Strict 4:3 `.cell` Lock — internal content never stretches grid row height */
+.np-stage {
+  position: absolute;
+  inset: 0;
+  padding: clamp(6px, 2.2cqw, 12px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1.05fr) minmax(0, 1fr) auto;
+  row-gap: clamp(4px, 1.4cqw, 7px);
+  background: var(--np-bg);
+  color: var(--np-ink);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ==========================================================================
+   Row 1: Top Bezel (`[ARM]` + Status + `Pad` / `Nail` / `Scratch` + `Trim`)
+   ========================================================================== */
+
+.np-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.np-bezel-left,
+.np-bezel-right {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.np-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(19px, 5cqw, 23px);
+  padding: 0 clamp(5px, 1.6cqw, 8px);
+  border-radius: 5px;
+  border: 1px solid var(--np-well-border);
+  background: var(--np-well);
+  color: var(--np-ink);
+  font-family: var(--np-mono);
+  font-size: clamp(8.5px, 2.1cqw, 10.5px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.np-btn:hover {
+  background: #ecece8;
+}
+
+.np-btn:focus-visible,
+.np-mini-btn:focus-visible,
+.np-tactile-well:focus-visible {
+  outline: 2px solid var(--np-pad);
+  outline-offset: 1px;
+}
+
+.np-btn--arm[data-armed="true"] {
+  background: var(--np-ink);
+  border-color: var(--np-ink);
+  color: #ffffff;
+}
+
+.np-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8e8e88;
+  flex: 0 0 auto;
+}
+
+.np-btn--arm[data-armed="true"] .np-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
+}
+
+.np-status {
+  font-family: var(--np-mono);
+  font-size: clamp(8px, 2cqw, 10px);
+  color: var(--np-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.np-status[data-veto="true"] {
+  color: var(--np-amber);
+  font-weight: 700;
+}
+
+.np-mini-btn {
+  height: clamp(18px, 4.8cqw, 21px);
+  padding: 0 clamp(4px, 1.4cqw, 6px);
+  border-radius: 4px;
+  border: 1px solid var(--np-border);
+  background: #ffffff;
+  color: var(--np-ink-sec);
+  font-family: var(--np-mono);
+  font-size: clamp(8px, 2cqw, 9.5px);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.np-mini-btn:hover {
+  background: var(--np-well);
+  color: var(--np-ink);
+}
+
+.np-mini-btn--pad:hover {
+  border-color: rgba(0, 82, 204, 0.4);
+  color: var(--np-pad);
+  background: var(--np-pad-soft);
+}
+
+.np-mini-btn--nail:hover {
+  border-color: rgba(4, 120, 87, 0.4);
+  color: var(--np-nail);
+  background: var(--np-nail-soft);
+}
+
+.np-mini-btn--scratch:hover {
+  border-color: rgba(201, 55, 0, 0.4);
+  color: var(--np-scratch);
+  background: var(--np-scratch-soft);
+}
+
+/* ==========================================================================
+   Row 2: Tactile Visual Indicator + Hero Classification Card
+   ========================================================================== */
+
+.np-hero-row {
+  display: grid;
+  grid-template-columns: minmax(52px, 27%) minmax(0, 1fr);
+  column-gap: clamp(5px, 1.8cqw, 9px);
+  min-height: 0;
+  min-width: 0;
+}
+
+.np-tactile-well {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--np-well);
+  border: 1px solid var(--np-well-border);
+  border-radius: 6px;
+  padding: 4px;
+  min-height: 0;
+  min-width: 0;
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.np-tactile-well[data-gesture="soft-pad"] {
+  border-color: rgba(0, 82, 204, 0.38);
+  background: rgba(0, 82, 204, 0.05);
+}
+
+.np-tactile-well[data-gesture="nail-tap"] {
+  border-color: rgba(4, 120, 87, 0.38);
+  background: rgba(4, 120, 87, 0.05);
+}
+
+.np-tactile-well[data-gesture="nail-scratch"] {
+  border-color: rgba(201, 55, 0, 0.38);
+  background: rgba(201, 55, 0, 0.05);
+}
+
+.np-tactile-svg {
+  width: 100%;
+  height: 100%;
+  max-height: 56px;
+  display: block;
+}
+
+.np-svg-plate {
+  fill: #ecece7;
+  stroke: #dcdcd6;
+  stroke-width: 1;
+}
+
+.np-svg-hole {
+  fill: #b8b8b0;
+  opacity: 0.72;
+}
+
+.np-svg-glyph {
+  opacity: 0;
+  transition: opacity 140ms ease, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: 44px 32px;
+}
+
+/* Default idle hint shows subtle pad ring */
+.np-tactile-well[data-gesture="idle"] .np-svg-glyph--pad {
+  opacity: 0.25;
+}
+
+.np-tactile-well[data-gesture="soft-pad"] .np-svg-glyph--pad {
+  opacity: 1;
+}
+
+.np-tactile-well[data-gesture="nail-tap"] .np-svg-glyph--nail {
+  opacity: 1;
+}
+
+.np-tactile-well[data-gesture="nail-scratch"] .np-svg-glyph--scratch {
+  opacity: 1;
+}
+
+.np-pad-core {
+  fill: var(--np-pad);
+  opacity: 0.85;
+}
+
+.np-pad-ring {
+  fill: none;
+  stroke: var(--np-pad);
+  stroke-width: 1.6;
+}
+
+.np-pad-ring--1 {
+  opacity: 0.65;
+}
+
+.np-pad-ring--2 {
+  opacity: 0.35;
+  stroke-dasharray: 3 2;
+}
+
+.np-nail-ray {
+  stroke: var(--np-nail);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.np-nail-ray--diag {
+  stroke-width: 1.4;
+  opacity: 0.8;
+}
+
+.np-nail-diamond {
+  fill: var(--np-nail);
+}
+
+.np-scratch-trace {
+  fill: none;
+  stroke: var(--np-scratch);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.np-tactile-caption {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-family: var(--np-mono);
+  font-size: 7.5px;
+  font-weight: 700;
+  color: var(--np-ink-muted);
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* Hero Classification Card */
+.np-hero-card {
+  background: var(--np-well);
+  border: 1px solid var(--np-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.4cqw, 7px) clamp(6px, 2cqw, 10px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  transition: border-color 140ms ease, background-color 140ms ease;
+}
+
+.np-hero-card[data-gesture="soft-pad"] {
+  border-color: rgba(0, 82, 204, 0.35);
+  background: var(--np-pad-soft);
+}
+
+.np-hero-card[data-gesture="nail-tap"] {
+  border-color: rgba(4, 120, 87, 0.35);
+  background: var(--np-nail-soft);
+}
+
+.np-hero-card[data-gesture="nail-scratch"] {
+  border-color: rgba(201, 55, 0, 0.35);
+  background: var(--np-scratch-soft);
+}
+
+.np-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.np-label {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--np-ink-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.np-pill-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.np-pill {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(20, 20, 19, 0.1);
+  color: var(--np-ink-sec);
+  white-space: nowrap;
+}
+
+.np-badge {
+  font-size: clamp(11px, 3.8cqw, 18px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--np-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.15;
+}
+
+.np-badge[data-gesture="soft-pad"] {
+  color: var(--np-pad);
+}
+
+.np-badge[data-gesture="nail-tap"] {
+  color: var(--np-nail);
+}
+
+.np-badge[data-gesture="nail-scratch"] {
+  color: var(--np-scratch);
+}
+
+.np-hero-meta {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-variant-numeric: tabular-nums;
+  color: var(--np-ink-sec);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   Row 3: Spectral Centroid (`kHz`) Scale & HF/LF Split Meter Bar
+   ========================================================================== */
+
+.np-meters-card {
+  background: var(--np-well);
+  border: 1px solid var(--np-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.4cqw, 7px) clamp(6px, 2cqw, 10px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.np-meters-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.np-meter-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.np-num {
+  font-family: var(--np-mono);
+  font-size: clamp(9px, 2.5cqw, 12px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--np-ink);
+}
+
+.np-num--ratio[data-polarity="lf"] {
+  color: var(--np-pad);
+}
+
+.np-num--ratio[data-polarity="hf"] {
+  color: var(--np-nail);
+}
+
+/* Centroid Vernier Zone Track */
+.np-centroid-track {
+  position: relative;
+  height: clamp(12px, 3.2cqw, 15px);
+  border-radius: 4px;
+  background: #e7e7e2;
+  display: grid;
+  grid-template-columns: 18% 10% 72%;
+  overflow: hidden;
+  font-family: var(--np-mono);
+  font-size: 7.5px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.np-zone {
+  display: flex;
+  align-items: center;
+  padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.np-zone--pad {
+  background: rgba(0, 82, 204, 0.14);
+  color: var(--np-pad);
+  border-right: 1px dashed rgba(0, 82, 204, 0.35);
+}
+
+.np-zone--mid {
+  background: rgba(20, 20, 19, 0.04);
+  border-right: 1px dashed rgba(4, 120, 87, 0.35);
+}
+
+.np-zone--nail {
+  background: rgba(4, 120, 87, 0.11);
+  color: var(--np-nail);
+  justify-content: flex-end;
+}
+
+.np-centroid-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  background: var(--np-ink);
+  box-shadow: 0 0 0 1px #ffffff;
+  transition: left 90ms cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+
+.np-centroid-marker[data-gesture="soft-pad"] {
+  background: var(--np-pad);
+}
+
+.np-centroid-marker[data-gesture="nail-tap"] {
+  background: var(--np-nail);
+}
+
+.np-centroid-marker[data-gesture="nail-scratch"] {
+  background: var(--np-scratch);
+}
+
+/* Dual Opposing HF/LF Split Meter Bar */
+.np-split-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.np-split-tag {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-variant-numeric: tabular-nums;
+  color: var(--np-ink-sec);
+  white-space: nowrap;
+}
+
+.np-split-bar {
+  height: clamp(7px, 2cqw, 9px);
+  border-radius: 4px;
+  background: #e5e5e0;
+  display: grid;
+  grid-template-columns: 1fr 2px 1fr;
+  overflow: hidden;
+}
+
+.np-split-half {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+}
+
+.np-split-half--lf {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.np-split-half--hf {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.np-split-divider {
+  background: #141413;
+  opacity: 0.35;
+}
+
+.np-split-fill {
+  height: 100%;
+  transition: width 75ms linear;
+}
+
+.np-split-fill--lf {
+  background: var(--np-pad);
+  border-radius: 3px 0 0 3px;
+}
+
+.np-split-fill--hf {
+  background: var(--np-nail);
+  border-radius: 0 3px 3px 0;
+}
+
+.np-split-fill--hf[data-gesture="nail-scratch"] {
+  background: var(--np-scratch);
+}
+
+/* ==========================================================================
+   Row 4: Recent History Tape & Adaptive Noise Floor Footer
+   ========================================================================== */
+
+.np-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.np-history-tape {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.np-hist-empty,
+.np-floor-tag {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-variant-numeric: tabular-nums;
+  color: var(--np-ink-muted);
+  white-space: nowrap;
+}
+
+.np-hist-pill {
+  font-family: var(--np-mono);
+  font-size: clamp(7.5px, 1.8cqw, 8.8px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--np-well-border);
+  background: var(--np-well);
+  color: var(--np-ink);
+  white-space: nowrap;
+}
+
+.np-hist-pill[data-gesture="soft-pad"] {
+  color: var(--np-pad);
+  border-color: rgba(0, 82, 204, 0.3);
+  background: var(--np-pad-soft);
+}
+
+.np-hist-pill[data-gesture="nail-tap"] {
+  color: var(--np-nail);
+  border-color: rgba(4, 120, 87, 0.3);
+  background: var(--np-nail-soft);
+}
+
+.np-hist-pill[data-gesture="nail-scratch"] {
+  color: var(--np-scratch);
+  border-color: rgba(201, 55, 0, 0.3);
+  background: var(--np-scratch-soft);
+}
+
+/* ==========================================================================
+   Calibration Trim Popover (`dwg.nailPadCal.v1`)
+   ========================================================================== */
+
+.np-trim-overlay {
+  position: absolute;
+  inset: 6px;
+  border-radius: 6px;
+  border: 1px solid var(--np-well-border);
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(3px);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  z-index: 5;
+}
+
+.np-trim-overlay[hidden] {
+  display: none !important;
+}
+
+.np-trim-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.np-trim-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) 48px;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--np-mono);
+  font-size: 9.5px;
+}
+
+.np-trim-label {
+  color: var(--np-ink-sec);
+  font-weight: 600;
+}
+
+.np-trim-slider {
+  width: 100%;
+  accent-color: var(--np-pad);
+  cursor: pointer;
+}
+
+.np-trim-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--np-ink);
+}
+
+.np-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .np-svg-glyph,
+  .np-centroid-marker,
+  .np-split-fill {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   Responsive `@container` Breakpoints down to `150px`
+   ========================================================================== */
+
+@container (max-width: 315px) {
+  .np-stage {
+    grid-template-rows: auto minmax(0, 1fr) minmax(0, 1fr);
+  }
+  .np-footer,
+  .np-hero-meta,
+  .np-pill--int,
+  .np-btn--trim {
+    display: none;
+  }
+  .np-zone {
+    font-size: 0;
+  }
+}
+
+@container (max-width: 225px) {
+  .np-status,
+  .np-tactile-well,
+  .np-split-tag {
+    display: none;
+  }
+  .np-hero-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .np-badge {
+    font-size: clamp(9.5px, 5cqw, 13px);
+  }
+}

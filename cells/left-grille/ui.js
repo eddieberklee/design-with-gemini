@@ -6,12 +6,18 @@
  *    MacBook Pro left speaker grille elevation (`8%–22%` CNC mic through-holes + blind dimples
  *    outside `8%–22%`).
  * 2. Secondary Page (`#left-grille-page`): Replaces `<main class="grid">` seamlessly in-page
- *    with a Back button (`← Grid`, `Escape`, and History `#left-grille` sync) and a secondary
- *    `.grid` of 9 `.cell` cards obeying the exact same sizing and layout rules as the main grid.
+ *    with a Back button (`← Grid`, `Escape`, and History `#left-grille` sync), a global
+ *    `[● ARM ARRAY]` toggle in `.lg-nav-bar` wired to `window.LeftGrilleLab.bus`, and a
+ *    secondary `.grid` of 9 `.cell` cards (`#lg-sec-cell-1` .. `#lg-sec-cell-9`) obeying
+ *    the exact same sizing and layout rules as the main grid.
  * 3. Secondary Cell 1 (`#lg-sec-cell-1`): Live Left-Grille Acoustic Swipe Instrument displaying
  *    Direction (`UP` vs `DOWN`), Speed (`cm/s` + peak), Dual-Reference Relative Distance
  *    (`% FROM TOP` & `% FROM BTM` + `cm`), 1:1 vernier rail with `±1σ` uncertainty halo,
  *    rolling 2-trace trajectory/Doppler scope, 1-stroke calibration, and rail-drag/Sim fallbacks.
+ * 4. Secondary Cells 2–9 (`#lg-sec-cell-2` .. `#lg-sec-cell-9`): Registered dynamically via
+ *    `window.LeftGrilleLab.registerCell(slotNumber, spec)` and coordinated with Cell 1 so
+ *    arming `LeftGrilleLab.bus` stops Cell 1's standalone mic (and vice versa), while closing
+ *    the secondary view calls `LeftGrilleLab.bus.stopAll()`.
  */
 (function (global) {
   'use strict';
@@ -166,6 +172,11 @@
       global.LeftGrilleController && global.LeftGrilleController.LeftGrilleSensorController;
     if (!ControllerCls) return null;
 
+    const lab = (global.LeftGrilleLab =
+      global.LeftGrilleLab && typeof global.LeftGrilleLab === 'object'
+        ? global.LeftGrilleLab
+        : { _pending: [] });
+
     // Synchronous navigation intent state (`targetOpen`) + monotonic VT guard (`vtSeq`)
     let targetOpen = false;
     let isSecondaryOpen = false;
@@ -250,12 +261,38 @@
       ['← Grid']
     );
 
+    const busStatusMeta = h('span', {
+      className: 'lg-bus-meta',
+      dataset: { error: 'false' },
+      textContent: 'Cells 02–06'
+    });
+
+    const armArrayDot = h('span', { className: 'lg-dot', 'aria-hidden': 'true' });
+    const armArrayLabel = h('span', { textContent: 'ARM ARRAY' });
+    const armArrayBtn = h(
+      'button',
+      {
+        type: 'button',
+        id: 'lg-arm-array-btn',
+        className: 'lg-arm-array-btn',
+        dataset: { armed: 'false', state: 'idle' },
+        'aria-pressed': 'false',
+        title: 'Arm or disarm shared 48 kHz microphone and stereo sonar bus for Cells 02–06',
+        onClick: () => toggleSharedArray()
+      },
+      [armArrayDot, armArrayLabel]
+    );
+
     const navBar = h('nav', { className: 'lg-nav-bar', 'aria-label': 'Secondary page navigation' }, [
       h('div', { className: 'lg-nav-left' }, [
         backBtn,
         h('span', { className: 'lg-breadcrumb', textContent: '05 / Left Grille Acoustic Sonar' })
       ]),
-      h('span', { className: 'lg-kbd-hint' }, [h('kbd', { textContent: 'Esc' }), 'back'])
+      h('div', { className: 'lg-nav-right' }, [
+        busStatusMeta,
+        armArrayBtn,
+        h('span', { className: 'lg-kbd-hint' }, [h('kbd', { textContent: 'Esc' }), 'back'])
+      ])
     ]);
 
     // Build Instrument UI inside Secondary Cell 1
@@ -472,6 +509,18 @@
       ]
     );
 
+    const secondarySlotMap = {};
+    const secondarySlotEls = [];
+    for (let slot = 2; slot <= 9; slot++) {
+      const slotEl = h('section', {
+        id: `lg-sec-cell-${slot}`,
+        className: 'cell lg-sec-slot',
+        dataset: { slot: String(slot) }
+      });
+      secondarySlotMap[slot] = slotEl;
+      secondarySlotEls.push(slotEl);
+    }
+
     const secondaryGrid = h(
       'section',
       {
@@ -479,17 +528,7 @@
         className: 'grid',
         'aria-label': 'Secondary grid'
       },
-      [
-        secCell1,
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' }),
-        h('div', { className: 'cell' })
-      ]
+      [secCell1, ...secondarySlotEls]
     );
 
     const secondaryPage = h(
@@ -505,7 +544,7 @@
     mainGrid.insertAdjacentElement('afterend', secondaryPage);
 
     // -------------------------------------------------------------------------
-    // 3. Acoustic Controller Wiring & Live UI Rendering
+    // 3. Acoustic Controller + Shared Acoustic Bus Coordination
     // -------------------------------------------------------------------------
     const controller = new ControllerCls({
       onStateChange: handleControllerState,
@@ -513,6 +552,114 @@
       onSwipe: handleCommittedSwipe,
       onCalibrationResult: handleCalibrationResult
     });
+
+    let boundBus = null;
+
+    function handleSharedBusState(st) {
+      if (!st) return;
+      const armed = st.state === 'listening' || st.state === 'requesting';
+      armArrayBtn.dataset.armed = armed ? 'true' : 'false';
+      armArrayBtn.dataset.state = st.state || 'idle';
+      armArrayBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
+      armArrayLabel.textContent =
+        st.state === 'requesting' ? 'ARMING…' : st.state === 'listening' ? 'ARRAY LIVE' : 'ARM ARRAY';
+
+      if (st.state === 'listening') {
+        const rateKhz = Math.round((st.sampleRate || 48000) / 100) / 10;
+        const sonarAllowed = st.canUseSonar !== false && (st.sampleRate || 48000) >= 40000;
+        const txTag =
+          st.txMode && st.txMode !== 'off' && sonarAllowed
+            ? st.txMode.toUpperCase()
+            : 'PASSIVE';
+        busStatusMeta.dataset.error = 'false';
+        busStatusMeta.textContent = `${rateKhz}k · ${txTag}`;
+        armArrayBtn.setAttribute(
+          'title',
+          `Shared array live (${st.micLabel || 'Mic'} · ${rateKhz} kHz · ${txTag}) — click to disarm`
+        );
+      } else if (st.state === 'requesting') {
+        busStatusMeta.dataset.error = 'false';
+        busStatusMeta.textContent = 'ARMING…';
+      } else if (st.state === 'error' && st.error) {
+        busStatusMeta.dataset.error = 'true';
+        busStatusMeta.textContent = 'SIM ONLY';
+        armArrayBtn.setAttribute('title', st.error);
+        announce(st.error);
+      } else {
+        busStatusMeta.dataset.error = 'false';
+        busStatusMeta.textContent = 'Cells 02–06';
+        armArrayBtn.setAttribute(
+          'title',
+          'Arm or disarm shared 48 kHz microphone and stereo sonar bus for Cells 02–06'
+        );
+      }
+    }
+
+    function bindSharedLab(labObj) {
+      if (!labObj || typeof labObj !== 'object') return;
+      labObj._slotElements = secondarySlotMap;
+      if (typeof labObj.attachSecondarySlots === 'function') {
+        labObj.attachSecondarySlots(secondarySlotMap);
+      }
+      if (labObj.bus && labObj.bus !== boundBus) {
+        boundBus = labObj.bus;
+        if (typeof boundBus.setBeforeArmHook === 'function') {
+          boundBus.setBeforeArmHook(async () => {
+            if (controller.state === 'listening' || controller.state === 'requesting') {
+              await controller.stop({ immediate: true });
+            }
+          });
+        }
+        if (typeof boundBus.onStateChange === 'function') {
+          boundBus.onStateChange((st) => {
+            if (
+              (st.state === 'requesting' || st.state === 'listening') &&
+              (controller.state === 'listening' || controller.state === 'requesting')
+            ) {
+              controller.stop({ immediate: true });
+            }
+            handleSharedBusState(st);
+          });
+        }
+      }
+    }
+
+    bindSharedLab(lab);
+    if (!boundBus) {
+      lab._onReady = (readyLab) => bindSharedLab(readyLab);
+    }
+
+    async function disarmSharedBusForCell1() {
+      const bus = (lab && lab.bus) || boundBus;
+      if (bus && (bus.state === 'listening' || bus.state === 'requesting')) {
+        await bus.stopAll({ immediate: true, dispatchClose: false });
+      }
+    }
+
+    async function toggleSharedArray() {
+      const bus = (lab && lab.bus) || boundBus;
+      if (!bus) return;
+      if (bus.state === 'listening' || bus.state === 'requesting') {
+        await bus.stopAll({ dispatchClose: false });
+        announce('Shared acoustic array disarmed.');
+        return;
+      }
+      if (controller.state === 'listening' || controller.state === 'requesting') {
+        await controller.stop({ immediate: true });
+      }
+      let preferredTx;
+      if (typeof bus.getTxMode === 'function' && bus.getTxMode() === 'off') {
+        if (typeof bus.hasTxGenerator === 'function' && bus.hasTxGenerator('chirp')) {
+          preferredTx = 'chirp';
+        } else if (typeof bus.hasTxGenerator === 'function' && bus.hasTxGenerator('lid-ping')) {
+          preferredTx = 'lid-ping';
+        }
+      }
+      const ok = await bus.requestArm(preferredTx);
+      if (ok) {
+        announce('Shared 48 kilohertz acoustic array armed for secondary cells.');
+      }
+    }
 
     function formatListeningStatus() {
       const rateKhz = Math.round((controller.sampleRate || 48000) / 100) / 10;
@@ -713,6 +860,7 @@
       }
       overlayReturnFocusEl = triggerEl || calBtn;
       if (controller.state !== 'listening') {
+        await disarmSharedBusForCell1();
         const ok = await controller.start();
         if (!ok || controller.state !== 'listening') return;
       }
@@ -788,6 +936,7 @@
       if (controller.state === 'listening' || controller.state === 'requesting') {
         await controller.stop();
       } else {
+        await disarmSharedBusForCell1();
         await controller.start();
       }
     }
@@ -1073,6 +1222,10 @@
       if (!nextOpen) {
         enteredFromMainGrid = false;
         controller.stop();
+        const bus = (lab && lab.bus) || boundBus;
+        if (bus && typeof bus.stopAll === 'function') {
+          bus.stopAll();
+        }
       }
 
       if (
@@ -1185,13 +1338,25 @@
     });
 
     document.addEventListener('visibilitychange', () => {
-      if (!targetOpen) return;
-      controller.setHiddenMuted(Boolean(document.hidden));
+      const hidden = Boolean(document.hidden);
+      if (targetOpen) {
+        controller.setHiddenMuted(hidden);
+      }
+      const bus = (lab && lab.bus) || boundBus;
+      if (bus && typeof bus.setHiddenMuted === 'function') {
+        bus.setHiddenMuted(hidden);
+      }
     });
 
     global.addEventListener('popstate', syncLocationHash);
     global.addEventListener('hashchange', syncLocationHash);
-    global.addEventListener('pagehide', () => controller.stop({ immediate: true, silent: true }));
+    global.addEventListener('pagehide', () => {
+      controller.stop({ immediate: true, silent: true });
+      const bus = (lab && lab.bus) || boundBus;
+      if (bus && typeof bus.stopAll === 'function') {
+        bus.stopAll({ immediate: true });
+      }
+    });
 
     handleControllerState({
       state: 'idle',

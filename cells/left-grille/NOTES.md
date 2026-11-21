@@ -1,58 +1,42 @@
-# Cell 05 — Left Grille Acoustic Swipe Sonar (`cells/left-grille/`)
+# Cell 05 — Left Grille & Hardware Acoustic Secondary Grid Lab (`cells/left-grille/`)
 
 ## 1. Intent & Architecture
 
-`cells/left-grille/` implements **Cell 05** on the primary grid and its seamless in-page **Secondary Grid** portal:
+`cells/left-grille/` implements **Cell 05** on the primary grid (`#cell-left-grille`) and its seamless in-page **9-Cell Secondary Grid** (`#left-grille-secondary-grid`), preserving 100% `.grid` and `4:3` `.cell` sizing parity with the main grid while hosting **7 physical MacBook & iPhone hardware-sensing instruments** coordinated by a single `48 kHz` unprocessed Web Audio bus (`window.LeftGrilleLab.bus`):
 
-- **Primary Grid Cell (`#cell-left-grille` in `cells/left-grille/ui.js:mountLeftGrillePortal`)**: A Swiss/Braun tactile specimen tile (`05 · Left Grille Sonar`) rendering an inline SVG schematic of the MacBook Pro left speaker grille (`8%–22%` dark CNC microphone through-holes + blind dimples outside `8%–22%`). Tapping replaces `<main class="grid">` in-page without a reload using a spatial homothety View Transition (`lg-stage-portal`), History/hash state (`#left-grille`), `Escape` return, and a `← Grid` back button.
-- **Secondary Grid (`#left-grille-secondary-grid`)**: Uses the exact `.grid` and `.cell` classes as the main grid (`repeat(2, minmax(0, 1fr))` mobile / `repeat(3, minmax(0, 1fr))` `>=768px`, `4px` gap, `4:3` cells) so sizing and layout rules remain 100% identical.
-- **Secondary Cell 1 (`#lg-sec-cell-1`)**: Houses the live **Left-Grille Acoustic Swipe Detector** combining Web Audio left-channel ultrasonic sonar with 3-mic tribological spectral tracking to output:
-  1. **Swipe Direction**: `↑ SWIPE UP` vs `↓ SWIPE DOWN` (plus confidence `%`)
-  2. **Swipe Speed**: Cruising and peak speed in `cm/s`
-  3. **Relative Distance**: Simultaneous `% TOP` (`esc`) and `% BTM` (`fn`) plus `cm` along the `11.0 cm` MacBook Pro left speaker grille.
-
-### Module Ownership
-
-| File | Responsibility |
-| :--- | :--- |
-| `acoustic-engine.js` (`LeftGrilleAcousticEngine`) | Zero-dependency DSP core (`AcousticDspCore`, `fftRadix2`, `computeDecimationFactor`, `buildCarrierMultiples`, `theilSenSlope`, `createWorkletSource`) shared identically across `AudioWorkletGlobalScope`, `ScriptProcessorNode`, and Node tests. |
-| `acoustic-controller.js` (`LeftGrilleController`) | Raw `48 kHz` `getUserMedia` acquisition, per-invocation `sessionEpoch` handle isolation, automatic Built-in MacBook Mic/Speaker pinning (`enumerateDevices` + `setSinkId`), left-speaker hard pan (`pan = -1`), `localStorage` calibration (`dwg.leftGrilleCalibration.v1`), `Sim ↑/↓` synthesizer, and synchronous-detach `stop()`. |
-| `left-grille.css` | Strictly scoped styles (`.cell--left-grille`, `.lg-secondary-page`) with `container-type: inline-size` and `position: absolute; inset: 0` stage lock so internal controls never stretch 4:3 grid rows. |
-| `ui.js` (`LeftGrilleUI`) | Portal tile, race-free `targetOpen`/`vtSeq` View Transition & History router, 2-column vernier grille + 3-tier telemetry readout, full-column calibration/error overlay, DPR-scaled `<canvas>` trajectory/Doppler scope, and vertical slider rail-drag / keyboard fallback. |
-| `acoustic-engine.test.js` | Reproducible 11-test `16k`/`44.1k`/`48k`/`96k`/`192k` physical waveform, `AudioWorklet` VM, false-positive immunity, controller `sessionEpoch` race, and UI View Transition re-entrancy suite (`node --test`). |
+| Secondary Slot | Instrument | Core Physics & Transport | Slice Notes & Tests |
+| :--- | :--- | :--- | :--- |
+| **Slot 01 (`#lg-sec-cell-1`)** | **Left Grille Swipe Sonar** | 4-carrier left-speaker ultrasonic comb (`18.375–21.375 kHz`), `2.93 Hz/bin` baseband Doppler, pinhole shadow & velocity-compensated tribological tilt (`UP`/`DOWN`, `cm/s`, `% TOP`/`% BTM`) | `acoustic-engine.js` · `acoustic-engine.test.js` (`11` tests) |
+| **Slot 02 (`#lg-sec-cell-2`)** | **Chassis Tap Zones** | `< 16 kHz` Lamb plate-wave dispersion, forward-scan `riseTimeMs`, cavity boom & HF air attenuation + 4-zone Mahalanobis learner (`top-left`, `left-palm`, `trackpad-rim`, `right-palm`) | [`tap-zones.NOTES.md`](tap-zones.NOTES.md) · `tap-zones.test.js` (`8` tests) |
+| **Slot 03 (`#lg-sec-cell-3`)** | **Nail vs Soft Pad** | *TapSense* + *ScratchInput* `< 16 kHz` spectral centroid, `-18 dB` core duration, Wiener flatness & harmonic voice veto (`soft-pad`, `nail-tap`, `nail-scratch`) | [`nail-pad.NOTES.md`](nail-pad.NOTES.md) · `nail-pad.test.js` (`9` tests) |
+| **Slot 04 (`#lg-sec-cell-4`)** | **18–20.5 kHz Chirp Sonar** | Stereo FDMA Hann-tapered FMCW chirps (`18.00–19.15 kHz` L, `19.35–20.50 kHz` R), analytic matched filter + motion-gated clutter subtraction (`push`, `pull`, `wave-left`, `wave-right`, `4–55 cm`) | [`chirp-sonar.NOTES.md`](chirp-sonar.NOTES.md) · `chirp-sonar.test.js` (`10` tests) |
+| **Slot 05 (`#lg-sec-cell-5`)** | **Grille Breath Puff** | Dual-rate `20–200 Hz` Karman vortex stagnation-pressure roar + `-12 dB/oct` roll-off + NACF harmonic voice/hum veto driving an inertial anemometer pinwheel (`breeze`, `puff`, `blow`) | [`breath-puff.NOTES.md`](breath-puff.NOTES.md) · `breath-puff.test.js` (`9` tests) |
+| **Slot 06 (`#lg-sec-cell-6`)** | **Lid Angle (`0°–135°`)** | Dual-mode: (A) `18.2–20.4 kHz` Wiener-deconvolved display specular reflection sonar + (B) `lid-bridge.mjs` local SSE helper reading Apple `IOHIDManager` `LidAngleSensor` (`0x05AC:0x8104`, `0x0020:0x008A`) | [`lid-angle.NOTES.md`](lid-angle.NOTES.md) · `lid-angle.test.js` (`9` tests) |
+| **Slot 07 (`#lg-sec-cell-7`)** | **iPhone Spin Dial** | 3D gravity-projected `DeviceMotionEvent.rotationRate` (`dot(ω, g_hat)`, face-up/down gimbal-free, `0°/min` rest drift, 24 detents) via scannable QR (`dial-phone.html`) over WSS MQTT / Wi-Fi WS / Web Bluetooth (`navigator.bluetooth`) | [`iphone-dial.NOTES.md`](iphone-dial.NOTES.md) · `iphone-dial.test.js` (`8` tests) |
+| **Shared Bus & Portal** | **`LeftGrilleLab.bus` & `ui.js`** | Single-prompt raw `48 kHz` mic capture, stereo `15 ms` raised-cosine TX multiplexer, `[● ARM ARRAY]` 1-click header arming, bidirectional Cell 01 handoff, and `lg-secondary-close` teardown | [`hub-bus.NOTES.md`](hub-bus.NOTES.md) · `shared-bus.test.js` (`8` tests) |
 
 ---
 
-## 2. Design & Technical Decisions (`Protocol B` Synthesis + `Stage 2` Hardening)
+## 2. Key Architectural Invariants & Hazards
 
-Four orthogonal candidates (*Braun Tactile Vernier*, *Spatial-Kinetic Blueshift/Redshift Oscilloscope*, *Ergonomic Self-Calibrating Sensor*, and *Architectural Homothety + Heteroscedastic Kalman*) were scored by an independent critic and hardened across a 4-lens cross-Gemini Stage 2 audit:
-
-1. **Non-Uniform Integer-Periodic Carrier Comb & Multi-Rate Decimation (`acoustic-engine.js:buildCarrierMultiples` / `computeDecimationFactor`)**:
-   - *Won*: `4` Newman-phased carriers at non-uniform integer multiples of `effectiveRate / 128` (`[49, 51, 54, 57] × 375 Hz = [18375, 19125, 20250, 21375] Hz` at `48 kHz`, ramped via `tau = 15 ms` exponential envelope), with minimum separation `>= 2` bins where the periodic Hann window places exact `-∞ dB` analytical spectral zeros, while non-uniform spacings prevent coherent 2nd-order tweeter IMD (`|m_i - m_j|`) and allow exact IMD bin notching in `eMid`. High sample rates (`88.2k`/`96k`/`192k`) boxcar-decimate into `~44.1–48 kHz` effective DSP rate while synthesizing native-rate ultrasonic TX; `< 40 kHz` (Bluetooth HFP) forces passive-only mode so audible carriers can never emit.
-   - *Rejected*: Uniform `750 Hz` comb starting at `18.00 kHz` (`-20.7 dBFS`), which is audible to younger ears and injects coherent `750/1500/2250 Hz` tweeter nonlinearity into `eMid`.
-2. **PSD-Normalized, Velocity-Tilt-Compensated Spectral Ratio + Zoomed Baseband Doppler (`acoustic-engine.js:_processQuantum`)**:
-   - *Won*: Per-bin PSD normalization between `6–15 kHz` open-pinhole air turbulence + `<165 Hz` pneumatic seal vs `375–2700 Hz` aluminum plate-wave conduction, compensated for sliding speed (`velTiltCompDb`), fused at consistent `1.65x` oblique geometry with a `64`-frame DC-notched, `128`-pt Complex Baseband FFT (`2.93 Hz/bin`), LLAP phase velocity, and top-pinhole carrier occlusion (`pinholeOcclusion`).
-   - *Rejected*: Unnormalized band sums, `180 Hz` IIR decimators near `187.5 Hz` Nyquist, and partial-stroke online quantile normalizers.
-3. **4:3 Spatial Homothety View Transition & Full-Column Overlay (`ui.js` & `left-grille.css`)**:
-   - *Won*: Synchronous `targetOpen` + monotonic `vtSeq` guarding `view-transition-name: lg-stage-portal`, paired with a `22%` physical grille rail + `78%` 3-tier readout (`@container` breakpoints at `335px` and `245px`) where `.lg-inline-overlay` mounts directly on `.lg-telemetry` so calibration and error banners remain visible even when `.lg-scope-box` hides below `245px`.
+1. **Frequency-Division Coexistence (`< 16 kHz` Passive vs `18.0–21.4 kHz` Active Sonar)**:
+   - Slots `02` (`tap-zones`), `03` (`nail-pad`), and `05` (`breath-puff`) notch/low-pass strictly below `16 kHz` so they run **simultaneously** on the shared `48 kHz` mic stream even while Slot `04` (`chirp-sonar`) or Slot `06` (`lid-angle`) actively emits `18.0–20.5 kHz` stereo ultrasonic chirps.
+2. **Single-Stream Hardware Arbitration (`shared-bus.js:SharedAcousticBus` & `ui.js`)**:
+   - Clicking `[● ARM ARRAY]` in the secondary nav bar opens a single unprocessed `getUserMedia` stream (`echoCancellation: false`, `noiseSuppression: false`, `autoGainControl: false`, auto-pinned to Built-in MacBook Mic & `setSinkId` Speakers) and coordinates mutually with Slot `01`'s standalone `AudioWorklet` controller so two `getUserMedia` sessions never compete.
+3. **Deterministic Back/Escape Teardown (`ui.js:runPortalTransition` & `shared-bus.js:stopAll`)**:
+   - Returning to the main grid (`← Grid`, `Escape`, browser Back, or cross-cell hash change) synchronously detaches audio handles, extinguishes the macOS menu-bar mic indicator, closes `AudioContext`, and dispatches `lg-secondary-close` so Slot `06` SSE probes and Slot `07` BLE/WSS links clean up immediately.
+4. **Strict `4:3` Zero-Overflow Containment**:
+   - Every secondary slot (`#lg-sec-cell-1` .. `#lg-sec-cell-9`) retains `.cell` (`aspect-ratio: 4 / 3; position: relative; overflow: hidden; container-type: inline-size;`) with `position: absolute; inset: 0;` inner stages so internal controls never stretch grid row heights from `320px` to `2560px`.
 
 ---
 
-## 3. Hazards, Invariants & Edge Cases
+## 3. How to Run & Verify
 
-- **Named UMD Factory for Worklet Serialization (`acoustic-engine.js:createWorkletSource`)**: The inner UMD factory must remain named `function engineFactory()` so `engineFactory.toString()` resolves cleanly inside `createWorkletSource()` without falling back to `ScriptProcessorNode`.
-- **Disable Browser Voice DSP (`acoustic-controller.js:_requestRawMic`)**: `echoCancellation`, `noiseSuppression`, and `autoGainControl` must stay `false` (retrying relaxed boolean constraints only on `OverconstrainedError`/`TypeError`, never double-prompting on `NotAllowedError`).
-- **Guard-Bin Hann Clearance (`acoustic-engine.js:AcousticDspCore`)**: Every bin in `guardBins` must satisfy `|b - m_k| >= 2` so `±1` bin Hann carrier mainlobes (`-6 dB`) never inflate `ambientGuardPow`.
-- **Epoch-Scoped Handle Isolation (`acoustic-controller.js:_runStart` / `stop`)**: `stop()` detaches instance handles synchronously before its `24 ms` ramp-down wait, and aborted `_runStart()` calls dispose only their own `local` handles so an older aborted prompt never closes a newer active session.
-- **Sustained Fan/HVAC Recovery (`acoustic-engine.js:_processQuantum`)**: Strokes exceeding `3.5 s` auto-abort and re-anchor `ambientFricDb`/`ambientHfDb` so sudden fan spin-up cannot permanently latch `activeStroke`.
-
----
-
-## 4. How to Run & Verify
-
-- **DSP, Worklet VM & controller race test suite**:
-  `timeout 60 node --test cells/left-grille/acoustic-engine.test.js`
-- **Syntax verification**:
-  `node --check cells/left-grille/acoustic-engine.js && node --check cells/left-grille/acoustic-controller.js && node --check cells/left-grille/ui.js`
-- **Live browser verification**:
-  Serve repo root (`python3 -m http.server 8000`), open `http://localhost:8000`, click **Cell 05 (`Left Grille Sonar`)**, click **`ARM MIC`**, and swipe a finger up (`Fn → Esc`) and down (`Esc → Fn`) along the MacBook's left speaker grille.
+- **All 72 unit, physics & lifecycle tests across all 8 suites**:
+  `timeout 60 node --test cells/left-grille/*.test.js`
+- **JavaScript syntax gate**:
+  `for f in cells/left-grille/*.js cells/left-grille/*.mjs; do node --check "$f"; done`
+- **Optional native MacBook Lid Angle HID bridge (`127.0.0.1:8791`)**:
+  `node cells/left-grille/lid-bridge.mjs`
+- **Live browser server**:
+  `python3 -m http.server 8000` → open `http://localhost:8000/#left-grille`

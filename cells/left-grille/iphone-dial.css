@@ -1,0 +1,915 @@
+/* ==========================================================================
+   Secondary Grid Cell 07 — iPhone Spinning Dial Control (`cells/left-grille/iphone-dial.css`)
+   Strictly scoped to `.id-cell` (desktop Secondary Cell 07) and `.dp-body`
+   (standalone mobile rotary controller `dial-phone.html`).
+   ========================================================================== */
+
+.id-cell {
+  --id-bg: #ffffff;
+  --id-well: #f5f5f3;
+  --id-well-border: #e4e4e0;
+  --id-border: #dcdcd6;
+  --id-ink: #141413;
+  --id-ink-sec: #52524e;
+  --id-ink-muted: #63635f;
+  --id-cobalt: #0052cc;
+  --id-cobalt-soft: rgba(0, 82, 204, 0.12);
+  --id-vermilion: #c93700;
+  --id-emerald: #047857;
+  --id-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --id-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  font-family: var(--id-sans);
+  color: var(--id-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.id-stage {
+  position: absolute;
+  inset: 0;
+  padding: clamp(6px, 2.2cqw, 12px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  row-gap: clamp(4px, 1.6cqw, 8px);
+  background: var(--id-bg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   1. Top Bezel Bar
+   -------------------------------------------------------------------------- */
+
+.id-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.id-bezel-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.id-kicker {
+  font-family: var(--id-mono);
+  font-size: clamp(8.5px, 2.2cqw, 10.5px);
+  font-weight: 700;
+  color: var(--id-ink-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.id-title {
+  font-size: clamp(10px, 2.6cqw, 12.5px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--id-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.id-led {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex: 0 0 auto;
+}
+
+.id-led[data-state="ready"] {
+  background: var(--id-cobalt);
+}
+
+.id-led[data-state="live"] {
+  background: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
+}
+
+.id-status-text {
+  font-family: var(--id-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9.5px);
+  font-weight: 600;
+  color: var(--id-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.id-bezel-right {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.id-btn {
+  height: clamp(19px, 5cqw, 23px);
+  padding: 0 clamp(5px, 1.6cqw, 8px);
+  border-radius: 5px;
+  border: 1px solid var(--id-well-border);
+  background: var(--id-well);
+  color: var(--id-ink);
+  font-family: var(--id-mono);
+  font-size: clamp(8px, 2cqw, 10px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.id-btn:hover {
+  background: #eaeae6;
+}
+
+.id-btn:focus-visible {
+  outline: 2px solid var(--id-cobalt);
+  outline-offset: 1px;
+}
+
+.id-btn--qr[aria-expanded="true"] {
+  background: var(--id-ink);
+  border-color: var(--id-ink);
+  color: #ffffff;
+}
+
+.id-btn--ble[aria-pressed="true"] {
+  background: var(--id-cobalt-soft);
+  border-color: rgba(0, 82, 204, 0.4);
+  color: var(--id-cobalt);
+}
+
+/* --------------------------------------------------------------------------
+   2. Main 2-Column Body: Machined Rotary Platter + Telemetry Column
+   -------------------------------------------------------------------------- */
+
+.id-body {
+  display: grid;
+  grid-template-columns: minmax(90px, 44%) minmax(0, 1fr);
+  column-gap: clamp(6px, 2.2cqw, 12px);
+  min-height: 0;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.id-dial-pad {
+  position: relative;
+  background: var(--id-well);
+  border: 1px solid var(--id-well-border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  min-width: 0;
+  padding: 4px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.id-dial-pad.is-dragging {
+  cursor: grabbing;
+  border-color: #c5c5be;
+}
+
+.id-dial-pad:focus-visible {
+  outline: 2px solid var(--id-cobalt);
+  outline-offset: 1px;
+}
+
+.id-dial-svg {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+}
+
+.id-stator-well {
+  fill: #ecece8;
+  stroke: #dcdcd6;
+  stroke-width: 1.2;
+}
+
+.id-value-track {
+  fill: none;
+  stroke: #dfdfd9;
+  stroke-width: 3.2;
+}
+
+.id-value-arc {
+  fill: none;
+  stroke: var(--id-cobalt);
+  stroke-width: 3.4;
+  stroke-linecap: round;
+}
+
+.id-tick {
+  stroke: #9e9e97;
+  stroke-width: 1.25;
+  stroke-linecap: round;
+}
+
+.id-tick--major {
+  stroke: #52524e;
+  stroke-width: 1.8;
+}
+
+.id-tick.is-active {
+  stroke: var(--id-vermilion);
+  stroke-width: 2.5;
+}
+
+.id-rotor-rim {
+  fill: #d8d8d2;
+  stroke: #b8b8b0;
+  stroke-width: 1.2;
+}
+
+.id-rotor-face {
+  fill: #f9f9f7;
+  stroke: #e2e2dc;
+  stroke-width: 1;
+}
+
+.id-rotor-groove {
+  fill: none;
+  stroke: #e6e6e1;
+  stroke-width: 0.9;
+  stroke-dasharray: 2 2;
+}
+
+.id-rotor-notch {
+  stroke: var(--id-vermilion);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+}
+
+.id-rotor-dimple {
+  fill: #eaeae4;
+  stroke: #c6c6be;
+  stroke-width: 1.1;
+}
+
+.id-hub-cap {
+  fill: #ffffff;
+  stroke: #dcdcd6;
+  stroke-width: 1;
+}
+
+.id-hub-readout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  text-align: center;
+}
+
+.id-hub-angle {
+  font-family: var(--id-mono);
+  font-size: clamp(9.5px, 3cqw, 14px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--id-ink);
+  line-height: 1.05;
+}
+
+.id-hub-turns {
+  font-family: var(--id-mono);
+  font-size: clamp(6.5px, 1.7cqw, 8.5px);
+  font-variant-numeric: tabular-nums;
+  color: var(--id-ink-muted);
+  margin-top: 1px;
+}
+
+/* --------------------------------------------------------------------------
+   3. Right-Column Telemetry Cards & Action Row
+   -------------------------------------------------------------------------- */
+
+.id-telemetry {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+  row-gap: clamp(4px, 1.4cqw, 7px);
+  min-width: 0;
+  min-height: 0;
+}
+
+.id-card {
+  background: var(--id-well);
+  border: 1px solid var(--id-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.5cqw, 8px) clamp(6px, 1.8cqw, 10px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.id-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.id-label {
+  font-family: var(--id-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9.5px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--id-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.id-mini-pill {
+  height: 17px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--id-border);
+  background: #ffffff;
+  color: var(--id-ink-sec);
+  font-family: var(--id-mono);
+  font-size: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.id-mini-pill[aria-pressed="true"] {
+  background: var(--id-cobalt-soft);
+  border-color: rgba(0, 82, 204, 0.4);
+  color: var(--id-cobalt);
+}
+
+.id-metric-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
+.id-metric-num {
+  font-family: var(--id-mono);
+  font-size: clamp(12px, 4.2cqw, 21px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--id-ink);
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.id-metric-unit {
+  font-family: var(--id-mono);
+  font-size: clamp(8px, 2cqw, 10.5px);
+  color: var(--id-ink-muted);
+  white-space: nowrap;
+}
+
+.id-bar-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #e2e2dc;
+  overflow: hidden;
+}
+
+.id-bar-fill {
+  height: 100%;
+  width: 50%;
+  background: var(--id-cobalt);
+  border-radius: 2px;
+  transition: width 40ms linear;
+}
+
+.id-sub-meta {
+  font-family: var(--id-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9.5px);
+  font-variant-numeric: tabular-nums;
+  color: var(--id-ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.id-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.id-sim-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.id-mini-btn {
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--id-border);
+  background: #ffffff;
+  color: var(--id-ink-sec);
+  font-family: var(--id-mono);
+  font-size: 8.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.id-mini-btn:hover {
+  background: #f0f0ec;
+  color: var(--id-ink);
+}
+
+.id-mini-btn:focus-visible {
+  outline: 2px solid var(--id-cobalt);
+  outline-offset: 1px;
+}
+
+.id-mini-btn--close {
+  background: var(--id-ink);
+  border-color: var(--id-ink);
+  color: #ffffff;
+}
+
+.id-link-meta {
+  font-family: var(--id-mono);
+  font-size: 8px;
+  color: var(--id-ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------------------
+   4. Toggleable In-Cell QR Pairing Overlay (`.id-qr-overlay`)
+   -------------------------------------------------------------------------- */
+
+.id-qr-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  background: rgba(255, 255, 255, 0.97);
+  backdrop-filter: blur(4px);
+  padding: clamp(6px, 2.2cqw, 12px);
+  display: grid;
+  grid-template-columns: minmax(76px, 38%) minmax(0, 1fr);
+  column-gap: clamp(6px, 2.4cqw, 12px);
+  align-items: center;
+}
+
+.id-qr-overlay[hidden] {
+  display: none !important;
+}
+
+.id-qr-box {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  border: 1px solid var(--id-well-border);
+  border-radius: 6px;
+  padding: 4px;
+  min-height: 0;
+}
+
+.id-qr-box svg {
+  width: 100%;
+  height: 100%;
+  max-width: 148px;
+  max-height: 148px;
+  display: block;
+}
+
+.id-qr-fallback {
+  font-family: var(--id-mono);
+  font-size: 9px;
+  color: var(--id-ink-muted);
+  text-align: center;
+  padding: 6px;
+}
+
+.id-qr-meta {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.id-qr-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.id-qr-sid {
+  font-family: var(--id-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--id-ink);
+  background: var(--id-well);
+  border: 1px solid var(--id-well-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.id-qr-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.id-qr-hint {
+  font-size: clamp(8.5px, 2.1cqw, 10.5px);
+  line-height: 1.28;
+  color: var(--id-ink-sec);
+}
+
+.id-host-input {
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--id-border);
+  background: var(--id-well);
+  color: var(--id-ink);
+  font-family: var(--id-mono);
+  font-size: 9.5px;
+}
+
+.id-host-input:focus-visible {
+  outline: 2px solid var(--id-cobalt);
+  background: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   5. Container Query Breakpoints (Down to 150px)
+   -------------------------------------------------------------------------- */
+
+@container (max-width: 310px) {
+  .id-status-text,
+  .id-link-meta {
+    display: none;
+  }
+}
+
+@container (max-width: 245px) {
+  .id-title,
+  .id-hub-turns,
+  .id-sub-meta,
+  .id-footer-row {
+    display: none;
+  }
+
+  .id-body {
+    grid-template-columns: minmax(64px, 46%) minmax(0, 1fr);
+    column-gap: 4px;
+  }
+
+  .id-telemetry {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .id-mini-pill {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   6. Standalone Mobile Controller (`cells/left-grille/dial-phone.html`)
+   Supports both Dark OLED Studio mode (default) and Braun Light Ceramic mode.
+   ========================================================================== */
+
+.dp-body {
+  --dp-bg: #111110;
+  --dp-surface: #1b1b19;
+  --dp-surface-2: #252522;
+  --dp-border: #2f2f2b;
+  --dp-ink: #f7f7f5;
+  --dp-ink-sec: #a8a8a0;
+  --dp-ink-muted: #7c7c75;
+  --dp-accent: #e85d2a;
+  --dp-cobalt: #3b82f6;
+  --dp-live: #10b981;
+  --dp-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
+  --dp-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  margin: 0;
+  padding: 0;
+  min-height: 100dvh;
+  background: var(--dp-bg);
+  color: var(--dp-ink);
+  font-family: var(--dp-sans);
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.dp-body[data-theme="light"] {
+  --dp-bg: #f6f6f3;
+  --dp-surface: #ffffff;
+  --dp-surface-2: #ecece7;
+  --dp-border: #dcdcd5;
+  --dp-ink: #141413;
+  --dp-ink-sec: #52524e;
+  --dp-ink-muted: #6e6e68;
+  --dp-accent: #c93700;
+  --dp-cobalt: #0052cc;
+}
+
+.dp-app {
+  min-height: 100dvh;
+  max-width: 460px;
+  margin-inline: auto;
+  padding:
+    calc(10px + env(safe-area-inset-top))
+    calc(16px + env(safe-area-inset-right))
+    calc(14px + env(safe-area-inset-bottom))
+    calc(16px + env(safe-area-inset-left));
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dp-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dp-badge {
+  font-family: var(--dp-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--dp-surface);
+  border: 1px solid var(--dp-border);
+  color: var(--dp-ink-sec);
+}
+
+.dp-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.dp-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dp-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--dp-surface);
+  border: 1px solid var(--dp-border);
+  font-family: var(--dp-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #f59e0b;
+}
+
+.dp-status[data-state="ready"] {
+  color: var(--dp-live);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+
+.dp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.dp-theme-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--dp-border);
+  background: var(--dp-surface);
+  color: var(--dp-ink-sec);
+  font-family: var(--dp-mono);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dp-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.dp-wheel-wrap {
+  position: relative;
+  width: min(76vw, 36dvh, 284px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: var(--dp-surface);
+  border: 1px solid var(--dp-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+}
+
+.dp-wheel-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.dp-center-hud {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.dp-angle-big {
+  font-family: var(--dp-mono);
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.dp-val-sub {
+  font-family: var(--dp-mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dp-accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-pose-meta {
+  font-family: var(--dp-mono);
+  font-size: 10px;
+  color: var(--dp-ink-sec);
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-gate {
+  position: absolute;
+  inset: -3px;
+  z-index: 5;
+  border-radius: 50%;
+  background: rgba(17, 17, 16, 0.94);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+  color: #f7f7f5;
+}
+
+.dp-gate[hidden] {
+  display: none !important;
+}
+
+.dp-enable-btn {
+  width: 172px;
+  height: 62px;
+  border-radius: 999px;
+  border: 0;
+  background: #e85d2a;
+  color: #ffffff;
+  font-family: var(--dp-sans);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(232, 93, 42, 0.4);
+}
+
+.dp-gate-note {
+  font-size: 11px;
+  line-height: 1.32;
+  color: #a8a8a0;
+  max-width: 200px;
+}
+
+.dp-dismiss-btn {
+  border: 0;
+  background: transparent;
+  color: #d4d4cc;
+  font-family: var(--dp-mono);
+  font-size: 10.5px;
+  text-decoration: underline;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.dp-metrics {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dp-metric-box {
+  background: var(--dp-surface);
+  border: 1px solid var(--dp-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dp-metric-k {
+  font-family: var(--dp-mono);
+  font-size: 9.5px;
+  color: var(--dp-ink-muted);
+}
+
+.dp-metric-v {
+  font-family: var(--dp-mono);
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.dp-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dp-btn-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dp-btn {
+  height: 44px;
+  border-radius: 9px;
+  border: 1px solid var(--dp-border);
+  background: var(--dp-surface);
+  color: var(--dp-ink);
+  font-family: var(--dp-sans);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dp-btn[aria-pressed="true"] {
+  border-color: var(--dp-accent);
+  color: var(--dp-accent);
+}

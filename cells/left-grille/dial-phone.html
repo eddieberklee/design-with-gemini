@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#111110">
+  <title>07 · iPhone Spin Dial Controller</title>
+  <link rel="stylesheet" href="iphone-dial.css">
+</head>
+<body class="dp-body" data-theme="dark">
+  <main class="dp-app" id="dp-app">
+    <header class="dp-header">
+      <div class="dp-brand">
+        <span class="dp-badge">07</span>
+        <span class="dp-title">iPhone Spin Dial</span>
+      </div>
+      <div class="dp-header-right">
+        <button type="button" class="dp-theme-btn" id="dp-theme-btn" aria-label="Toggle dark or light theme">☀ Light</button>
+        <div class="dp-status" id="dp-status" data-state="connecting">
+          <span class="dp-dot" aria-hidden="true"></span>
+          <span id="dp-status-text">LINKING</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="dp-stage">
+      <div class="dp-wheel-wrap" id="dp-wheel-pad" aria-label="Rotary encoder touch and gyroscope platter">
+        <svg class="dp-wheel-svg" viewBox="0 0 240 240" aria-hidden="true">
+          <circle cx="120" cy="120" r="112" fill="none" stroke="currentColor" stroke-opacity="0.14" stroke-width="1.5" />
+          <circle cx="120" cy="120" r="98" fill="none" stroke="currentColor" stroke-opacity="0.12" stroke-width="5" />
+          <path id="dp-arc-active" d="" fill="none" stroke="#e85d2a" stroke-width="5.5" stroke-linecap="round" />
+          <g id="dp-ticks"></g>
+          <g id="dp-rotor" transform="rotate(0 120 120)">
+            <circle cx="120" cy="120" r="82" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.5" />
+            <circle cx="120" cy="120" r="66" fill="none" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" />
+            <line x1="120" y1="30" x2="120" y2="50" stroke="#e85d2a" stroke-width="4" stroke-linecap="round" />
+            <circle cx="120" cy="60" r="9" fill="none" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" />
+          </g>
+        </svg>
+
+        <div class="dp-center-hud" id="dp-center-hud">
+          <div class="dp-angle-big" id="dp-angle">0.0°</div>
+          <div class="dp-val-sub" id="dp-value">VAL 50.0</div>
+          <div class="dp-pose-meta" id="dp-pose">FLAT DESK · 0.00t</div>
+        </div>
+
+        <!-- 1-Tap iOS 13+ Gyroscope Permission Gate + Touch-Ring Fallback -->
+        <div class="dp-gate" id="dp-gate">
+          <button type="button" class="dp-enable-btn" id="dp-enable-btn">Enable Gyroscope</button>
+          <p class="dp-gate-note" id="dp-gate-note">
+            Tap to unlock 3-axis gyroscope, then lay iPhone flat on desk (face-up or face-down) and spin it like a knob.
+          </p>
+          <button type="button" class="dp-dismiss-btn" id="dp-touch-only-btn">Use Touch Ring Only</button>
+        </div>
+      </div>
+
+      <div class="dp-metrics">
+        <div class="dp-metric-box">
+          <span class="dp-metric-k">VELOCITY</span>
+          <span class="dp-metric-v" id="dp-rpm">0.0 RPM</span>
+        </div>
+        <div class="dp-metric-box">
+          <span class="dp-metric-k">DETENT</span>
+          <span class="dp-metric-v" id="dp-detent">#00 · 0</span>
+        </div>
+        <div class="dp-metric-box">
+          <span class="dp-metric-k">TURNS</span>
+          <span class="dp-metric-v" id="dp-turns">+0.00t</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="dp-controls">
+      <div class="dp-btn-grid">
+        <button type="button" class="dp-btn" id="dp-zero-btn">Zero Angle (0°)</button>
+        <button type="button" class="dp-btn" id="dp-fine-btn" aria-pressed="false">1× Coarse</button>
+        <button type="button" class="dp-btn" id="dp-ticks-btn" aria-pressed="true">Click Ticks: On</button>
+        <button type="button" class="dp-btn" id="dp-reset-btn">Reset 50%</button>
+      </div>
+    </section>
+  </main>
+
+  <script defer src="../motion/transport.js"></script>
+  <script defer src="iphone-dial.js"></script>
+  <script defer src="dial-phone.js"></script>
+</body>
+</html>

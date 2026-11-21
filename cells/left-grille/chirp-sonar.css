@@ -1,0 +1,450 @@
+/* ==========================================================================
+   Secondary Grid Cell 04 — 18–20.5 kHz Ultrasonic Chirp Sonar
+   (`cells/left-grille/chirp-sonar.css`)
+   Strictly scoped to `.cs-cell`, `.cs-stage`, and `.cs-*` selectors.
+   Strict 4:3 `.cell` lock via `.cs-stage { position: absolute; inset: 0; }`.
+   ========================================================================== */
+
+.cs-cell {
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.cs-stage {
+  --cs-bg: var(--lg-bg, #ffffff);
+  --cs-well: var(--lg-well, #f5f5f3);
+  --cs-well-border: var(--lg-well-border, #e4e4e0);
+  --cs-border: var(--lg-border, #e5e5e5);
+  --cs-ink: var(--lg-ink, #141413);
+  --cs-ink-sec: var(--lg-ink-sec, #52524e);
+  --cs-ink-muted: var(--lg-ink-muted, #63635f);
+  --cs-cobalt: var(--lg-up, #0052cc);
+  --cs-cobalt-soft: var(--lg-up-soft, rgba(0, 82, 204, 0.12));
+  --cs-vermilion: var(--lg-down, #c93700);
+  --cs-vermilion-soft: var(--lg-down-soft, rgba(201, 55, 0, 0.12));
+  --cs-ok: var(--lg-ok, #047857);
+  --cs-amber: var(--lg-amber, #9a4700);
+  --cs-sans: var(--lg-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif);
+  --cs-mono: var(--lg-mono, ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace);
+
+  position: absolute;
+  inset: 0;
+  padding: clamp(6px, 2.2cqw, 12px);
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  row-gap: clamp(4px, 1.6cqw, 8px);
+  background: var(--cs-bg);
+  color: var(--cs-ink);
+  font-family: var(--cs-sans);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+}
+
+.cs-stage *,
+.cs-stage *::before,
+.cs-stage *::after {
+  box-sizing: border-box;
+}
+
+/* Top Micro-Bezel */
+.cs-bezel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cs-bezel-left {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.cs-kicker {
+  font-family: var(--cs-mono);
+  font-size: clamp(8.5px, 2.2cqw, 10.5px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--cs-ink-muted);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.cs-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: clamp(19px, 5.2cqw, 24px);
+  padding: 0 clamp(6px, 1.8cqw, 9px);
+  border-radius: 5px;
+  border: 1px solid var(--cs-well-border);
+  background: var(--cs-well);
+  color: var(--cs-ink);
+  font-family: var(--cs-mono);
+  font-size: clamp(8.5px, 2.2cqw, 10.5px);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.cs-btn:hover {
+  background: #ecece8;
+}
+
+.cs-btn:focus-visible {
+  outline: 2px solid var(--cs-cobalt);
+  outline-offset: 1px;
+}
+
+.cs-btn--sonar[data-active="true"] {
+  background: var(--cs-ink);
+  border-color: var(--cs-ink);
+  color: #ffffff;
+}
+
+.cs-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8e8e88;
+  flex: 0 0 auto;
+}
+
+.cs-btn--sonar[data-active="true"] .cs-dot {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
+}
+
+.cs-status-pill {
+  font-family: var(--cs-mono);
+  font-size: clamp(8px, 2.1cqw, 10px);
+  color: var(--cs-ink-muted);
+  background: var(--cs-well);
+  border: 1px solid var(--cs-well-border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.cs-status-pill[data-warn="true"] {
+  color: var(--cs-amber);
+  border-color: rgba(154, 71, 0, 0.3);
+  font-weight: 600;
+}
+
+/* Tier 1: Hero Gesture Readout + Live Range & L/R Echo Balance */
+.cs-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: clamp(4px, 1.4cqw, 6px);
+  min-width: 0;
+}
+
+.cs-card {
+  background: var(--cs-well);
+  border: 1px solid var(--cs-well-border);
+  border-radius: 6px;
+  padding: clamp(4px, 1.5cqw, 7px) clamp(5px, 1.8cqw, 9px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cs-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cs-label {
+  font-family: var(--cs-mono);
+  font-size: clamp(7.5px, 1.9cqw, 9px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--cs-ink-muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cs-gesture-meta {
+  font-family: var(--cs-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9.5px);
+  color: var(--cs-ink-sec);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.cs-gesture-val {
+  font-size: clamp(11px, 3.8cqw, 18px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--cs-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cs-gesture-val[data-kind="push"],
+.cs-gesture-val[data-kind="wave-left"] {
+  color: var(--cs-cobalt);
+}
+
+.cs-gesture-val[data-kind="pull"],
+.cs-gesture-val[data-kind="wave-right"] {
+  color: var(--cs-vermilion);
+}
+
+.cs-gesture-val[data-kind="tracking"] {
+  color: var(--cs-ok);
+}
+
+.cs-range-val {
+  font-family: var(--cs-mono);
+  font-size: clamp(11px, 3.5cqw, 16px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  color: var(--cs-ink);
+  white-space: nowrap;
+}
+
+.cs-range-unit {
+  font-size: 0.65em;
+  font-weight: 500;
+  color: var(--cs-ink-muted);
+}
+
+/* Stereo L/R Echo Balance Indicator */
+.cs-bal-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cs-bal-tag {
+  font-family: var(--cs-mono);
+  font-size: clamp(7.5px, 1.8cqw, 9px);
+  font-weight: 700;
+  color: var(--cs-ink-muted);
+  flex: 0 0 auto;
+}
+
+.cs-bal-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: clamp(6px, 1.8cqw, 8px);
+  border-radius: 3px;
+  background: #e9e9e5;
+  overflow: hidden;
+}
+
+.cs-bal-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  transition: width 60ms linear;
+}
+
+.cs-bal-fill--l {
+  right: 50%;
+  background: var(--cs-cobalt);
+  opacity: 0.8;
+}
+
+.cs-bal-fill--r {
+  left: 50%;
+  background: var(--cs-vermilion);
+  opacity: 0.8;
+}
+
+.cs-bal-center {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(20, 20, 19, 0.3);
+  transform: translateX(-0.5px);
+}
+
+.cs-bal-needle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--cs-ink);
+  transform: translateX(-1px);
+  transition: left 60ms linear;
+}
+
+/* Tier 2: Live 24-Bin Range-Time Radar Waterfall + Compact Sim Footer */
+.cs-radar-box {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  background: var(--cs-well);
+  border: 1px solid var(--cs-well-border);
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+.cs-waterfall-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.cs-radar-ticks {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  font-family: var(--cs-mono);
+  font-size: clamp(7px, 1.8cqw, 8.5px);
+  font-weight: 600;
+  color: rgba(20, 20, 19, 0.55);
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.cs-sim-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 3px clamp(4px, 1.4cqw, 6px);
+  border-top: 1px solid var(--cs-well-border);
+  background: rgba(255, 255, 255, 0.88);
+  min-width: 0;
+}
+
+.cs-sim-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  flex-wrap: nowrap;
+}
+
+.cs-mini-btn {
+  height: clamp(16px, 4.4cqw, 19px);
+  padding: 0 clamp(4px, 1.3cqw, 6px);
+  border-radius: 4px;
+  border: 1px solid var(--cs-border);
+  background: #ffffff;
+  color: var(--cs-ink-sec);
+  font-family: var(--cs-mono);
+  font-size: clamp(7.5px, 2cqw, 9px);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 110ms ease, color 110ms ease;
+}
+
+.cs-mini-btn:hover {
+  background: #f0f0ec;
+  color: var(--cs-ink);
+}
+
+.cs-mini-btn:focus-visible {
+  outline: 2px solid var(--cs-cobalt);
+  outline-offset: 1px;
+}
+
+.cs-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-btn,
+  .cs-mini-btn,
+  .cs-bal-fill,
+  .cs-bal-needle {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+   Responsive Container Breakpoints (Cleanly scales down to 150px wide)
+   ========================================================================== */
+
+@container (max-width: 310px) {
+  .cs-kicker,
+  .cs-mini-btn--zero {
+    display: none;
+  }
+}
+
+@container (max-width: 235px) {
+  .cs-stage {
+    padding: 5px;
+    row-gap: 4px;
+  }
+  .cs-gesture-meta,
+  .cs-radar-ticks {
+    display: none;
+  }
+  .cs-status-pill {
+    padding: 1px 4px;
+    font-size: 7.5px;
+  }
+  .cs-gesture-val {
+    font-size: clamp(9.5px, 4.4cqw, 13px);
+  }
+  .cs-range-val {
+    font-size: clamp(9.5px, 4.2cqw, 12.5px);
+  }
+}
+
+@container (max-width: 180px) {
+  .cs-status-pill,
+  .cs-bal-tag,
+  .cs-label {
+    display: none;
+  }
+  .cs-card {
+    padding: 3px 4px;
+  }
+  .cs-mini-btn {
+    padding: 0 3px;
+    font-size: 7px;
+  }
+}
