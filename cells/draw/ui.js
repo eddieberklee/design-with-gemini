@@ -3,10 +3,12 @@
  *
  * Pure Zero-Chrome Sketchpad (Apple Notes / Teenage Engineering Minimalism):
  *   - Mounts into `<section class="cell cell--draw" id="cell-draw">` using
- *     strictly `document.createElement` / `document.createElementNS` + `textContent`.
- *   - Strictly one `<button>` (`Clear`) with `aria-disabled="true"` when empty
- *     (never `disabled = true`, preserving keyboard focus), `stopPropagation()` on
- *     `pointerdown`, and `:focus-visible` `var(--dw-focus)` ring.
+ *     strictly `document.createElement` / `document.createElementNS` + `textContent`,
+ *     as a shared `.ui-tile`: flush body (sheet) + overlay header (09 · Draw · Clear).
+ *   - Strictly one `<button>` (`Clear`, `.ui-btn--sm`) with `aria-disabled="true"` and
+ *     `data-tip="Nothing to clear yet."` when empty (never `disabled = true`,
+ *     preserving keyboard focus; the tip is removed once there is ink), and
+ *     `stopPropagation()` on `pointerdown`.
  *   - Standard synchronized 2D context (`canvas.getContext('2d')`) + exact-edge
  *     fractional-grid `ctx.setTransform(targetW / rect.width, 0, 0, targetH / rect.height, 0, 0)`
  *     + cross-monitor DPR media-query watcher.
@@ -46,7 +48,8 @@
     'use strict';
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
-    const CLEAR_FADE_MS = 130;
+    const CLEAR_FADE_MS = 150; // = --ui-dur, the veil animation in draw.css
+    const CLEAR_EMPTY_TIP = 'Nothing to clear yet.';
     // Above this many stored vertices a full replay costs several ms per frame
     // (measured ~2.3 us/vertex on a 960x720 tile at DPR 2), so continuous
     // ResizeObserver / window-resize bursts (MotionGrid spring) are throttled
@@ -140,8 +143,13 @@
       const win = doc.defaultView || (typeof window !== 'undefined' ? window : root);
 
       clearChildren(rootEl);
-      rootEl.classList.add('cell--draw');
+      rootEl.classList.add('cell--draw', 'ui-tile');
       rootEl.classList.remove('has-ink', 'is-drawing', 'is-clearing');
+
+      // Shared tile anatomy (ui/NOTES.md): a flush body holding the sheet, with
+      // the overlay header (index, title, Clear) laid over its top edge.
+      const body = doc.createElement('div');
+      body.className = 'ui-tile-body ui-tile-body--flush';
 
       const canvas = doc.createElement('canvas');
       canvas.className = 'dw-canvas';
@@ -156,29 +164,47 @@
       emptyCue.setAttribute('aria-hidden', 'true');
       const emptyIcon = buildPenNibSvg(doc);
       const emptyLabel = doc.createElement('span');
-      emptyLabel.className = 'dw-empty-label';
-      emptyLabel.textContent = 'Draw';
+      emptyLabel.className = 'dw-empty-label ui-label';
+      emptyLabel.textContent = 'Mouse · pen · touch';
       emptyCue.appendChild(emptyIcon);
       emptyCue.appendChild(emptyLabel);
 
+      const head = doc.createElement('header');
+      head.className = 'ui-tile-head ui-tile-head--overlay';
+      const indexEl = doc.createElement('span');
+      indexEl.className = 'ui-tile-index';
+      indexEl.textContent = '09';
+      const titleEl = doc.createElement('span');
+      titleEl.className = 'ui-tile-title';
+      titleEl.textContent = 'Draw';
+      const actions = doc.createElement('div');
+      actions.className = 'ui-tile-actions';
+
       const clearBtn = doc.createElement('button');
       clearBtn.type = 'button';
-      clearBtn.className = 'dw-clear';
+      clearBtn.className = 'dw-clear ui-btn ui-btn--sm';
       clearBtn.setAttribute('aria-disabled', 'true');
       clearBtn.setAttribute('aria-label', 'Clear canvas');
+      clearBtn.setAttribute('data-tip', CLEAR_EMPTY_TIP);
       clearBtn.textContent = 'Clear';
 
+      actions.appendChild(clearBtn);
+      head.appendChild(indexEl);
+      head.appendChild(titleEl);
+      head.appendChild(actions);
+
       const liveStatus = doc.createElement('span');
-      liveStatus.className = 'dw-sr-only';
+      liveStatus.className = 'ui-sr-only';
       liveStatus.setAttribute('role', 'status');
       liveStatus.setAttribute('aria-live', 'polite');
       liveStatus.setAttribute('aria-atomic', 'true');
 
-      rootEl.appendChild(canvas);
-      rootEl.appendChild(paperVeil);
-      rootEl.appendChild(emptyCue);
-      rootEl.appendChild(clearBtn);
-      rootEl.appendChild(liveStatus);
+      body.appendChild(canvas);
+      body.appendChild(paperVeil);
+      body.appendChild(emptyCue);
+      body.appendChild(head);
+      body.appendChild(liveStatus);
+      rootEl.appendChild(body);
 
       const engine = Engine.createEngine(customOptions && customOptions.engineOptions);
       const ctx = typeof canvas.getContext === 'function' ? canvas.getContext('2d') : null;
@@ -387,6 +413,12 @@
         rootEl.classList.toggle('has-ink', hasInk);
         rootEl.classList.toggle('is-drawing', isDrawing);
         clearBtn.setAttribute('aria-disabled', hasInk ? 'false' : 'true');
+        // The tip only explains the disabled state; an enabled Clear needs none.
+        if (hasInk) {
+          clearBtn.removeAttribute('data-tip');
+        } else {
+          clearBtn.setAttribute('data-tip', CLEAR_EMPTY_TIP);
+        }
       }
 
       function cancelClearVeil() {

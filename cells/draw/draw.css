@@ -1,70 +1,43 @@
 /* ==========================================================================
    Freehand Drawing Sketchpad (`cells/draw/draw.css`)
-   Pure Zero-Chrome Sketchpad — Apple Notes / Teenage Engineering Minimalism
-   Strictly scoped to .cell--draw and .dw-*.
-   Harmonized with index.html (#fafafa grid bg, #ffffff cell, #e5e5e5 border)
-   and sibling Swiss-Braun tokens (#141413 ink, #d4d4d0 strong border).
+   Zero-chrome sheet of paper on the shared UI system (ui/NOTES.md):
+   `.ui-tile` + `.ui-tile-body--flush` + `.ui-tile-head--overlay` + `.ui-btn--sm`.
+   This file keeps only what is specific to the sheet. Scoped to .cell--draw / .dw-*.
    ========================================================================== */
 
+/* (0,2,0) beats the page's bare `.cell` rule in any load order. */
 .cell--draw,
 .cell.cell--draw {
-  --dw-paper: #ffffff;
-  --dw-ink: #141413;
-  --dw-ink-muted: #6e6e6a;
-  --dw-border: #e5e5e5;
-  --dw-border-strong: #d4d4d0;
-  --dw-border-hover: #b8b8b2;
-  --dw-pill-bg: rgba(255, 255, 255, 0.86);
-  --dw-pill-bg-idle: rgba(255, 255, 255, 0.72);
-  --dw-pill-bg-hover: rgba(246, 246, 244, 0.96);
-  --dw-pill-bg-active: rgba(236, 236, 232, 0.98);
-  --dw-focus: #2563eb;
-  --dw-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --dw-paper: var(--ui-surface);
+  --dw-ink: var(--ui-ink);      /* read by ui.js readInkColor() for canvas strokes */
 
-  position: relative;
-  overflow: hidden;
   background: var(--dw-paper);
-  border-color: var(--dw-border);
-  color: var(--dw-ink);
+  border-color: var(--ui-hairline);
   color-scheme: light;
-  container-type: inline-size;
-  container-name: dw-card;
-  font-family: var(--dw-sans);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: contain;
 }
 
+/* Dark hook: nothing on the page sets data-theme today. Re-declares the shared
+   tokens inside the tile so the sheet, the ink, the label and Clear all follow. */
 [data-theme="dark"] .cell--draw,
 [data-theme="dark"] .cell.cell--draw,
 .cell--draw[data-theme="dark"],
 .cell.cell--draw[data-theme="dark"] {
-  --dw-paper: #141413;
-  --dw-ink: #f5f5f3;
-  --dw-ink-muted: #9a9a94;
-  --dw-border: #2a2a28;
-  --dw-border-strong: #4a4a45;
-  --dw-border-hover: #575752;
-  --dw-pill-bg: rgba(28, 28, 26, 0.86);
-  --dw-pill-bg-idle: rgba(24, 24, 22, 0.68);
-  --dw-pill-bg-hover: rgba(38, 38, 35, 0.94);
-  --dw-pill-bg-active: rgba(48, 48, 44, 0.98);
-  --dw-focus: #60a5fa;
-  background: var(--dw-paper);
-  border-color: var(--dw-border);
+  --ui-surface: #141413;
+  --ui-well: #1e1e1c;
+  --ui-ink: #f5f5f3;
+  --ui-ink-2: #c8c8c2;
+  --ui-ink-3: #9a9a94;
+  --ui-hairline: #2a2a28;
+  --ui-line: #4a4a45;
+  --ui-focus: #60a5fa;
   color-scheme: dark;
 }
 
-.cell--draw *,
-.cell--draw *::before,
-.cell--draw *::after {
-  box-sizing: border-box;
-}
-
-/* Full-bleed drawing sheet — 100% of cell height & width on phone and laptop */
+/* Full-bleed sheet: the whole flush body, under the overlay header. */
 .dw-canvas {
   position: absolute;
   inset: 0;
@@ -73,14 +46,12 @@
   display: block;
   z-index: 1;
   touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
   -webkit-touch-callout: none;
   -webkit-user-drag: none;
   cursor: crosshair;
 }
 
-/* Non-interactive paper refresh veil for gentle 130ms clear transition */
+/* Paper veil: fades the cleared sheet back in. Duration = ui.js CLEAR_FADE_MS. */
 .dw-paper-veil {
   position: absolute;
   inset: 0;
@@ -90,34 +61,32 @@
   opacity: 0;
 }
 
+/* Two identical keyframes: alternating the name restarts the fade on rapid clears. */
 @keyframes dw-paper-clear-a {
-  0% {
-    opacity: 0.82;
-  }
-  100% {
-    opacity: 0;
-  }
+  from { opacity: 0.82; }
+  to { opacity: 0; }
 }
 
 @keyframes dw-paper-clear-b {
-  0% {
-    opacity: 0.82;
-  }
-  100% {
-    opacity: 0;
-  }
+  from { opacity: 0.82; }
+  to { opacity: 0; }
 }
 
 .cell--draw.is-clearing .dw-paper-veil,
 .cell--draw.is-clearing[data-clear-phase="a"] .dw-paper-veil {
-  animation: dw-paper-clear-a 130ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: dw-paper-clear-a var(--ui-dur) var(--ui-ease) forwards;
 }
 
 .cell--draw.is-clearing[data-clear-phase="b"] .dw-paper-veil {
-  animation: dw-paper-clear-b 130ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: dw-paper-clear-b var(--ui-dur) var(--ui-ease) forwards;
 }
 
-/* Whisper-light centered empty-state cue — vanishes in 0ms on first pointerdown */
+/* Overlay header sits above the veil; index + title let strokes through (base). */
+.cell--draw .ui-tile-head--overlay {
+  z-index: 3;
+}
+
+/* Empty state: pencil + the inputs that work. Gone on the first pointerdown. */
 .dw-empty {
   position: absolute;
   inset: 0;
@@ -126,12 +95,10 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: var(--ui-2);
   pointer-events: none;
-  color: var(--dw-ink-muted);
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 130ms ease, visibility 0s linear;
+  color: var(--ui-ink-3);
+  transition: opacity var(--ui-dur) var(--ui-ease), visibility 0s linear;
 }
 
 .cell--draw.is-drawing .dw-empty,
@@ -142,142 +109,33 @@
 }
 
 .dw-empty-icon {
-  width: 16px;
-  height: 16px;
-  display: block;
+  width: var(--ui-4);
+  height: var(--ui-4);
   flex-shrink: 0;
-  opacity: 0.92;
 }
 
 .dw-empty-label {
-  font-family: var(--dw-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  line-height: 1;
-}
-
-/* Floating translucent frosted pill Clear button (strictly the single button) */
-.dw-clear {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 3;
-  appearance: none;
-  -webkit-appearance: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  padding: 0 9px;
-  margin: 0;
-  border-radius: 999px;
-  border: 1px solid var(--dw-border-strong);
-  background: var(--dw-pill-bg);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--dw-ink);
-  font-family: var(--dw-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: -0.005em;
-  line-height: 1;
   white-space: nowrap;
-  cursor: pointer;
-  touch-action: manipulation;
-  user-select: none;
-  -webkit-user-select: none;
-  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.05);
-  transition:
-    opacity 130ms ease,
-    background-color 130ms ease,
-    border-color 130ms ease,
-    color 130ms ease,
-    transform 100ms ease,
-    box-shadow 130ms ease;
 }
 
-/* Pass pointer/touch drawing straight through when canvas is empty or mid-stroke,
-   while keeping <button aria-disabled="true"> keyboard-focusable via Tab. */
-.dw-clear[aria-disabled="true"] {
-  color: var(--dw-ink-muted);
-  border-color: var(--dw-border);
-  background: var(--dw-pill-bg-idle);
-  box-shadow: none;
-  opacity: 0.68;
-  cursor: default;
-  pointer-events: none;
-}
-
+/* Clear is a shared .ui-btn--sm in the overlay actions. Disabled (empty sheet) it
+   still takes the pointer so its "Nothing to clear yet." tip shows; mid-stroke it
+   lets the captured stroke sweep under it. */
 .cell--draw.is-drawing .dw-clear {
   pointer-events: none;
 }
 
-/* Expand invisible 42px+ touch target on coarse pointers (phones/tablets) only,
-   preserving pixel-exact crosshair drawing near the pill on laptop mouse/trackpad. */
+/* Phones and tablets: 44 px touch target around the 24 px button. */
 @media (pointer: coarse) {
-  .dw-clear:not([aria-disabled="true"])::after {
-    content: "";
-    position: absolute;
+  .dw-clear::after {
     inset: -10px;
   }
 }
 
-.dw-clear:not([aria-disabled="true"]):hover {
-  background: var(--dw-pill-bg-hover);
-  border-color: var(--dw-border-hover);
-}
-
-.dw-clear:not([aria-disabled="true"]):active {
-  transform: scale(0.96);
-  background: var(--dw-pill-bg-active);
-}
-
-.dw-clear:focus-visible {
-  outline: 2px solid var(--dw-focus);
-  outline-offset: 2px;
-}
-
-.dw-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-  pointer-events: none;
-}
-
-/* Micro-tile adaptation (175x131px mobile 2-col & 140x105px MotionGrid min) */
-@container dw-card (max-width: 220px) {
-  .dw-clear {
-    top: 6px;
-    right: 6px;
-    height: 20px;
-    padding: 0 7.5px;
-    font-size: 10px;
-  }
-
-  @media (pointer: coarse) {
-    .dw-clear:not([aria-disabled="true"])::after {
-      inset: -11px;
-    }
-  }
-
-  .dw-empty {
-    gap: 3px;
-  }
-
-  .dw-empty-icon {
-    width: 13px;
-    height: 13px;
-  }
-
+/* Too narrow for the 126 px input line (Motion's 140 px minimum): pencil only. */
+@container ui-tile (max-width: 159px) {
   .dw-empty-label {
-    font-size: 10px;
+    display: none;
   }
 }
 
@@ -292,14 +150,11 @@
     background: ButtonFace;
     color: ButtonText;
     border: 1px solid ButtonText;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 
   .dw-clear[aria-disabled="true"] {
     color: GrayText;
     border-color: GrayText;
-    opacity: 1;
   }
 
   .dw-clear:focus-visible {
@@ -309,8 +164,6 @@
 
 @media (prefers-reduced-motion: reduce) {
   .dw-empty,
-  .dw-clear,
-  .dw-paper-veil,
   .cell--draw.is-clearing .dw-paper-veil {
     transition: none !important;
     animation: none !important;

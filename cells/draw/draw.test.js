@@ -220,6 +220,11 @@ function createSimulatedDom(initialRect, initialInk) {
       getAttribute(k) {
         return attrs.has(k) ? attrs.get(k) : null;
       },
+      removeAttribute(k) {
+        if (!attrs.has(k)) return;
+        attrs.delete(k);
+        notifyAttributeMutation(el, k);
+      },
       appendChild(child) {
         if (child.parentNode) {
           child.parentNode.removeChild(child);
@@ -676,6 +681,20 @@ test('Simulated DOM/Canvas mount invariants, single button rule, fractional DPR,
   assert.equal(buttons[0].textContent, 'Clear');
   assert.equal(buttons[0].disabled, false, 'Clear button must NEVER set disabled=true');
   assert.equal(buttons[0].getAttribute('aria-disabled'), 'true');
+  assert.equal(buttons[0].getAttribute('data-tip'), 'Nothing to clear yet.');
+  assert.ok(buttons[0].classList.contains('dw-clear'));
+  assert.ok(buttons[0].classList.contains('ui-btn'));
+
+  // Shared tile anatomy: flush body + overlay head (09 · Draw) holding Clear
+  assert.ok(dom.section.classList.contains('ui-tile'));
+  assert.equal(dom.section.querySelectorAll('.ui-tile-body--flush').length, 1);
+  const overlayHead = dom.section.querySelector('.ui-tile-head--overlay');
+  assert.ok(overlayHead);
+  assert.equal(overlayHead.querySelector('.ui-tile-index').textContent, '09');
+  assert.equal(overlayHead.querySelector('.ui-tile-title').textContent, 'Draw');
+  assert.equal(overlayHead.querySelector('button'), buttons[0]);
+  // Empty cue does not repeat the title
+  assert.notEqual(instance.emptyCue.textContent, 'Draw');
 
   // Fractional CSS grid width exact-edge setTransform(targetW / rect.width, ...)
   assert.equal(instance.canvas.width, 351);
@@ -738,6 +757,7 @@ test('Simulated DOM/Canvas mount invariants, single button rule, fractional DPR,
   assert.equal(dom.section.classList.contains('is-drawing'), true);
   assert.equal(dom.section.classList.contains('has-ink'), true);
   assert.equal(instance.clearBtn.getAttribute('aria-disabled'), 'false');
+  assert.equal(instance.clearBtn.getAttribute('data-tip'), null, 'enabled Clear has no tip');
 
   // Second concurrent finger ignored
   instance.canvas.dispatchEvent({
@@ -842,6 +862,7 @@ test('Simulated DOM/Canvas mount invariants, single button rule, fractional DPR,
   assert.equal(instance.engine.isEmpty(), true);
   assert.equal(dom.section.classList.contains('is-clearing'), true);
   assert.equal(instance.clearBtn.getAttribute('aria-disabled'), 'true');
+  assert.equal(instance.clearBtn.getAttribute('data-tip'), 'Nothing to clear yet.');
   assert.equal(instance.clearBtn.disabled, false);
   await new Promise((r) => setTimeout(r, 25));
   assert.equal(instance.liveStatus.textContent, 'Canvas cleared');
@@ -906,9 +927,15 @@ test('Classic <script defer> IIFE execution over file:// with zero DOM string in
 
   assert.ok(cssSrc.includes('.cell--draw'));
   assert.ok(cssSrc.includes('.cell.cell--draw'));
-  assert.ok(cssSrc.includes('#6e6e6a'));
-  assert.ok(cssSrc.includes('var(--dw-focus)'));
+  // Sheet and ink come from the shared tokens; the canvas reads --dw-ink.
+  assert.match(cssSrc, /--dw-paper:\s*var\(--ui-surface\);/);
+  assert.match(cssSrc, /--dw-ink:\s*var\(--ui-ink\);/);
+  // Clear's focus ring and hit area come from ui/base.css (.ui-btn--sm); the cell
+  // only widens the hit area on coarse pointers.
+  assert.ok(uiSrc.includes("'dw-clear ui-btn ui-btn--sm'"));
   assert.ok(cssSrc.includes('@media (pointer: coarse)'));
+  // Disabled Clear must take the pointer (hover tip), so no pass-through rule.
+  assert.equal(/\.dw-clear\[aria-disabled="true"\]\s*\{[^}]*pointer-events:\s*none/.test(cssSrc), false);
   assert.ok(cssSrc.includes('@media (forced-colors: active)'));
   assert.ok(cssSrc.includes('prefers-reduced-motion: reduce'));
   assert.equal(Engine.denormalizePoint, undefined);
@@ -1660,16 +1687,17 @@ test('Dark-mode CSS specificity & forced-colors contract beat index.html .cell r
   assert.deepEqual(darkAncestorSpec, [0, 3]);
   assert.deepEqual(darkSelfSpec, [0, 3]);
 
-  // Verify light rule includes .cell.cell--draw with background & border-color
+  // Verify light rule includes .cell.cell--draw with token background & border-color
   assert.match(
     drawCss,
-    /\.cell--draw,\s*\.cell\.cell--draw\s*\{[^}]*background:\s*var\(--dw-paper\);[^}]*border-color:\s*var\(--dw-border\);/s
+    /\.cell--draw,\s*\.cell\.cell--draw\s*\{[^}]*--dw-paper:\s*var\(--ui-surface\);[^}]*--dw-ink:\s*var\(--ui-ink\);[^}]*background:\s*var\(--dw-paper\);[^}]*border-color:\s*var\(--ui-hairline\);/s
   );
 
-  // Verify dark rule includes .cell.cell--draw specificity, #4a4a45 strong border, background & border-color
+  // Verify dark rule (0,3,0) re-declares the shared tokens inside the tile, so the
+  // light rule's var(--dw-paper)/var(--ui-hairline) and every ui- class resolve dark.
   assert.match(
     drawCss,
-    /\[data-theme="dark"\]\s*\.cell\.cell--draw,\s*\.cell--draw\[data-theme="dark"\],\s*\.cell\.cell--draw\[data-theme="dark"\]\s*\{[^}]*--dw-paper:\s*#141413;[^}]*--dw-ink:\s*#f5f5f3;[^}]*--dw-border:\s*#2a2a28;[^}]*--dw-border-strong:\s*#4a4a45;[^}]*background:\s*var\(--dw-paper\);[^}]*border-color:\s*var\(--dw-border\);/s
+    /\[data-theme="dark"\]\s*\.cell\.cell--draw,\s*\.cell--draw\[data-theme="dark"\],\s*\.cell\.cell--draw\[data-theme="dark"\]\s*\{[^}]*--ui-surface:\s*#141413;[^}]*--ui-ink:\s*#f5f5f3;[^}]*--ui-hairline:\s*#2a2a28;[^}]*--ui-line:\s*#4a4a45;[^}]*color-scheme:\s*dark;/s
   );
 
   // Verify @media (forced-colors: active) locks paper surface while preserving native system Clear button colors
