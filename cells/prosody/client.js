@@ -5,16 +5,19 @@
 
   const MODEL = 'gemini-2.5-flash';
   const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent';
+  const REQUEST_TIMEOUT_MS = 25000;
 
   // Share the same storage keys as Cell #1 so a key entered once works across the grid.
   const SESSION_KEY = 'dc_gemini_api_key_session';
   const LOCAL_KEY = 'dc_gemini_api_key_local';
   let memoryKey = '';
+  let storageRestricted = false;
 
   function safeGet(store, key) {
     try {
       return (store && store.getItem(key)) || '';
     } catch (_e) {
+      storageRestricted = true;
       return '';
     }
   }
@@ -24,6 +27,7 @@
       if (store) store.setItem(key, val);
       return true;
     } catch (_e) {
+      storageRestricted = true;
       return false;
     }
   }
@@ -32,13 +36,12 @@
     try {
       if (store) store.removeItem(key);
     } catch (_e) {
-      // ignore
+      storageRestricted = true;
     }
   }
 
   const KeyStore = {
     get: function () {
-      if (memoryKey) return memoryKey;
       const s = safeGet(global.sessionStorage, SESSION_KEY);
       if (s) {
         memoryKey = s;
@@ -49,12 +52,16 @@
         memoryKey = l;
         return l;
       }
-      return '';
+      if (!storageRestricted) {
+        memoryKey = '';
+      }
+      return memoryKey;
     },
     set: function (rawKey) {
       const cleaned = String(rawKey || '').trim();
       memoryKey = cleaned;
       safeRemove(global.sessionStorage, SESSION_KEY);
+      safeRemove(global.localStorage, LOCAL_KEY);
       if (cleaned) {
         safeSet(global.sessionStorage, SESSION_KEY, cleaned);
       }
@@ -107,51 +114,91 @@
     });
   }
 
-  function analyzeAudioLive(audioBlob, apiKey, signal) {
+  function normalizeResult(result) {
+    const dirRaw = String((result && result.direction) || 'none').toLowerCase();
+    const direction = ['bigger', 'smaller', 'reset', 'none'].indexOf(dirRaw) >= 0 ? dirRaw : 'none';
+    const rawDelta = Math.round(Number(result && result.delta_percent) || 0);
+    const clampedMag = Math.min(40, Math.abs(rawDelta));
+    let delta = 0;
+    if (direction === 'smaller') delta = -clampedMag;
+    else if (direction === 'bigger') delta = clampedMag;
+
+    return {
+      mode: 'live',
+      transcript: String((result && result.transcript) || '').trim(),
+      direction: direction,
+      delta_percent: delta,
+      emphasized_word: String((result && result.emphasized_word) || '').trim(),
+      prosody_note: String((result && result.prosody_note) || '').trim()
+    };
+  }
+
+  function analyzeAudioLive(audioBlob, apiKey, externalSignal) {
     const key = String(apiKey || '').trim();
     if (!key) {
       return Promise.reject(new Error('Missing Gemini API key.'));
     }
 
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
+
+    function onExternalAbort() {
+      controller.abort();
+    }
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        clearTimeout(timer);
+        return Promise.reject(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      }
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+
     const mimeType = (audioBlob && audioBlob.type ? audioBlob.type.split(';')[0] : '') || 'audio/webm';
 
-    return blobToBase64(audioBlob).then(function (base64Data) {
-      const payload = {
-        systemInstruction: {
-          parts: [{ text: SYSTEM_INSTRUCTION }]
-        },
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: mimeType,
-                  data: base64Data
+    return blobToBase64(audioBlob)
+      .then(function (base64Data) {
+        const payload = {
+          systemInstruction: {
+            parts: [{ text: SYSTEM_INSTRUCTION }]
+          },
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType,
+                    data: base64Data
+                  }
+                },
+                {
+                  text: 'Analyze the vocal emphasis and prosody in this audio command and output the button size adjustment JSON.'
                 }
-              },
-              {
-                text: 'Analyze the vocal emphasis and prosody in this audio command and output the button size adjustment JSON.'
-              }
-            ]
+              ]
+            }
+          ],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: RESPONSE_SCHEMA,
+            temperature: 0.2
           }
-        ],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
-          temperature: 0.2
-        }
-      };
+        };
 
-      return fetch(ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': key
-        },
-        body: JSON.stringify(payload),
-        signal: signal
-      }).then(function (resp) {
+        return fetch(ENDPOINT, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal
+        });
+      })
+      .then(function (resp) {
         return resp.text().then(function (text) {
           let parsed = null;
           try {
@@ -163,24 +210,40 @@
             const msg = (parsed && parsed.error && parsed.error.message) || ('HTTP ' + resp.status);
             throw new Error(msg);
           }
-          const candidate = parsed && parsed.candidates && parsed.candidates[0];
-          const rawJson = candidate && candidate.content && candidate.content.parts && candidate.content.parts[0] && candidate.content.parts[0].text;
-          if (!rawJson) {
-            throw new Error('Empty response from Gemini audio model.');
+          const blockReason = parsed && parsed.promptFeedback && parsed.promptFeedback.blockReason;
+          if (blockReason) {
+            throw new Error('Audio blocked by Gemini safety filter (' + blockReason + ').');
           }
-          const result = JSON.parse(rawJson);
-          const delta = Math.max(-40, Math.min(40, Math.round(Number(result.delta_percent) || 0)));
-          return {
-            mode: 'live',
-            transcript: String(result.transcript || '').trim(),
-            direction: String(result.direction || 'none'),
-            delta_percent: delta,
-            emphasized_word: String(result.emphasized_word || '').trim(),
-            prosody_note: String(result.prosody_note || '').trim()
-          };
+          const candidate = parsed && parsed.candidates && parsed.candidates[0];
+          const parts = (candidate && candidate.content && Array.isArray(candidate.content.parts)) ? candidate.content.parts : [];
+          const textPart = parts.find(function (p) {
+            return p && !p.thought && typeof p.text === 'string' && p.text.trim();
+          });
+          if (!textPart) {
+            const finish = candidate && candidate.finishReason ? ' (' + candidate.finishReason + ')' : '';
+            throw new Error('Empty response from Gemini audio model' + finish + '.');
+          }
+          let result;
+          try {
+            result = JSON.parse(textPart.text);
+          } catch (_e) {
+            throw new Error('Malformed JSON returned by Gemini audio model.');
+          }
+          return normalizeResult(result);
         });
+      })
+      .catch(function (err) {
+        if (err && err.name === 'AbortError' && timedOut) {
+          throw new Error('Request timed out after 25s.');
+        }
+        throw err;
+      })
+      .finally(function () {
+        clearTimeout(timer);
+        if (externalSignal) {
+          externalSignal.removeEventListener('abort', onExternalAbort);
+        }
       });
-    });
   }
 
   // Preset prosody demos so the cell is immediately testable even without a live API key.
