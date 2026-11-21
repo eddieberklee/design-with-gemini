@@ -18,6 +18,8 @@
         if (v === undefined || v === null || v === false) return;
         if (k === 'className') node.className = v;
         else if (k === 'textContent') node.textContent = String(v);
+        else if (k === 'value') node.value = String(v);
+        else if (k === 'checked') node.checked = Boolean(v);
         else if (k === 'dataset') {
           Object.keys(v).forEach(function (dk) {
             if (v[dk] !== undefined && v[dk] !== null) node.dataset[dk] = String(v[dk]);
@@ -62,6 +64,13 @@
     return (n > 0 ? '+' : '−') + Math.abs(n).toFixed(2);
   }
 
+  function computeScorePointerPct(score, min, max, cols) {
+    const span = Math.max(1, max - min);
+    const normalized = Schema.clamp((score - min) / span, 0, 1);
+    const colCount = Math.max(2, cols);
+    return ((0.5 + normalized * (colCount - 1)) / colCount) * 100;
+  }
+
   function copyToClipboard(text) {
     if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
       return navigator.clipboard.writeText(text);
@@ -90,6 +99,23 @@
     return threshold - p < 0.12 ? 'NO · MARGINAL' : 'LEAN NO';
   }
 
+  function snapshotStateForNormalization(state) {
+    return {
+      questions: (state.questions || []).map(function (q) {
+        return {
+          key: q.key,
+          type: q.type,
+          options: Array.isArray(q.options)
+            ? q.options.map(function (o) {
+                return { key: o.key, description: o.description };
+              })
+            : undefined,
+          levels: Array.isArray(q.levels) ? q.levels.slice() : undefined
+        };
+      })
+    };
+  }
+
   function mountDecisionsCell(rootEl) {
     if (!rootEl) return;
 
@@ -98,23 +124,25 @@
 
     const app = {
       state: initialPreset,
+      customTextEdited: false,
       mode: savedKey ? 'live' : 'simulated',
       isRunning: false,
       activeTab: 'results', // 'results' | 'request' | 'response'
       requestFormat: 'json', // 'json' | 'curl'
       includeBase64: false,
+      mediaExpanded: false,
       showKeyPopover: false,
       keyVisible: false,
       runSeq: 0,
+      uploadSeq: 0,
       abortController: null,
       result: null, // { mode, httpStatus, latencyMs, normalized, raw, evaluatedAt }
       prevResult: null,
       error: null,
       uploadNotice: '',
-      returnFocusEl: null
+      returnFocusRole: 'expand-btn'
     };
 
-    // Screen-reader live region
     const liveRegion = el('div', {
       className: 'dc-sr-only',
       role: 'status',
@@ -130,14 +158,12 @@
       }, 20);
     }
 
-    // Create <dialog> portal once on document.body
     const dialog = el('dialog', {
       className: 'dc-dialog',
       'aria-labelledby': 'dc-wb-heading'
     });
     document.body.appendChild(dialog);
 
-    // Persistent Workbench skeleton refs (so typing in inputs never destroys focus)
     const wbRefs = {};
 
     function triggerScanPulse() {
@@ -167,6 +193,7 @@
         renderWorkbenchValidation(validation);
         updateRunButton(validation);
         if (wbRefs.rightPane) renderWorkbenchWirePreview();
+        renderCard();
         return;
       }
 
@@ -180,6 +207,7 @@
       const keepGhost = !(opts && opts.resetGhost);
 
       if (app.mode === 'simulated') {
+        setLoadingState(false);
         app.error = null;
         if (keepGhost && app.result) {
           app.prevResult = app.result;
@@ -208,6 +236,7 @@
       // Live mode — never silently fall back to simulated!
       const apiKey = Client.KeyStore.get();
       if (!apiKey) {
+        setLoadingState(false);
         app.error = {
           code: 'MISSING_KEY',
           httpStatus: 0,
@@ -224,6 +253,7 @@
         return;
       }
 
+      const stateSnapshot = snapshotStateForNormalization(app.state);
       const ac = new AbortController();
       app.abortController = ac;
       app.error = null;
@@ -245,7 +275,7 @@
             mode: 'live',
             httpStatus: liveRes.httpStatus,
             latencyMs: liveRes.latencyMs,
-            normalized: Schema.normalizeResponse(liveRes.raw, app.state),
+            normalized: Schema.normalizeResponse(liveRes.raw, stateSnapshot),
             raw: liveRes.raw,
             evaluatedAt: liveRes.evaluatedAt
           };
@@ -287,7 +317,10 @@
 
     function switchPreset(presetId, variantIndex) {
       const samePreset = app.state.presetId === presetId;
+      app.uploadSeq++;
       app.state = Presets.createPresetState(presetId, variantIndex);
+      app.customTextEdited = false;
+      app.mediaExpanded = false;
       app.uploadNotice = '';
       if (dialog.open) {
         renderWorkbenchLeft();
@@ -300,10 +333,12 @@
       const preset = Presets.getPreset(app.state.presetId);
       const variant = preset.variants[variantIndex];
       if (!variant) return;
+      app.uploadSeq++;
       app.state.variantIndex = variantIndex;
       app.state.variantId = variant.id;
       app.state.inputText = variant.text;
       app.state.image = variant.imageKind ? Presets.generateSampleImage(variant.imageKind) : null;
+      app.customTextEdited = false;
       app.uploadNotice = '';
       if (dialog.open) {
         renderWorkbenchLeft();
@@ -312,28 +347,60 @@
       runEvaluation({ resetGhost: false });
     }
 
-    function bindThresholdDrag(trackEl, pinEl, questionObj) {
+    // In-place threshold drag & keyboard slider: never detaches the active track/pin
+    function bindThresholdDrag(surface, controls) {
+      const trackEl = controls.trackEl;
+      const pinEl = controls.pinEl;
+      const fillEl = controls.fillEl;
+      const questionObj = controls.questionObj;
+      const prob = controls.prob;
+
+      function applyInPlace(nextThreshold) {
+        questionObj.threshold = nextThreshold;
+        const pct = Math.round(nextThreshold * 100) + '%';
+        const isYes = prob >= nextThreshold;
+        pinEl.style.left = pct;
+        pinEl.setAttribute('aria-valuenow', fmtProb(nextThreshold));
+        fillEl.classList.toggle('is-below', !isYes);
+        trackEl.title = 'Drag to adjust YES/NO threshold (τ = ' + fmtProb(nextThreshold) + ')';
+
+        if (controls.subEl) {
+          controls.subEl.textContent = (isYes ? 'YES' : 'NO') + ' · τ ' + fmtProb(nextThreshold);
+        }
+        if (controls.tickEl) {
+          controls.tickEl.textContent = 'τ = ' + fmtProb(nextThreshold) + ' (drag)';
+        }
+        if (controls.verdictEl) {
+          controls.verdictEl.textContent = noulBand(prob, nextThreshold);
+          controls.verdictEl.classList.toggle('is-no', !isYes);
+        }
+
+        // Sync only the passive surface without touching the actively dragged/focused DOM node
+        if (surface === 'card') {
+          if (dialog.open && app.activeTab === 'results') {
+            renderWorkbenchResultsOnly();
+          }
+        } else {
+          renderCard();
+        }
+      }
+
       function updateFromClientX(clientX) {
         const rect = trackEl.getBoundingClientRect();
         if (!rect.width) return;
         const ratio = (clientX - rect.left) / rect.width;
         const clamped = Math.round(Schema.clamp(ratio, 0.05, 0.95) * 100) / 100;
         if (questionObj.threshold !== clamped) {
-          questionObj.threshold = clamped;
-          renderCard();
-          if (dialog.open && app.activeTab === 'results') {
-            renderWorkbenchResultsOnly();
-          }
+          applyInPlace(clamped);
         }
       }
 
-      function onPointerDown(e) {
+      trackEl.addEventListener('pointerdown', function (e) {
         e.preventDefault();
         e.stopPropagation();
-        const target = e.currentTarget;
-        if (target.setPointerCapture) {
+        if (trackEl.setPointerCapture) {
           try {
-            target.setPointerCapture(e.pointerId);
+            trackEl.setPointerCapture(e.pointerId);
           } catch (_err) {
             // ignore
           }
@@ -350,9 +417,7 @@
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
         window.addEventListener('pointercancel', onUp);
-      }
-
-      trackEl.addEventListener('pointerdown', onPointerDown);
+      });
 
       pinEl.addEventListener('keydown', function (e) {
         const step = e.shiftKey ? 0.01 : 0.05;
@@ -363,10 +428,9 @@
         else if (e.key === 'End') next = 0.95;
         if (next !== null) {
           e.preventDefault();
-          questionObj.threshold = Math.round(Schema.clamp(next, 0.05, 0.95) * 100) / 100;
-          renderCard();
-          if (dialog.open && app.activeTab === 'results') {
-            renderWorkbenchResultsOnly();
+          const clamped = Math.round(Schema.clamp(next, 0.05, 0.95) * 100) / 100;
+          if (questionObj.threshold !== clamped) {
+            applyInPlace(clamped);
           }
         }
       });
@@ -378,8 +442,9 @@
     function renderCard() {
       const scanline = el('div', { className: 'dc-scanline', 'aria-hidden': 'true' });
 
-      const modeKey = app.error ? 'error' : app.mode === 'live' ? 'live' : 'simulated';
-      const modeLabel = app.error ? 'LIVE ERR' : app.mode === 'live' ? 'LIVE' : 'SIM';
+      const effectiveLive = app.mode === 'live' && Boolean(Client.KeyStore.get());
+      const modeKey = app.error ? 'error' : effectiveLive ? 'live' : 'simulated';
+      const modeLabel = app.error ? 'LIVE ERR' : effectiveLive ? 'LIVE' : 'SIM';
 
       const header = el('header', { className: 'dc-card-header' }, [
         el('div', { className: 'dc-card-brand' }, [
@@ -392,10 +457,10 @@
             {
               type: 'button',
               className: 'dc-mode-pill',
-              dataset: { mode: modeKey },
-              title: app.mode === 'live' ? 'Live Gemini Decisions API — click to manage key' : 'Simulated preview — click to add Gemini API key',
-              onClick: function (e) {
-                openWorkbench(e.currentTarget, { openKeyPopover: true });
+              dataset: { mode: modeKey, focusRole: 'mode-pill' },
+              title: effectiveLive ? 'Live Gemini Decisions API — click to manage key' : 'Simulated preview — click to add Gemini API key',
+              onClick: function () {
+                openWorkbench('mode-pill', { openKeyPopover: true });
               }
             },
             [el('span', { className: 'dc-dot', 'aria-hidden': 'true' }), modeLabel]
@@ -405,9 +470,10 @@
             {
               type: 'button',
               className: 'dc-icon-btn',
+              dataset: { focusRole: 'expand-btn' },
               'aria-label': 'Open Decisions API Workbench',
-              onClick: function (e) {
-                openWorkbench(e.currentTarget, { openKeyPopover: false });
+              onClick: function () {
+                openWorkbench('expand-btn', { openKeyPopover: false });
               }
             },
             [el('span', { className: 'dc-expand-label', textContent: 'Lab' }), '↗']
@@ -452,10 +518,13 @@
           ])
         );
       }
+      const specimenSummary = app.customTextEdited
+        ? (app.state.inputText.trim() || (app.state.image ? app.state.image.name : ''))
+        : (activeVariant ? activeVariant.summary : app.state.inputText);
       specimenChildren.push(
         el('div', {
           className: 'dc-specimen-text',
-          textContent: activeVariant ? activeVariant.summary : app.state.inputText,
+          textContent: specimenSummary,
           title: app.state.inputText
         })
       );
@@ -468,14 +537,13 @@
         el('div', { className: 'dc-specimen-row' }, specimenChildren)
       ]);
 
-      // Gauge Rack
       const rack = el('div', { className: 'dc-rack' });
 
       if (app.error) {
         rack.appendChild(
           el('div', { className: 'dc-card-error', role: 'alert' }, [
             el('div', { className: 'dc-card-error-title', textContent: app.error.headline }),
-            el('div', { textContent: app.error.remediation }),
+            el('div', { className: 'dc-card-error-detail', textContent: app.error.remediation }),
             el('div', { className: 'dc-card-error-actions' }, [
               el('button', {
                 type: 'button',
@@ -505,38 +573,39 @@
           return q.enabled !== false;
         });
 
-        // Show up to 3 representative questions (prefer one of each type: noul, choice, score)
         const picks = [];
         ['noul', 'choice', 'score'].forEach(function (t) {
           const found = activeQuestions.find(function (q) {
-            return q.type === t && answers[q.key];
+            const qk = (q.key || '').trim();
+            return q.type === t && Boolean(answers[qk]);
           });
           if (found) picks.push(found);
         });
         activeQuestions.forEach(function (q) {
-          if (picks.length < 3 && picks.indexOf(q) < 0 && answers[q.key]) {
+          const qk = (q.key || '').trim();
+          if (picks.length < 3 && picks.indexOf(q) < 0 && answers[qk]) {
             picks.push(q);
           }
         });
 
         picks.forEach(function (q) {
-          const ans = answers[q.key];
-          const prev = prevAnswers[q.key];
+          const qk = (q.key || '').trim();
+          const ans = answers[qk];
+          const prev = prevAnswers[qk];
           if (!ans) return;
 
           if (ans.type === 'noul') {
             const thresh = Number.isFinite(q.threshold) ? q.threshold : 0.5;
             const isYes = ans.noul >= thresh;
+            const fillEl = el('div', {
+              className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
+              style: { width: Math.round(ans.noul * 100) + '%' }
+            });
             const track = el('div', {
               className: 'dc-noul-track',
               title: 'Drag to adjust YES/NO threshold (τ = ' + fmtProb(thresh) + ')'
             });
-            track.appendChild(
-              el('div', {
-                className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
-                style: { width: Math.round(ans.noul * 100) + '%' }
-              })
-            );
+            track.appendChild(fillEl);
             if (prev && prev.type === 'noul') {
               track.appendChild(
                 el('div', {
@@ -549,7 +618,7 @@
               type: 'button',
               className: 'dc-noul-pin',
               role: 'slider',
-              'aria-label': 'Threshold for ' + q.key,
+              'aria-label': 'Threshold for ' + qk,
               'aria-valuemin': '0.05',
               'aria-valuemax': '0.95',
               'aria-valuenow': fmtProb(thresh),
@@ -562,18 +631,27 @@
                 style: { left: Math.round(ans.noul * 100) + '%' }
               })
             );
-            bindThresholdDrag(track, pin, q);
+            const subEl = el('span', {
+              className: 'dc-gauge-sub',
+              textContent: (isYes ? 'YES' : 'NO') + ' · τ ' + fmtProb(thresh)
+            });
+
+            bindThresholdDrag('card', {
+              trackEl: track,
+              pinEl: pin,
+              fillEl: fillEl,
+              subEl: subEl,
+              questionObj: q,
+              prob: ans.noul
+            });
 
             rack.appendChild(
               el('div', { className: 'dc-gauge-row' }, [
                 el('span', { className: 'dc-type-tag', textContent: 'NOUL' }),
                 el('div', { className: 'dc-gauge-mid' }, [
                   el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: q.key }),
-                    el('span', {
-                      className: 'dc-gauge-sub',
-                      textContent: (isYes ? 'YES' : 'NO') + ' · τ ' + fmtProb(thresh)
-                    })
+                    el('span', { className: 'dc-gauge-key', textContent: qk }),
+                    subEl
                   ]),
                   track
                 ]),
@@ -582,6 +660,7 @@
             );
           } else if (ans.type === 'choice') {
             const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
+            const winnerKey = ans.choice || top.key;
             const ribbon = el('div', {
               className: 'dc-choice-ribbon',
               title: ans.ranked
@@ -608,7 +687,7 @@
                 el('span', { className: 'dc-type-tag', textContent: 'CHOICE' }),
                 el('div', { className: 'dc-gauge-mid' }, [
                   el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: top.key }),
+                    el('span', { className: 'dc-gauge-key', textContent: winnerKey }),
                     el('span', { className: 'dc-gauge-sub', textContent: 'Σ ' + ans.sum.toFixed(2) })
                   ]),
                   ribbon
@@ -618,8 +697,7 @@
             );
           } else if (ans.type === 'score') {
             const cols = Math.max(2, ans.levels.length);
-            const span = Math.max(1, ans.max - ans.min);
-            const evPct = Schema.clamp(((ans.score - ans.min) / span) * 100, 2, 98);
+            const evPct = computeScorePointerPct(ans.score, ans.min, ans.max, cols);
             const mini = el('div', {
               className: 'dc-score-mini',
               style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' },
@@ -645,7 +723,7 @@
                 el('span', { className: 'dc-type-tag', textContent: 'SCORE' }),
                 el('div', { className: 'dc-gauge-mid' }, [
                   el('div', { className: 'dc-gauge-caption' }, [
-                    el('span', { className: 'dc-gauge-key', textContent: q.key }),
+                    el('span', { className: 'dc-gauge-key', textContent: qk }),
                     el('span', { className: 'dc-gauge-sub', textContent: 'σ ' + ans.stdDev.toFixed(2) })
                   ]),
                   mini
@@ -657,16 +735,16 @@
         });
       }
 
-      // Telemetry Footer
       const usage = app.result && app.result.normalized ? app.result.normalized.usage : null;
       const outTok = usage ? usage.total_output_tokens : 0;
       const inTok = usage ? usage.total_input_tokens : 0;
       const qCount = app.state.questions.filter(function (q) {
         return q.enabled !== false;
       }).length;
+      const resultIsLive = Boolean(app.result && app.result.mode === 'live');
       const latencyLabel = app.isRunning
         ? 'running…'
-        : app.result && app.result.mode === 'live'
+        : resultIsLive
           ? app.result.latencyMs + 'ms'
           : 'sim';
 
@@ -677,12 +755,11 @@
         ]),
         el('div', { className: 'dc-footer-right' }, [
           el('span', { className: 'dc-zero-chip', textContent: outTok + ' out tok' }),
-          el('span', { className: 'dc-footer-meta', textContent: (app.mode === 'simulated' ? '~' : '') + inTok + ' in' }),
+          el('span', { className: 'dc-footer-meta', textContent: (resultIsLive ? '' : '~') + inTok + ' in' }),
           el('span', { textContent: latencyLabel })
         ])
       ]);
 
-      // Replace card contents while preserving liveRegion
       while (rootEl.firstChild) rootEl.removeChild(rootEl.firstChild);
       rootEl.appendChild(liveRegion);
       rootEl.appendChild(scanline);
@@ -700,7 +777,6 @@
 
       const scanline = el('div', { className: 'dc-scanline', 'aria-hidden': 'true' });
 
-      // Top Utility Bar
       const presetSelect = el('select', {
         className: 'dc-select',
         'aria-label': 'Choose preset scenario',
@@ -719,10 +795,12 @@
       const modeSeg = el('div', { className: 'dc-seg', role: 'group', 'aria-label': 'Execution mode' });
       wbRefs.modeSeg = modeSeg;
 
-      // Key Popover Anchor
       const keyBtn = el('button', {
         type: 'button',
         className: 'dc-btn',
+        'aria-haspopup': 'dialog',
+        'aria-controls': 'dc-key-popover',
+        'aria-expanded': 'false',
         onClick: function () {
           app.showKeyPopover = !app.showKeyPopover;
           renderKeyPopover();
@@ -733,10 +811,17 @@
       });
       wbRefs.keyBtn = keyBtn;
 
-      const keyPopover = el('div', { className: 'dc-key-popover', hidden: true });
+      const keyPopover = el('div', {
+        id: 'dc-key-popover',
+        className: 'dc-key-popover',
+        role: 'region',
+        'aria-label': 'Gemini API Key configuration',
+        hidden: true
+      });
       wbRefs.keyPopover = keyPopover;
 
       const keyAnchor = el('div', { className: 'dc-key-anchor' }, [keyBtn, keyPopover]);
+      wbRefs.keyAnchor = keyAnchor;
 
       const runBtn = el('button', {
         type: 'button',
@@ -802,9 +887,30 @@
       }
     }
 
+    function updateActiveQuestionsCountLabel() {
+      if (!wbRefs.questionsCountLabel) return;
+      const activeCount = app.state.questions.filter(function (q) {
+        return q.enabled !== false;
+      }).length;
+      wbRefs.questionsCountLabel.textContent = 'Batched Questions (' + activeCount + ' active)';
+    }
+
+    function closeKeyPopover(restoreFocus) {
+      if (!app.showKeyPopover) return;
+      app.showKeyPopover = false;
+      app.keyVisible = false;
+      renderKeyPopover();
+      if (restoreFocus && wbRefs.keyBtn) {
+        wbRefs.keyBtn.focus();
+      }
+    }
+
     function renderKeyPopover() {
       const pop = wbRefs.keyPopover;
       if (!pop) return;
+      if (wbRefs.keyBtn) {
+        wbRefs.keyBtn.setAttribute('aria-expanded', String(app.showKeyPopover));
+      }
       pop.hidden = !app.showKeyPopover;
       if (!app.showKeyPopover) return;
 
@@ -884,7 +990,7 @@
             Client.KeyStore.clear();
             app.mode = 'simulated';
             app.error = null;
-            app.showKeyPopover = false;
+            closeKeyPopover(false);
             renderWorkbenchHeaderControls();
             runEvaluation({ resetGhost: true });
             return;
@@ -892,8 +998,7 @@
           Client.KeyStore.set(val, persistCheck.checked);
           app.mode = 'live';
           app.error = null;
-          app.showKeyPopover = false;
-          app.keyVisible = false;
+          closeKeyPopover(false);
           renderWorkbenchHeaderControls();
           runEvaluation({ resetGhost: true });
         }
@@ -908,8 +1013,7 @@
           Client.KeyStore.clear();
           app.mode = 'simulated';
           app.error = null;
-          app.showKeyPopover = false;
-          app.keyVisible = false;
+          closeKeyPopover(true);
           renderWorkbenchHeaderControls();
           runEvaluation({ resetGhost: true });
         }
@@ -920,9 +1024,7 @@
         className: 'dc-btn dc-btn--ghost dc-btn--sm',
         textContent: 'Close',
         onClick: function () {
-          app.showKeyPopover = false;
-          app.keyVisible = false;
-          renderKeyPopover();
+          closeKeyPopover(true);
         }
       });
 
@@ -964,7 +1066,7 @@
             textContent: m === 'live' ? 'Live API' : 'Simulated',
             onClick: function () {
               if (m === 'live' && !Client.KeyStore.get()) {
-                app.mode = 'live';
+                // Keep app.mode honest ('simulated') until the user saves a key
                 app.showKeyPopover = true;
                 renderWorkbenchHeaderControls();
                 if (wbRefs.keyInput) wbRefs.keyInput.focus();
@@ -981,8 +1083,9 @@
 
       const key = Client.KeyStore.get();
       const storeType = Client.KeyStore.getStorageType();
+      const storeSuffix = storeType === 'local' ? ' (saved)' : storeType === 'memory' ? ' (mem)' : ' (tab)';
       wbRefs.keyBtn.textContent = key
-        ? 'Key ' + Client.KeyStore.mask(key) + (storeType === 'local' ? ' (saved)' : ' (tab)')
+        ? 'Key ' + Client.KeyStore.mask(key) + storeSuffix
         : '+ Gemini API Key';
 
       renderKeyPopover();
@@ -1003,8 +1106,10 @@
     }
 
     function handleImageFile(file) {
+      const token = ++app.uploadSeq;
       Presets.processUploadedImage(file)
         .then(function (imgRecord) {
+          if (token !== app.uploadSeq) return;
           app.state.image = imgRecord;
           app.uploadNotice = imgRecord.resized
             ? 'Auto-resized to ' + imgRecord.width + '×' + imgRecord.height + ' (' + Schema.formatBytes(imgRecord.bytes) + ')'
@@ -1013,6 +1118,7 @@
           runEvaluation({ resetGhost: false });
         })
         .catch(function (err) {
+          if (token !== app.uploadSeq) return;
           app.uploadNotice = err && err.message ? err.message : 'Could not load image.';
           renderWorkbenchLeft();
         });
@@ -1023,7 +1129,6 @@
       if (!left) return;
       clearNode(left);
 
-      // 1. Shared Input Section
       const fileInput = el('input', {
         type: 'file',
         accept: 'image/png,image/jpeg,image/webp,image/gif',
@@ -1042,6 +1147,7 @@
         onChange: function (e) {
           const val = e.target.value;
           if (!val) return;
+          app.uploadSeq++;
           app.state.image = Presets.generateSampleImage(val);
           app.uploadNotice = '';
           e.target.value = '';
@@ -1073,12 +1179,27 @@
 
       if (app.state.image && app.state.image.dataUrl) {
         mediaBox.appendChild(
-          el('div', { className: 'dc-media-preview' }, [
-            el('img', {
-              className: 'dc-media-thumb',
-              src: app.state.image.dataUrl,
-              alt: app.state.image.name
-            }),
+          el('div', { className: 'dc-media-preview' + (app.mediaExpanded ? ' is-expanded' : '') }, [
+            el(
+              'button',
+              {
+                type: 'button',
+                className: 'dc-media-thumb-btn',
+                'aria-label': app.mediaExpanded ? 'Shrink specimen preview' : 'Expand specimen preview',
+                onClick: function () {
+                  app.mediaExpanded = !app.mediaExpanded;
+                  renderWorkbenchLeft();
+                }
+              },
+              [
+                el('img', {
+                  className: 'dc-media-thumb',
+                  src: app.state.image.dataUrl,
+                  alt: app.state.image.name
+                }),
+                el('span', { className: 'dc-media-zoom-hint', textContent: app.mediaExpanded ? '−' : '⤢' })
+              ]
+            ),
             el('div', { className: 'dc-media-meta' }, [
               el('div', { className: 'dc-media-name', textContent: app.state.image.name }),
               el('div', {
@@ -1093,7 +1214,7 @@
                   Schema.formatBytes(app.state.image.bytes)
               }),
               app.uploadNotice
-                ? el('div', { className: 'dc-media-dims', style: { color: '#d94f1e' }, textContent: app.uploadNotice })
+                ? el('div', { className: 'dc-media-notice', textContent: app.uploadNotice })
                 : null
             ])
           ])
@@ -1144,7 +1265,9 @@
                   className: 'dc-btn dc-btn--ghost dc-btn--sm',
                   textContent: 'Remove',
                   onClick: function () {
+                    app.uploadSeq++;
                     app.state.image = null;
+                    app.mediaExpanded = false;
                     app.uploadNotice = '';
                     renderWorkbenchLeft();
                     runEvaluation({ resetGhost: false });
@@ -1165,6 +1288,7 @@
         placeholder: 'Shared text context evaluated against all active questions in one forward pass…',
         onInput: function (e) {
           app.state.inputText = e.target.value;
+          app.customTextEdited = true;
           const v = getValidation();
           renderWorkbenchValidation(v);
           updateRunButton(v);
@@ -1178,7 +1302,7 @@
           el('span', { className: 'dc-section-label', textContent: 'Shared Multimodal Input' }),
           el('span', {
             className: 'dc-mono',
-            style: { fontSize: '10.5px', color: '#8a8a86' },
+            style: { fontSize: '10.5px', color: 'var(--dc-ink-3)' },
             textContent: app.state.image ? 'image + text' : 'text only'
           })
         ]),
@@ -1186,7 +1310,6 @@
         mediaBox
       ]);
 
-      // 2. Question Builder
       const validationBox = el('div', { className: 'dc-validation-box', role: 'alert', hidden: true });
       wbRefs.validationBox = validationBox;
 
@@ -1201,6 +1324,7 @@
           onChange: function (e) {
             q.enabled = e.target.checked;
             card.classList.toggle('is-disabled', !q.enabled);
+            updateActiveQuestionsCountLabel();
             const v = getValidation();
             renderWorkbenchValidation(v);
             updateRunButton(v);
@@ -1454,13 +1578,15 @@
       const activeCount = app.state.questions.filter(function (q) {
         return q.enabled !== false;
       }).length;
+      const questionsCountLabel = el('span', {
+        className: 'dc-section-label',
+        textContent: 'Batched Questions (' + activeCount + ' active)'
+      });
+      wbRefs.questionsCountLabel = questionsCountLabel;
 
       const questionsSection = el('section', { className: 'dc-section' }, [
         el('div', { className: 'dc-section-head' }, [
-          el('span', {
-            className: 'dc-section-label',
-            textContent: 'Batched Questions (' + activeCount + ' active)'
-          }),
+          questionsCountLabel,
           el('div', { style: { display: 'flex', gap: '5px' } }, [
             el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ noul', onClick: function () { addQuestion('noul'); } }),
             el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ choice', onClick: function () { addQuestion('choice'); } }),
@@ -1535,8 +1661,9 @@
       });
 
       activeQuestions.forEach(function (q) {
-        const ans = answers[q.key];
-        const prev = prevAnswers[q.key];
+        const qk = (q.key || '').trim();
+        const ans = answers[qk];
+        const prev = prevAnswers[qk];
         if (!ans) return;
 
         if (ans.type === 'noul') {
@@ -1544,13 +1671,12 @@
           const isYes = ans.noul >= thresh;
           const deltaStr = prev && prev.type === 'noul' ? fmtSignedDelta(ans.noul - prev.noul) : null;
 
+          const fillEl = el('div', {
+            className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
+            style: { width: Math.round(ans.noul * 100) + '%' }
+          });
           const track = el('div', { className: 'dc-noul-track dc-noul-wb-track' });
-          track.appendChild(
-            el('div', {
-              className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
-              style: { width: Math.round(ans.noul * 100) + '%' }
-            })
-          );
+          track.appendChild(fillEl);
           if (prev && prev.type === 'noul') {
             track.appendChild(
               el('div', {
@@ -1564,7 +1690,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
-            'aria-label': 'Decision threshold for ' + q.key,
+            'aria-label': 'Decision threshold for ' + qk,
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
             'aria-valuenow': fmtProb(thresh),
@@ -1577,7 +1703,21 @@
               style: { left: Math.round(ans.noul * 100) + '%' }
             })
           );
-          bindThresholdDrag(track, pin, q);
+          const tickEl = el('span', { textContent: 'τ = ' + fmtProb(thresh) + ' (drag)' });
+          const verdictEl = el('span', {
+            className: 'dc-verdict-badge' + (isYes ? '' : ' is-no'),
+            textContent: noulBand(ans.noul, thresh)
+          });
+
+          bindThresholdDrag('workbench', {
+            trackEl: track,
+            pinEl: pin,
+            fillEl: fillEl,
+            tickEl: tickEl,
+            verdictEl: verdictEl,
+            questionObj: q,
+            prob: ans.noul
+          });
 
           stack.appendChild(
             el('article', { className: 'dc-res-card' }, [
@@ -1585,7 +1725,7 @@
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
                     el('span', { className: 'dc-type-tag', textContent: 'NOUL' }),
-                    el('span', { className: 'dc-res-key', textContent: q.key }),
+                    el('span', { className: 'dc-res-key', textContent: qk }),
                     deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'Δ ' + deltaStr }) : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
@@ -1598,20 +1738,18 @@
               track,
               el('div', { className: 'dc-axis-ticks' }, [
                 el('span', { textContent: '0.01' }),
-                el('span', { textContent: 'τ = ' + fmtProb(thresh) + ' (drag)' }),
+                tickEl,
                 el('span', { textContent: '0.99' })
               ]),
               el('div', { className: 'dc-verdict-row' }, [
-                el('span', {
-                  className: 'dc-verdict-badge' + (isYes ? '' : ' is-no'),
-                  textContent: noulBand(ans.noul, thresh)
-                }),
+                verdictEl,
                 el('span', { className: 'dc-mono', textContent: 'confidence ' + fmtProb(ans.confidence) })
               ])
             ])
           );
         } else if (ans.type === 'choice') {
           const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
+          const winnerKey = ans.choice || top.key;
           const ribbon = el('div', { className: 'dc-choice-ribbon' });
           ans.ranked.forEach(function (r, idx) {
             ribbon.appendChild(
@@ -1631,7 +1769,7 @@
             const prevP = prev && prev.type === 'choice' && prev.probabilities ? Number(prev.probabilities[r.key]) : NaN;
             const barTrack = el('div', { className: 'dc-bar-track' }, [
               el('div', {
-                className: 'dc-bar-fill' + (idx === 0 ? ' is-winner' : ''),
+                className: 'dc-bar-fill' + (r.key === winnerKey || (idx === 0 && !ans.choice) ? ' is-winner' : ''),
                 style: { width: Math.max(1, r.prob * 100) + '%' }
               }),
               Number.isFinite(prevP)
@@ -1661,12 +1799,12 @@
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
                     el('span', { className: 'dc-type-tag', textContent: 'CHOICE' }),
-                    el('span', { className: 'dc-res-key', textContent: q.key })
+                    el('span', { className: 'dc-res-key', textContent: qk })
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
                 el('div', { className: 'dc-res-hero' }, [
-                  el('span', { className: 'dc-hero-num', style: { fontSize: '16px' }, textContent: top.key }),
+                  el('span', { className: 'dc-hero-num', style: { fontSize: '16px' }, textContent: winnerKey }),
                   el('span', {
                     className: 'dc-hero-sub',
                     textContent: 'Σp ' + ans.sum.toFixed(3) + ' · margin +' + ans.margin.toFixed(2)
@@ -1679,8 +1817,7 @@
           );
         } else if (ans.type === 'score') {
           const cols = Math.max(2, ans.levels.length);
-          const span = Math.max(1, ans.max - ans.min);
-          const evPct = Schema.clamp(((ans.score - ans.min) / span) * 100, 3, 97);
+          const evPct = computeScorePointerPct(ans.score, ans.min, ans.max, cols);
           const deltaStr = prev && prev.type === 'score' ? fmtSignedDelta(ans.score - prev.score) : null;
 
           const hist = el('div', {
@@ -1731,7 +1868,7 @@
                 el('div', { className: 'dc-res-title-group' }, [
                   el('div', { className: 'dc-res-key-row' }, [
                     el('span', { className: 'dc-type-tag', textContent: 'SCORE' }),
-                    el('span', { className: 'dc-res-key', textContent: q.key }),
+                    el('span', { className: 'dc-res-key', textContent: qk }),
                     deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'ΔE ' + deltaStr }) : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
@@ -1809,25 +1946,48 @@
         ])
       ]);
 
-      const tabs = el('div', { className: 'dc-tabs', role: 'tablist' }, [
+      const tabSpecs = [
         ['results', 'Calibrated Results'],
         ['request', 'Request & cURL'],
         ['response', 'Raw Response']
-      ].map(function (entry) {
-        return el('button', {
-          type: 'button',
-          role: 'tab',
-          className: 'dc-tab-btn',
-          'aria-selected': String(app.activeTab === entry[0]),
-          textContent: entry[1],
-          onClick: function () {
-            app.activeTab = entry[0];
-            renderWorkbenchRight();
-          }
-        });
-      }));
+      ];
+      const tabs = el(
+        'div',
+        { className: 'dc-tabs', role: 'tablist', 'aria-label': 'Output inspector' },
+        tabSpecs.map(function (entry, idx) {
+          const isSelected = app.activeTab === entry[0];
+          return el('button', {
+            id: 'dc-tab-' + entry[0],
+            type: 'button',
+            role: 'tab',
+            className: 'dc-tab-btn',
+            tabindex: isSelected ? '0' : '-1',
+            'aria-selected': String(isSelected),
+            'aria-controls': 'dc-tabpanel',
+            textContent: entry[1],
+            onClick: function () {
+              app.activeTab = entry[0];
+              renderWorkbenchRight();
+            },
+            onKeydown: function (e) {
+              if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+              e.preventDefault();
+              const nextIdx = (idx + (e.key === 'ArrowRight' ? 1 : tabSpecs.length - 1)) % tabSpecs.length;
+              app.activeTab = tabSpecs[nextIdx][0];
+              renderWorkbenchRight();
+              const nextTab = dialog.querySelector('#dc-tab-' + app.activeTab);
+              if (nextTab) nextTab.focus();
+            }
+          });
+        })
+      );
 
-      const tabContent = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+      const tabContent = el('div', {
+        id: 'dc-tabpanel',
+        role: 'tabpanel',
+        'aria-labelledby': 'dc-tab-' + app.activeTab,
+        style: { display: 'flex', flexDirection: 'column', gap: '10px' }
+      });
       wbRefs.tabContent = tabContent;
       wbRefs.requestPre = null;
 
@@ -1953,8 +2113,16 @@
       right.appendChild(tabContent);
     }
 
-    function openWorkbench(triggerEl, opts) {
-      app.returnFocusEl = triggerEl || document.activeElement;
+    function restoreCardTriggerFocus() {
+      const target = rootEl.querySelector('[data-focus-role="' + app.returnFocusRole + '"]') ||
+        rootEl.querySelector('[data-focus-role="expand-btn"]');
+      if (target && typeof target.focus === 'function') {
+        target.focus();
+      }
+    }
+
+    function openWorkbench(focusRole, opts) {
+      app.returnFocusRole = focusRole || 'expand-btn';
       app.showKeyPopover = Boolean(opts && opts.openKeyPopover);
 
       if (!wbRefs.leftPane) {
@@ -1977,31 +2145,28 @@
       app.keyVisible = false;
       if (dialog.open) dialog.close();
       renderCard();
-      if (app.returnFocusEl && typeof app.returnFocusEl.focus === 'function') {
-        app.returnFocusEl.focus();
-      }
+      restoreCardTriggerFocus();
     }
 
-    // Dialog keyboard & backdrop click handling
     dialog.addEventListener('cancel', function (e) {
       if (app.showKeyPopover) {
         e.preventDefault();
-        app.showKeyPopover = false;
-        app.keyVisible = false;
-        renderKeyPopover();
+        closeKeyPopover(true);
         return;
       }
       setTimeout(function () {
         renderCard();
-        if (app.returnFocusEl && typeof app.returnFocusEl.focus === 'function') {
-          app.returnFocusEl.focus();
-        }
+        restoreCardTriggerFocus();
       }, 0);
     });
 
     dialog.addEventListener('click', function (e) {
       if (e.target === dialog) {
         closeWorkbench();
+        return;
+      }
+      if (app.showKeyPopover && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target)) {
+        closeKeyPopover(false);
       }
     });
 
@@ -2012,7 +2177,6 @@
       }
     });
 
-    // Support pasting screenshots directly into the workbench
     dialog.addEventListener('paste', function (e) {
       const items = e.clipboardData && e.clipboardData.items;
       if (!items) return;
@@ -2028,7 +2192,6 @@
       }
     });
 
-    // Initial boot: run Simulated preview right away (or wait for explicit live click if key saved? No, run immediately!)
     runEvaluation({ resetGhost: true });
   }
 

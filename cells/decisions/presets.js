@@ -116,13 +116,13 @@
     });
 
     if (flagged) {
-      // Visual glare / smudge band over totals to challenge low-res vision
-      const grad = ctx.createLinearGradient(180, 240, 440, 315);
+      // Visual glare / smudge band aligned over HANDWRITTEN TIP and TOTAL CHARGED
+      const grad = ctx.createLinearGradient(180, 282, 440, 346);
       grad.addColorStop(0, 'rgba(255, 252, 240, 0.0)');
       grad.addColorStop(0.5, 'rgba(255, 250, 235, 0.56)');
       grad.addColorStop(1, 'rgba(255, 252, 240, 0.0)');
       ctx.fillStyle = grad;
-      ctx.fillRect(160, 244, 318, 66);
+      ctx.fillRect(160, 282, 318, 64);
 
       // Red pen circle around mismatch
       ctx.strokeStyle = 'rgba(217, 79, 30, 0.65)';
@@ -585,10 +585,21 @@
     };
   }
 
+  const ALLOWED_IMAGE_MIMES = {
+    'image/png': true,
+    'image/jpeg': true,
+    'image/webp': true,
+    'image/gif': true,
+    'image/bmp': true,
+    'image/tiff': true,
+    'image/heic': true,
+    'image/heif': true
+  };
+
   function processUploadedImage(file) {
     return new Promise(function (resolve, reject) {
-      if (!file || !file.type || !file.type.startsWith('image/')) {
-        reject(new Error('Unsupported file type. Drop a PNG, JPEG, or WebP image.'));
+      if (!file || !file.type || !ALLOWED_IMAGE_MIMES[file.type.toLowerCase()]) {
+        reject(new Error('Unsupported file type. Drop a PNG, JPEG, WebP, or GIF image.'));
         return;
       }
 
@@ -608,7 +619,7 @@
           let targetW = img.naturalWidth;
           let targetH = img.naturalHeight;
           let finalDataUrl = rawDataUrl;
-          let finalMime = file.type;
+          let finalMime = file.type.toLowerCase();
 
           if (needsResize) {
             const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
@@ -618,9 +629,17 @@
             canvas.width = targetW;
             canvas.height = targetH;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, targetW, targetH);
-            finalMime = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
-            finalDataUrl = canvas.toDataURL(finalMime, 0.88);
+            if (finalMime === 'image/jpeg') {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, targetW, targetH);
+              ctx.drawImage(img, 0, 0, targetW, targetH);
+              finalDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+            } else {
+              // Preserve alpha transparency for PNG/WebP/GIF by re-encoding as PNG
+              ctx.drawImage(img, 0, 0, targetW, targetH);
+              finalMime = 'image/png';
+              finalDataUrl = canvas.toDataURL('image/png');
+            }
           }
 
           const base64 = finalDataUrl.split(',')[1] || '';

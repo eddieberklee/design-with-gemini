@@ -8,8 +8,19 @@
   let memoryKey = '';
   let storageRestricted = false;
 
-  function safeGet(store, key) {
+  function getStore(storeName) {
     try {
+      return global[storeName] || null;
+    } catch (_e) {
+      storageRestricted = true;
+      return null;
+    }
+  }
+
+  function safeGet(storeName, key) {
+    try {
+      const store = getStore(storeName);
+      if (!store) return '';
       return store.getItem(key) || '';
     } catch (_e) {
       storageRestricted = true;
@@ -17,8 +28,10 @@
     }
   }
 
-  function safeSet(store, key, val) {
+  function safeSet(storeName, key, val) {
     try {
+      const store = getStore(storeName);
+      if (!store) return false;
       store.setItem(key, val);
       return true;
     } catch (_e) {
@@ -27,8 +40,10 @@
     }
   }
 
-  function safeRemove(store, key) {
+  function safeRemove(storeName, key) {
     try {
+      const store = getStore(storeName);
+      if (!store) return;
       store.removeItem(key);
     } catch (_e) {
       storageRestricted = true;
@@ -38,12 +53,12 @@
   const KeyStore = {
     get: function () {
       if (memoryKey) return memoryKey;
-      const s = safeGet(global.sessionStorage, SESSION_KEY);
+      const s = safeGet('sessionStorage', SESSION_KEY);
       if (s) {
         memoryKey = s;
         return s;
       }
-      const l = safeGet(global.localStorage, LOCAL_KEY);
+      const l = safeGet('localStorage', LOCAL_KEY);
       if (l) {
         memoryKey = l;
         return l;
@@ -51,26 +66,26 @@
       return '';
     },
     getStorageType: function () {
-      if (safeGet(global.localStorage, LOCAL_KEY)) return 'local';
-      if (safeGet(global.sessionStorage, SESSION_KEY)) return 'session';
+      if (safeGet('sessionStorage', SESSION_KEY)) return 'session';
+      if (safeGet('localStorage', LOCAL_KEY)) return 'local';
       if (memoryKey) return 'memory';
       return 'none';
     },
     set: function (rawKey, persistLocal) {
       const cleaned = String(rawKey || '').trim();
       memoryKey = cleaned;
-      safeRemove(global.sessionStorage, SESSION_KEY);
-      safeRemove(global.localStorage, LOCAL_KEY);
+      safeRemove('sessionStorage', SESSION_KEY);
+      safeRemove('localStorage', LOCAL_KEY);
       if (!cleaned) return 'none';
       if (persistLocal) {
-        return safeSet(global.localStorage, LOCAL_KEY, cleaned) ? 'local' : 'memory';
+        return safeSet('localStorage', LOCAL_KEY, cleaned) ? 'local' : 'memory';
       }
-      return safeSet(global.sessionStorage, SESSION_KEY, cleaned) ? 'session' : 'memory';
+      return safeSet('sessionStorage', SESSION_KEY, cleaned) ? 'session' : 'memory';
     },
     clear: function () {
       memoryKey = '';
-      safeRemove(global.sessionStorage, SESSION_KEY);
-      safeRemove(global.localStorage, LOCAL_KEY);
+      safeRemove('sessionStorage', SESSION_KEY);
+      safeRemove('localStorage', LOCAL_KEY);
     },
     mask: function (key) {
       const k = String(key || '').trim();
@@ -85,15 +100,20 @@
 
   function classifyApiError(httpStatus, payload, fallbackMessage, retryAfter) {
     const errObj = (payload && payload.error && typeof payload.error === 'object') ? payload.error : {};
-    const code = String(errObj.code || errObj.status || httpStatus || 'UNKNOWN');
+    const rawCode = errObj.code !== undefined && errObj.code !== null ? String(errObj.code) : '';
+    const rawStatus = errObj.status !== undefined && errObj.status !== null ? String(errObj.status) : '';
+    const code = rawCode || rawStatus || String(httpStatus || 'UNKNOWN');
     const detail = String(errObj.message || fallbackMessage || 'Request failed.');
 
     const safetyCodes = ['safety', 'prohibited_content', 'blocklist', 'image_safety', 'content_blocked'];
-    if (safetyCodes.indexOf(code.toLowerCase()) >= 0) {
+    const matchedSafety = [rawCode, rawStatus].find(function (token) {
+      return token && safetyCodes.indexOf(token.toLowerCase()) >= 0;
+    });
+    if (matchedSafety) {
       return {
-        code: code,
+        code: matchedSafety,
         httpStatus: httpStatus,
-        headline: 'Input blocked by Gemini safety filter (' + code + ')',
+        headline: 'Input blocked by Gemini safety filter (' + matchedSafety + ')',
         detail: detail,
         remediation: 'Adjust the input text or image and retry.'
       };
@@ -294,6 +314,7 @@
   }
 
   function softmax(logits, temp) {
+    if (!logits.length) return [];
     const t = Math.max(0.15, temp || 1);
     let maxL = -Infinity;
     for (let i = 0; i < logits.length; i++) {
@@ -310,19 +331,38 @@
     });
   }
 
+  // Largest-remainder rounding to 1,000 milli-units (exact sum = 1.000, monotonic/argmax-preserving)
   function roundProbsToSumOne(probs) {
-    const scaled = probs.map(function (p) {
-      return Math.max(0.001, Math.round(p * 1000) / 1000);
+    if (!Array.isArray(probs) || probs.length === 0) return [];
+    const scale = 1000;
+    const raw = probs.map(function (p, idx) {
+      const scaled = Math.max(0, Number(p) || 0) * scale;
+      const base = Math.floor(scaled);
+      return { idx: idx, base: base, frac: scaled - base, orig: Number(p) || 0 };
     });
-    const total = scaled.reduce(function (a, b) {
-      return a + b;
+    let sum = raw.reduce(function (acc, item) {
+      return acc + item.base;
     }, 0);
-    let maxIdx = 0;
-    for (let i = 1; i < scaled.length; i++) {
-      if (scaled[i] > scaled[maxIdx]) maxIdx = i;
+    let remainder = scale - sum;
+    if (remainder > 0) {
+      const order = raw.slice().sort(function (a, b) {
+        if (b.frac !== a.frac) return b.frac - a.frac;
+        return b.orig - a.orig;
+      });
+      for (let i = 0; i < remainder && i < order.length; i++) {
+        order[i].base += 1;
+      }
+    } else if (remainder < 0) {
+      const order = raw.slice().sort(function (a, b) {
+        return a.frac - b.frac;
+      });
+      for (let i = 0; i < -remainder && i < order.length; i++) {
+        if (order[i].base > 0) order[i].base -= 1;
+      }
     }
-    scaled[maxIdx] = Math.max(0.001, Math.round((scaled[maxIdx] + (1 - total)) * 1000) / 1000);
-    return scaled;
+    return raw.map(function (item) {
+      return item.base / scale;
+    });
   }
 
   function resolutionSharpness(state) {
@@ -338,8 +378,6 @@
     return 258;
   }
 
-  // Known high-craft baselines for the 4 built-in presets so A/B perturbations feel vivid and realistic,
-  // while still reacting smoothly when the user edits text, resolution, options, or rubric levels.
   function presetSignal(state) {
     const imgKind = state && state.image ? state.image.kind : null;
     const text = String((state && state.inputText) || '').toLowerCase();
@@ -368,13 +406,13 @@
     const sig = presetSignal(state);
     const corpus = String((state && state.inputText) || '') + ' ' + (state && state.image ? state.image.name : '');
     const inputTokens = tokenize(corpus);
-    const answers = {};
+    const answers = Object.create(null);
 
     const questions = (state && Array.isArray(state.questions)) ? state.questions : [];
     questions.forEach(function (q) {
       if (!q || q.enabled === false) return;
       const key = (q.key || '').trim();
-      if (!key) return;
+      if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') return;
 
       const seed = fnv1a(key + '|' + corpus + '|' + (state.resolution || 'medium') + '|' + (q.instructions || ''));
 
@@ -390,7 +428,6 @@
           const fMatch = overlapScore(inputTokens, q.falseDescription || '');
           baseP = 1 / (1 + Math.exp(-(tMatch - fMatch) * 2.2 + (seed - 0.5) * 0.8));
         }
-        // Pull toward 0.5 when image resolution is low, push toward extremes when high
         const logit = Math.log(NS.Schema.clamp(baseP, 0.02, 0.98) / (1 - NS.Schema.clamp(baseP, 0.02, 0.98)));
         const adjusted = 1 / (1 + Math.exp(-(logit * sharp + (seed - 0.5) * 0.16)));
         const p = Math.round(NS.Schema.clamp(adjusted, 0.01, 0.99) * 100) / 100;
@@ -419,13 +456,14 @@
         });
 
         const probs = roundProbsToSumOne(softmax(logits, 0.95 / sharp));
-        const probMap = {};
+        const probMap = Object.create(null);
         let bestKey = '';
-        let bestP = -1;
+        let bestP = 0;
         sortedOpts.forEach(function (opt, i) {
           const ok = (opt.key || '').trim();
+          if (!ok || ok === '__proto__' || ok === 'constructor' || ok === 'prototype') return;
           probMap[ok] = probs[i];
-          if (probs[i] > bestP) {
+          if (probs[i] > bestP || (bestKey === '' && i === 0)) {
             bestP = probs[i];
             bestKey = ok;
           }
@@ -454,8 +492,8 @@
         });
 
         const probs = roundProbsToSumOne(softmax(logits, 1.0));
-        const probMap = {};
-        const legend = {};
+        const probMap = Object.create(null);
+        const legend = Object.create(null);
         let expected = 0;
         let maxP = 0;
         levels.forEach(function (desc, idx) {

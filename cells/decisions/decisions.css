@@ -16,16 +16,11 @@
 
   --dc-ink: #141413;
   --dc-ink-2: #525250;
-  --dc-ink-3: #8a8a86;
+  --dc-ink-3: #63635f;        /* 5.9:1 on #fff, 5.5:1 on #f6f6f4 (WCAG AA) */
 
-  --dc-needle: #d94f1e;      /* Braun signal orange — pointers, active ticks */
+  --dc-needle: #d94f1e;       /* Braun signal orange — graphical needles/pointers */
+  --dc-needle-ink: #b43a10;   /* 5.2:1 on #fff1eb / #f6f6f4 (WCAG AA text) */
   --dc-needle-soft: #fff1eb;
-  --dc-noul: #141413;
-  --dc-choice-0: #141413;
-  --dc-choice-1: #6b7280;
-  --dc-choice-2: #a1a1aa;
-  --dc-choice-3: #d4d4d8;
-  --dc-score: #141413;
 
   --dc-live: #047857;
   --dc-live-bg: #ecfdf5;
@@ -132,7 +127,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--dc-hairline);
   min-height: 32px;
   flex-shrink: 0;
@@ -241,7 +236,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   background: var(--dc-recess);
   border-bottom: 1px solid var(--dc-hairline);
   flex-shrink: 0;
@@ -260,7 +255,13 @@
   align-items: center;
   gap: 2px;
   min-width: 0;
-  overflow: hidden;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dc-preset-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .dc-preset-btn {
@@ -275,6 +276,7 @@
   font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
   transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 
@@ -356,7 +358,7 @@
   line-height: 1;
   padding: 1.5px 2.5px;
   border-radius: 2px;
-  background: rgba(20, 20, 19, 0.82);
+  background: rgba(20, 20, 19, 0.85);
   color: #ffffff;
   text-transform: uppercase;
 }
@@ -380,7 +382,7 @@
   flex-direction: column;
   justify-content: space-evenly;
   padding: 6px 10px;
-  gap: 6px;
+  gap: 5px;
   overflow: hidden;
 }
 
@@ -388,22 +390,30 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 5px;
+  padding: 7px 9px;
   border-radius: 5px;
   background: var(--dc-err-bg);
   border: 1px solid var(--dc-err-border);
   color: var(--dc-err);
   font-size: 11px;
+  min-height: 0;
 }
 
 .dc-card-error-title {
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dc-card-error-detail {
+  line-height: 1.3;
 }
 
 .dc-card-error-actions {
   display: flex;
-  gap: 6px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
@@ -525,7 +535,7 @@
   position: absolute;
   top: -3px;
   bottom: -3px;
-  width: 10px;
+  width: 12px;
   transform: translateX(-50%);
   cursor: ew-resize;
   background: transparent;
@@ -542,7 +552,7 @@
   width: 1.5px;
   transform: translateX(-50%);
   background: var(--dc-ink);
-  opacity: 0.45;
+  opacity: 0.55;
 }
 
 .dc-noul-pin:hover::after,
@@ -573,7 +583,7 @@
   display: grid;
   align-items: end;
   gap: 2px;
-  height: 16px;
+  height: 15px;
   padding-bottom: 3px;
   border-bottom: 1px solid var(--dc-border-strong);
 }
@@ -637,28 +647,66 @@
   white-space: nowrap;
 }
 
-.dc-zero-chip.is-pulse {
-  border-color: var(--dc-needle);
-  color: var(--dc-needle);
+/* Desktop generous proportions (>= 440px tile) */
+@container dc-card (min-width: 440px) {
+  .dc-card-header { padding: 8px 14px; min-height: 36px; }
+  .dc-dock { padding: 8px 14px; gap: 7px; }
+  .dc-rack { padding: 10px 14px; gap: 10px; }
+  .dc-gauge-row { grid-template-columns: 48px minmax(0, 1fr) 52px; gap: 10px; }
+  .dc-gauge-key { font-size: 11px; }
+  .dc-gauge-sub { font-size: 10px; }
+  .dc-gauge-val { font-size: 13px; }
+  .dc-noul-track,
+  .dc-choice-ribbon { height: 12px; }
+  .dc-score-mini { height: 22px; }
+  .dc-card-footer { padding: 6px 14px; font-size: 10px; }
 }
 
-/* Container queries for compact & narrow mobile tiles */
+/* Compact tile (<= 390px) */
 @container dc-card (max-width: 390px) {
-  .dc-card-header { padding: 6px 8px; }
-  .dc-dock { padding: 6px 8px; gap: 5px; }
-  .dc-rack { padding: 5px 8px; gap: 5px; }
-  .dc-card-footer { padding: 4px 8px; }
+  .dc-card-header { padding: 4px 8px; min-height: 26px; }
+  .dc-dock { padding: 4px 8px; gap: 4px; }
+  .dc-preset-btn { height: 18px; padding: 0 4.5px; font-size: 9.5px; }
+  .dc-perturb-btn { height: 16px; padding: 0 4.5px; font-size: 9px; }
+  .dc-rack { padding: 4px 8px; gap: 4px; }
+  .dc-card-footer { padding: 3px 8px; }
   .dc-model-stamp { display: none; }
   .dc-expand-label { display: none; }
   .dc-gauge-row { grid-template-columns: 38px minmax(0, 1fr) 42px; gap: 6px; }
 }
 
-@container dc-card (max-width: 265px) {
+/* Medium-narrow tile (<= 340px): drop specimen strip so all 3 two-line gauges fit cleanly */
+@container dc-card (max-width: 340px) {
   .dc-specimen-row { display: none; }
+  .dc-gauge-mid { gap: 2px; }
+  .dc-noul-track,
+  .dc-choice-ribbon { height: 8px; }
+  .dc-score-mini { height: 13px; padding-bottom: 2px; }
+  .dc-gauge-val { font-size: 11px; }
+}
+
+/* Micro mobile tile (<= 265px, down to 162x121.5px): single-line gauges with 0px overflow */
+@container dc-card (max-width: 265px) {
+  .dc-card-header { padding: 2px 6px; min-height: 22px; }
+  .dc-index { display: none; }
+  .dc-card-title { font-size: 10.5px; }
+  .dc-mode-pill { height: 17px; padding: 0 5px; font-size: 8.5px; gap: 3px; }
+  .dc-icon-btn { height: 18px; padding: 0 5px; font-size: 10px; }
+  .dc-dock { padding: 3px 6px; gap: 0; }
   .dc-perturb-group { display: none; }
-  .dc-gauge-sub { display: none; }
-  .dc-preset-btn:nth-child(n + 4) { display: none; }
+  .dc-preset-btn { height: 17px; padding: 0 4px; font-size: 9px; }
+  .dc-rack { padding: 2px 6px; gap: 2px; }
+  .dc-gauge-row { grid-template-columns: 32px minmax(0, 1fr) 34px; gap: 5px; }
+  .dc-gauge-caption { display: none; }
+  .dc-type-tag { font-size: 7.5px; padding: 1px 2px; }
+  .dc-gauge-val { font-size: 9.5px; }
+  .dc-noul-track,
+  .dc-choice-ribbon { height: 8px; }
+  .dc-score-mini { height: 12px; padding-bottom: 2px; }
+  .dc-card-footer { padding: 2px 6px; font-size: 8.5px; }
   .dc-footer-meta { display: none; }
+  .dc-card-error { padding: 3px 6px; gap: 3px; font-size: 9px; }
+  .dc-card-error-detail { display: none; }
 }
 
 /* ==========================================================================
@@ -692,6 +740,7 @@
 
 /* Workbench top utility bar */
 .dc-wb-bar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -858,6 +907,18 @@
   display: none;
 }
 
+@media (max-width: 960px) {
+  .dc-key-popover {
+    position: fixed;
+    top: 56px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    max-width: 380px;
+    margin-inline: auto;
+  }
+}
+
 .dc-key-note {
   font-size: 12px;
   line-height: 1.45;
@@ -907,7 +968,8 @@
 .dc-perturb-btn:focus-visible,
 .dc-seg-btn:focus-visible,
 .dc-tab-btn:focus-visible,
-.dc-noul-pin:focus-visible {
+.dc-noul-pin:focus-visible,
+.dc-media-thumb-btn:focus-visible {
   outline: 2px solid var(--dc-focus);
   outline-offset: 1px;
 }
@@ -999,14 +1061,52 @@
   gap: 12px;
 }
 
-.dc-media-thumb {
-  width: 96px;
-  height: 64px;
-  object-fit: cover;
-  border-radius: 4px;
+.dc-media-preview.is-expanded {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.dc-media-thumb-btn {
+  position: relative;
+  padding: 0;
   border: 1px solid var(--dc-border-strong);
+  border-radius: 4px;
+  overflow: hidden;
   background: #e5e5e1;
+  cursor: zoom-in;
   flex-shrink: 0;
+  width: 120px;
+  height: 78px;
+}
+
+.dc-media-preview.is-expanded .dc-media-thumb-btn {
+  width: 100%;
+  height: auto;
+  cursor: zoom-out;
+}
+
+.dc-media-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.dc-media-preview.is-expanded .dc-media-thumb {
+  max-height: 260px;
+  object-fit: contain;
+}
+
+.dc-media-zoom-hint {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  font-family: var(--dc-mono);
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(20, 20, 19, 0.78);
+  color: #ffffff;
 }
 
 .dc-media-meta {
@@ -1031,6 +1131,12 @@
   font-family: var(--dc-mono);
   font-size: 10.5px;
   color: var(--dc-ink-3);
+}
+
+.dc-media-notice {
+  font-family: var(--dc-mono);
+  font-size: 10.5px;
+  color: var(--dc-needle-ink);
 }
 
 .dc-media-controls {
@@ -1290,7 +1396,7 @@
   padding: 1px 5px;
   border-radius: 3px;
   background: var(--dc-needle-soft);
-  color: var(--dc-needle);
+  color: var(--dc-needle-ink);
 }
 
 /* Workbench Noul Axis */

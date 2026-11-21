@@ -6,10 +6,22 @@
   const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/decisions';
   const MODEL = 'gemini-decision-1';
   const KEY_REGEX = /^[A-Za-z0-9_-]{1,64}$/;
+  const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
+  const VALID_TYPES = { noul: true, choice: true, score: true };
   const RESOLUTIONS = ['low', 'medium', 'high'];
 
   function clamp(num, min, max) {
     return Math.min(max, Math.max(min, num));
+  }
+
+  function toFiniteNumber(val) {
+    if (val === null || val === undefined || val === '') return NaN;
+    const n = Number(val);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  function isReservedKey(key) {
+    return RESERVED_KEYS.indexOf(key) >= 0;
   }
 
   function formatBytes(bytes) {
@@ -58,11 +70,13 @@
 
     active.forEach(function (q) {
       const qKey = typeof q.key === 'string' ? q.key.trim() : '';
-      if (!KEY_REGEX.test(qKey)) {
+      if (!KEY_REGEX.test(qKey) || isReservedKey(qKey)) {
         errors.push({
           field: 'question.key',
           questionId: q.id,
-          message: 'Question key "' + (qKey || '(empty)') + '" must be 1–64 chars matching [A-Za-z0-9_-].'
+          message: isReservedKey(qKey)
+            ? 'Question key "' + qKey + '" is a reserved JavaScript property name.'
+            : 'Question key "' + (qKey || '(empty)') + '" must be 1–64 chars matching [A-Za-z0-9_-].'
         });
       } else if (seenQuestionKeys[qKey]) {
         errors.push({
@@ -72,6 +86,15 @@
         });
       } else {
         seenQuestionKeys[qKey] = true;
+      }
+
+      if (!Object.prototype.hasOwnProperty.call(VALID_TYPES, q.type)) {
+        errors.push({
+          field: 'question.type',
+          questionId: q.id,
+          message: 'Question "' + (qKey || '(unnamed)') + '" has unsupported type "' + String(q.type) + '".'
+        });
+        return;
       }
 
       const instructions = typeof q.instructions === 'string' ? q.instructions.trim() : '';
@@ -102,12 +125,14 @@
         opts.forEach(function (opt, idx) {
           const optKey = typeof opt.key === 'string' ? opt.key.trim() : '';
           const optDesc = typeof opt.description === 'string' ? opt.description.trim() : '';
-          if (!optKey || !KEY_REGEX.test(optKey)) {
+          if (!optKey || !KEY_REGEX.test(optKey) || isReservedKey(optKey)) {
             errors.push({
               field: 'question.option.key',
               questionId: q.id,
               optionIndex: idx,
-              message: 'Option #' + (idx + 1) + ' in "' + (qKey || 'choice') + '" needs a key matching [A-Za-z0-9_-].'
+              message: isReservedKey(optKey)
+                ? 'Option key "' + optKey + '" in "' + (qKey || 'choice') + '" is reserved.'
+                : 'Option #' + (idx + 1) + ' in "' + (qKey || 'choice') + '" needs a key matching [A-Za-z0-9_-].'
             });
           } else if (seenOptKeys[optKey]) {
             errors.push({
@@ -188,12 +213,12 @@
       input = text;
     }
 
-    const questionsMap = {};
+    const questionsMap = Object.create(null);
     const questions = Array.isArray(state && state.questions) ? state.questions : [];
     questions.forEach(function (q) {
       if (!q || q.enabled === false) return;
       const key = (q.key || '').trim();
-      if (!key) return;
+      if (!key || isReservedKey(key)) return;
 
       if (q.type === 'noul') {
         const entry = {
@@ -209,10 +234,10 @@
         }
         questionsMap[key] = entry;
       } else if (q.type === 'choice') {
-        const criteria = {};
+        const criteria = Object.create(null);
         (q.options || []).forEach(function (opt) {
           const ok = (opt.key || '').trim();
-          if (ok) criteria[ok] = (opt.description || '').trim();
+          if (ok && !isReservedKey(ok)) criteria[ok] = (opt.description || '').trim();
         });
         questionsMap[key] = {
           type: 'choice',
@@ -286,19 +311,21 @@
       if (q && q.key) byKey[q.key.trim()] = q;
     });
 
-    const normalizedAnswers = {};
+    const normalizedAnswers = Object.create(null);
 
     Object.keys(rawAnswers).forEach(function (key) {
+      if (isReservedKey(key)) return;
       const ans = rawAnswers[key];
       if (!ans || typeof ans !== 'object') return;
       const qDef = byKey[key] || null;
       const type = ans.type || (qDef && qDef.type) || 'noul';
 
       if (type === 'noul') {
-        const p = clamp(Number(ans.noul), 0.01, 0.99);
-        const safeP = Number.isFinite(p) ? p : 0.5;
-        const conf = Number.isFinite(Number(ans.confidence))
-          ? clamp(Number(ans.confidence), 0.5, 0.99)
+        const rawNoul = toFiniteNumber(ans.noul);
+        const safeP = Number.isFinite(rawNoul) ? clamp(rawNoul, 0.01, 0.99) : 0.5;
+        const rawConf = toFiniteNumber(ans.confidence);
+        const conf = Number.isFinite(rawConf)
+          ? clamp(rawConf, 0.5, 0.99)
           : Math.max(safeP, 1 - safeP);
         normalizedAnswers[key] = {
           type: 'noul',
@@ -317,7 +344,7 @@
         const keys = Object.keys(probs);
         let sum = 0;
         const ranked = keys.map(function (k) {
-          const val = Number(probs[k]);
+          const val = toFiniteNumber(probs[k]);
           const p = Number.isFinite(val) ? Math.max(0, val) : 0;
           sum += p;
           return {
@@ -327,17 +354,22 @@
           };
         });
 
+        const declaredWinner = typeof ans.choice === 'string' && ans.choice ? ans.choice : '';
+
         ranked.sort(function (a, b) {
           if (b.prob !== a.prob) return b.prob - a.prob;
+          if (declaredWinner) {
+            if (a.key === declaredWinner && b.key !== declaredWinner) return -1;
+            if (b.key === declaredWinner && a.key !== declaredWinner) return 1;
+          }
           return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
         });
 
-        const winner = typeof ans.choice === 'string' && ans.choice
-          ? ans.choice
-          : (ranked[0] ? ranked[0].key : '');
+        const winner = declaredWinner || (ranked[0] ? ranked[0].key : '');
         const topProb = ranked[0] ? ranked[0].prob : 0;
         const runnerUpProb = ranked[1] ? ranked[1].prob : 0;
-        const conf = Number.isFinite(Number(ans.confidence)) ? Number(ans.confidence) : topProb;
+        const rawConf = toFiniteNumber(ans.confidence);
+        const conf = Number.isFinite(rawConf) ? rawConf : topProb;
 
         normalizedAnswers[key] = {
           type: 'choice',
@@ -362,8 +394,9 @@
         let peakProb = -1;
 
         const levels = numericKeys.map(function (k, fallbackIdx) {
-          const idxNum = Number.isFinite(Number(k)) ? Number(k) : fallbackIdx;
-          const val = Number(probs[k]);
+          const parsedIdx = toFiniteNumber(k);
+          const idxNum = Number.isFinite(parsedIdx) ? parsedIdx : fallbackIdx;
+          const val = toFiniteNumber(probs[k]);
           const p = Number.isFinite(val) ? Math.max(0, val) : 0;
           sum += p;
           expected += idxNum * p;
@@ -371,9 +404,14 @@
             peakProb = p;
             peakIndex = idxNum;
           }
-          const fallbackDesc = qDef && Array.isArray(qDef.levels) && qDef.levels[fallbackIdx]
-            ? qDef.levels[fallbackIdx]
-            : '';
+          let fallbackDesc = '';
+          if (qDef && Array.isArray(qDef.levels)) {
+            if (Number.isInteger(idxNum) && idxNum >= 0 && idxNum < qDef.levels.length) {
+              fallbackDesc = qDef.levels[idxNum];
+            } else if (fallbackIdx < qDef.levels.length) {
+              fallbackDesc = qDef.levels[fallbackIdx];
+            }
+          }
           return {
             index: idxNum,
             key: String(k),
@@ -382,7 +420,8 @@
           };
         });
 
-        const scoreVal = Number.isFinite(Number(ans.score)) ? Number(ans.score) : expected;
+        const rawScore = toFiniteNumber(ans.score);
+        const scoreVal = Number.isFinite(rawScore) ? rawScore : expected;
         let variance = 0;
         levels.forEach(function (lvl) {
           const diff = lvl.index - scoreVal;
@@ -391,8 +430,9 @@
 
         const minIndex = levels.length ? levels[0].index : 0;
         const maxIndex = levels.length ? levels[levels.length - 1].index : 1;
-        const conf = Number.isFinite(Number(ans.confidence))
-          ? Number(ans.confidence)
+        const rawConf = toFiniteNumber(ans.confidence);
+        const conf = Number.isFinite(rawConf)
+          ? rawConf
           : Math.max(0, peakProb);
 
         normalizedAnswers[key] = {
@@ -411,19 +451,16 @@
     });
 
     const rawUsage = (raw && raw.usage && typeof raw.usage === 'object') ? raw.usage : {};
+    const totalIn = toFiniteNumber(rawUsage.total_input_tokens);
+    const totalOut = toFiniteNumber(rawUsage.total_output_tokens);
+    const totalAll = toFiniteNumber(rawUsage.total_tokens);
     const usage = {
-      total_input_tokens: Number.isFinite(Number(rawUsage.total_input_tokens))
-        ? Number(rawUsage.total_input_tokens)
-        : 0,
+      total_input_tokens: Number.isFinite(totalIn) ? totalIn : 0,
       input_tokens_by_modality: Array.isArray(rawUsage.input_tokens_by_modality)
         ? rawUsage.input_tokens_by_modality
         : [],
-      total_output_tokens: Number.isFinite(Number(rawUsage.total_output_tokens))
-        ? Number(rawUsage.total_output_tokens)
-        : 0,
-      total_tokens: Number.isFinite(Number(rawUsage.total_tokens))
-        ? Number(rawUsage.total_tokens)
-        : 0
+      total_output_tokens: Number.isFinite(totalOut) ? totalOut : 0,
+      total_tokens: Number.isFinite(totalAll) ? totalAll : 0
     };
 
     return {

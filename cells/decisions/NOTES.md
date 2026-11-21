@@ -18,7 +18,7 @@ All scripts load via classic `<script defer>` (never `type="module"`) so the pro
 | [presets.js](presets.js) | Four curated single-pass multi-question scenarios (`receipt`, `support`, `ui_qa`, `release`) with instant A/B perturbation variants, untainted procedural `<canvas>` PNG specimen synthesis (zero external assets / zero `file://` taint), and client-side image downscaling for drag-drop / paste / file upload. |
 | [client.js](client.js) | Safe API key storage (`sessionStorage` default, opt-in `localStorage`, in-memory fallback if storage is blocked), `fetch()` live client with `AbortController` + 25s timeout + structured HTTP/safety error diagnostics, and an honest deterministic offline simulator (`runSimulated`) that responds to text edits, custom questions, and image resolution. |
 | [ui.js](ui.js) | Mounts the 4:3 in-grid instrument card and native `<dialog>` Workbench studio; handles in-place A/B perturbation, pointer + keyboard draggable `noul` threshold pin (`τ`), Ghost Delta comparison across consecutive runs, full Question Builder (`+ noul`, `+ choice`, `+ score`), clipboard image paste (`⌘V`), and ARIA live announcements. |
-| [decisions.css](decisions.css) | Strictly scoped under `.cell--decisions`, `.dc-*`, and `.dc-dialog` so sibling grid cells remain unaffected. Uses `@container dc-card` breakpoints for desktop (`≥ 420px`), compact (`266–390px`), and micro (`≤ 265px`) 4:3 tiles. |
+| [decisions.css](decisions.css) | Strictly scoped under `.cell--decisions`, `.dc-*`, and `.dc-dialog` so sibling grid cells remain unaffected. Uses `@container dc-card` breakpoints for generous desktop (`≥ 440px`), standard (`391–439px`), compact (`≤ 390px`), narrow (`≤ 340px`), and single-line micro (`≤ 265px`) 4:3 tiles. |
 
 ---
 
@@ -50,7 +50,7 @@ Three divergent creative priors were explored before implementation:
 Rejected single-prior trade-offs:
 - *Single-primitive card switcher*: Hid the batched multi-question single-pass superpower inside the grid cell.
 - *ESM `<script type="module">`*: Blocked by browser CORS when opening `index.html` directly from `file://`.
-- *Silent fallback on Live API errors*: Misleading; failed Live calls stay explicitly in `LIVE ERR` with `Retry Live`, `Update API Key`, and `Switch to Simulated` actions.
+- *Silent fallback on Live API errors*: Misleading; failed Live calls stay explicitly in `LIVE ERR` with `Retry Live` and `Switch to Simulated` on the card (and `Retry Live`, conditional `Update API Key` on `401`/`MISSING_KEY`, and `Switch to Simulated Preview` in the Workbench).
 
 ---
 
