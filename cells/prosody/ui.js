@@ -46,6 +46,7 @@
   }
 
   const MARQUEE_PLACEHOLDER = 'Detected words stream here…';
+  const IDLE_HINT = 'Tap a phrase, or start the mic.';
 
   // Status pill states (ui/NOTES.md green rule: green only while really streaming; a saved key is
   // idle grey). Labels are sentence case; .ui-pill shows them in mono caps.
@@ -61,9 +62,9 @@
       tip: 'Key saved, not streaming. Start the mic to go live, or click to edit the key.'
     },
     connecting: {
-      label: 'Connecting',
+      label: 'Starting',
       tone: 'attention',
-      tip: 'Asking for the mic and opening a Gemini Live session. Click to edit the key.'
+      tip: 'Starting: asking for the mic and opening a Gemini Live session. Click to edit the key.'
     },
     live: {
       label: 'Live',
@@ -215,7 +216,7 @@
     const buttonWrap = el('div', 'ps-button-wrap');
     const targetBtn = el('button', 'ps-target-btn', 'Confirm');
     targetBtn.type = 'button';
-    targetBtn.setAttribute('data-tip', 'Demo target: it resizes when you speak or tap a phrase.');
+    targetBtn.setAttribute('data-tip', 'Demo target: spoken size commands or the demo phrases resize it.');
     const ghostBtn = el('div', 'ps-ghost-btn');
     ghostBtn.setAttribute('aria-hidden', 'true');
 
@@ -223,7 +224,7 @@
     buttonWrap.appendChild(ghostBtn);
 
     // Live Word Marquee Ribbon at bottom of stage
-    const marqueeWrap = el('div', 'ps-marquee ui-hide-tiny');
+    const marqueeWrap = el('div', 'ps-marquee ui-hide-compact');
     marqueeWrap.setAttribute('data-tip', 'Words heard from you or the tapped phrase; the stressed word is highlighted.');
     const marqueeTrack = el('div', 'ps-marquee-track');
     marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', MARQUEE_PLACEHOLDER));
@@ -250,7 +251,7 @@
     waveCanvas.setAttribute('aria-hidden', 'true');
     waveCanvas.setAttribute('data-tip', 'Mic level; a flat line until the live mic is on.');
 
-    const demosRow = el('div', 'ps-demos ui-hide-compact');
+    const demosRow = el('div', 'ps-demos');
     demosRow.setAttribute('role', 'group');
     demosRow.setAttribute('aria-label', 'Demo phrases');
     NS.Client.DEMO_PRESETS.forEach(function (preset) {
@@ -264,9 +265,10 @@
       demosRow.appendChild(chip);
     });
 
-    // Compact tiles hide the foot; this line beside the mic carries the same status there (only
-    // one of the two is ever rendered, so screen readers hear it once).
-    const compactStatus = el('div', 'ui-truncate ps-compact-status', '');
+    // Compact tiles hide the foot; this line under the mic and phrases carries the same status
+    // there (only one of the two is ever rendered, so screen readers hear it once). Both exist only
+    // where the phrases are shown, so the idle hint may name them.
+    const compactStatus = el('div', 'ui-truncate ps-compact-status', IDLE_HINT);
     compactStatus.setAttribute('role', 'status');
     compactStatus.setAttribute('aria-live', 'polite');
 
@@ -277,7 +279,7 @@
 
     // --- Footer: status line + TX/RX counters ---
     const footer = el('footer', 'ui-tile-foot ps-footer');
-    const readoutText = el('div', 'ui-truncate ps-readout-text', 'Tap a phrase, or start the mic.');
+    const readoutText = el('div', 'ui-truncate ps-readout-text', IDLE_HINT);
     readoutText.setAttribute('role', 'status');
     readoutText.setAttribute('aria-live', 'polite');
     const txRxBadge = el('span', 'ps-tx-rx', '');

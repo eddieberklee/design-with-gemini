@@ -236,7 +236,7 @@
 
 .ps-compact-status {              /* shown only at compact width, where the foot is hidden */
   display: none;
-  grid-area: level;
+  grid-area: status;
   font: 400 var(--ui-fs-1) / 1.2 var(--ui-mono);
   letter-spacing: 0.02em;
   color: var(--ui-ink-3);
@@ -357,11 +357,12 @@
   }
 }
 
-/* Compact tile (< 320 px): mic only below the stage; foot hidden by ui/base.css. ------------- */
+/* Compact tile (< 320 px): keeps the mic + scrolling phrases row; the status line moves under it
+   because ui/base.css hides the foot. ------------------------------------------------------- */
 
 @container ui-tile (max-width: 319px) {
-  .ps-stage {
-    padding: 24px 8px 28px;
+  .ps-stage {             /* transcript strip hidden here: the button gets its height */
+    padding: 24px 8px 8px;
   }
 
   .ps-metrics-corner {
@@ -372,12 +373,11 @@
     right: var(--ui-2);
   }
 
-  .ps-marquee {
-    padding: 0 var(--ui-2);
-  }
-
   .ps-controls {
-    grid-template-areas: "mic level";
+    grid-template-areas:
+      "mic demos"
+      "status status";
+    row-gap: 6px;
     padding: 6px var(--ui-2);
   }
 
@@ -399,6 +399,10 @@
 /* Tiny tile (< 240 px, phone grid): header + stage only; the stage takes the freed height. --- */
 
 @container ui-tile (max-width: 239px) {
+  .ps-header {             /* 4 px gaps: the full title fits beside the status dot at 360 px */
+    gap: var(--ui-1);
+  }
+
   .ps-stage {
     padding: 22px 8px 8px;
   }

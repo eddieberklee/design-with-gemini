@@ -995,7 +995,7 @@ test('Start Live Mic: permission denied resets the button and opens no socket', 
   env.NS.Client.KeyStore.set('AIzaKey');
   ui.mic().click();
   assert.match(ui.mic().textContent, /Connecting/);
-  assert.equal(ui.badge().textContent, 'Connecting');
+  assert.equal(ui.badge().textContent, 'Starting');
   assert.equal(ui.badge().getAttribute('data-tone'), 'attention');
   assert.equal(ui.mic().getAttribute('data-tone'), null, 'rust only once really streaming');
   assert.match(ui.readout().textContent, /microphone/i);
