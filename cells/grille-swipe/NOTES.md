@@ -21,25 +21,28 @@ Synthesized from a 3-way divergent tournament (*Braun-Rams Precision Instrument*
 
 - **Unified `1×1` Swiss-Braun Stage (`cells/grille-swipe/grille-swipe.css`, `GrilleSwipeLab.mountCell`)**:
   - Embeds a **31-blade symplectic torsional spring-damper louver stack** directly inside the magnified `Mac16,5` Right Speaker Grille cutaway alongside the upper-left `3× MEMS` landmark diagram (`esc`, `` ~ ` ``, `tab`, `NOTCH · 0 MICS`), live `31.0–32.4 cm · Δ4.5%` acoustic chord, and critically damped Vertical Vernier Carriage (`-10..+10`).
-  - Rejected standalone abstract louver blinds (hid hardware placement) and multi-panel `1×1` dashboards (crowded `< 440px` tiles).
-- **Zero-Reflow Empirical Workbench Overlay**:
-  - Expanding (`.cell-acoustic.is-expanded` at `>= 768px` and `@container cell (width >= 540px)`) inserts an in-place `.ag-grid-placeholder` so sibling cells never shift regardless of grid column (`1`, `2`, or `3`), while elevating the Workbench to reveal the Frozen `s ∈ [0, 1]` Dual-Trace Stroke Oscilloscope, `19.00 kHz ± 100 Hz` MTI Waterfall, and 6-Feature Signed Diverging Fisher Log-Odds chart.
+  - Progressive `@container cell` breakpoints keep every control unclipped: `< 280px` Tier 0 (`.ag-micro-cta` + `.ag-vernier-mini`), `>= 280px` Tier 1 (`.ag-controls-bar` + `.ag-mic-wrap`), `>= 380px` Tier 2, `>= 445px` Tier 2b (`.ag-seg-grille`), and `>= 500px` Tier 3 (`.ag-demo-pair`).
+  - Synchronized WCAG AA palette across CSS tokens and `<canvas>` strokes/badges (`--ag-up: #0052cc`, `--ag-down: #c93700`, `--ag-ok: #047857`, `--ag-ink-muted: #62615c`, `>= 4.8:1` contrast).
+- **Zero-Reflow Responsive Empirical Workbench Overlay (`.cell-acoustic.is-expanded`)**:
+  - Opens at **all** viewports using an in-place `.ag-grid-placeholder` (`0` sibling reflow across columns `1`, `2`, or `3`) and race-safe `ViewTransition` token synchronization.
+  - Below `560px` container width (mobile viewports), renders a fitted/scrollable 1-column Empirical Workbench exposing `Demo ↑/↓`, `R Grille / L Ctrl`, `4-Stroke LDA`, and all 3 diagnostic canvases; at `@container cell (width >= 560px)`, switches `.ag-workbench` to a 2-column side-by-side layout.
 
 ---
 
-## 3. DSP & Layout Invariants (`cells/grille-swipe/grille-swipe.js`)
+## 3. DSP, Concurrency & Layout Invariants (`cells/grille-swipe/grille-swipe.js`)
 
-- **Coherent Homodyne Single-Worklet TX+RX (`createStreamEngine`)**: Synthesizes the right-channel `19.0 kHz` carrier and mixes RX `I/Q` using one shared `Float64` phase accumulator (`0.0000 Hz` drift), keeping Left output strictly `0.0`.
+- **Coherent Homodyne Single-Worklet TX+RX (`createStreamEngine`, `buildWorkletSource`, `buildWorkletBlobUrl`)**: Serializes `CARRIER_HZ`, `FEATURE_SCALES`, and DSP helpers into a self-contained `AudioWorklet` processor sharing one `Float64` phase accumulator (`0.0000 Hz` drift, Left channel strictly `0.0`), with immediate Blob URL revocation on `addModule` failure and `onprocessorerror` auto-disarm fallback.
+- **Monotonic Generation Race Serialization (`armGen` in `mountCell`)**: Every `armAudio` and `disarmAudio` increments `armGen`, re-validates `gen === armGen && !isDestroyed` across every async boundary (`getUserMedia`, `enumerateDevices`, `resume`, `setSinkId`, `addModule`), and debounces `devicechange` (`180 ms`) so zero `MediaStreamTrack`s or `AudioContext`s can ever leak.
 - **Two-Phase CoreAudio Input Lock (`rankAudioInputDevice`)**: Automatically switches off external default hijackers (USB wireless receivers, iPhone Continuity mics, AirPods) onto `MacBook Pro Microphone` with `echoCancellation: false`, `noiseSuppression: false`, `autoGainControl: false`.
-- **180 ms `-30.5 dBFS` Ultrasonic Loopback Self-Test**: Probes `19.0 kHz` SNR over `17.6 kHz` noise floor (`>= +8 dB`) before ramping to operating gain (`-18 dBFS`), catching muted speakers, headphones in Safari (where `audiooutput` labels are hidden), or macOS Voice Isolation.
-- **Pre-Passive `19 kHz` Notch & Real-Envelope `filtfiltReal`**: Notches `19.0 kHz` (`Q = 12`) before computing `Sub/Mid/Air/Fric` and `>1.5 kHz` crest factor; computes `|z[m]| = hypot(I, Q)` *before* zero-phase `8 Hz` forward-backward filtering so Fresnel diffraction phase rotation never creates false interference nulls.
-- **Container Query Isolation**: Uses `container-type: inline-size` on `.cell-acoustic` with an absolute `.ag-shell` child and `ResizeObserver` strictly on `.ag-canvas-wrap` wrappers (`0` Retina canvas feedback loops).
+- **Matched 2-Stage `180 ms` Ultrasonic Loopback Self-Test & Gain-Step Blanking**: Cascades 2-stage `19.0 kHz` (`Q = 18`) vs `min(16.2 kHz, 0.40 * sr)` (`Q = 14`) bandpass filters (`>= +22 dB` coupled SNR across `44.1`, `48`, and `96 kHz`), and enforces an `180 ms` `sonarBlankLeft` detector holdoff + Doppler floor re-seed across every `gTarget` transition (`setSonarTarget`, probe ramp, Pilot gain slider, sleep/wake) so gain ramps never self-trigger phantom strokes.
+- **1:1 Pre-Gate Frame Alignment & Frozen Pre-Onset Baseline**: Buffers passive frames during `activeGateCount = 1..3` so `strokePassive` aligns 1:1 with `[strokeStartBb, strokeEndBb)` (symmetric `UP`/`DOWN` `τ_dip`), snapshots `strokeClutterI/Q`, `strokeNoiseAirDb`, and `strokeNoiseDopPow` at onset, and freezes idle clutter/noise tracking across pre-gate, stroke, `48 ms` `filtfiltReal` post-roll, and `60 ms` delay-line holdoff.
+- **Regime-Isolated Calibration (`ag_lda_v1::<grille>::<sonar|uncoupled|passive>`)**: Separates coupled `19 kHz` sonar, uncoupled fallback, and passive calibrations with strict finite 6-vector validation (`fitShrinkageLDA`).
 
 ---
 
 ## 4. Verification
 
-- Run automated DSP, filter, veto, and Shrinkage Fisher LDA tests:
-  `timeout 60 node --test cells/grille-swipe/grille-swipe.test.mjs`
+- Syntax check and full DSP, `node:vm` `AudioWorklet`, async hardware-race, loopback probe, clutter-invariance, and edge-case test suite:
+  `node --check cells/grille-swipe/grille-swipe.js && timeout 60 node --test cells/grille-swipe/grille-swipe.test.mjs`
 - Serve locally for live `getUserMedia` + `AudioWorklet` testing (`window.isSecureContext` required by browsers):
   `python3 -m http.server 8000` → open `http://localhost:8000`

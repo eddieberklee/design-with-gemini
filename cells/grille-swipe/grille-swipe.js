@@ -173,14 +173,15 @@
   }
 
   function resampleCurve(arr, targetLen) {
-    var out = new Float32Array(targetLen);
-    if (!arr || arr.length === 0) return out;
-    if (arr.length === 1) {
+    var nOut = Math.max(0, targetLen | 0);
+    var out = new Float32Array(nOut);
+    if (nOut === 0 || !arr || arr.length === 0) return out;
+    if (arr.length === 1 || nOut === 1) {
       out.fill(arr[0]);
       return out;
     }
-    for (var i = 0; i < targetLen; i++) {
-      var pos = (i / (targetLen - 1)) * (arr.length - 1);
+    for (var i = 0; i < nOut; i++) {
+      var pos = (i / (nOut - 1)) * (arr.length - 1);
       var idx = Math.floor(pos);
       var frac = pos - idx;
       var v0 = arr[idx];
@@ -194,20 +195,21 @@
   // Passive hops arrive at ~f_bb / 4 (~250 Hz, 4 ms per passive frame)
   // Baseband IQ samples arrive at f_bb (~1000 Hz, 1 ms per IQ sample), with pre-roll & post-roll
   function extractStrokeFeatures(strokeData) {
-    var pFrames = strokeData.passiveFrames;
-    var bbI = strokeData.bbI; // includes prePad before m0 and postPad after m1
-    var bbQ = strokeData.bbQ;
-    var m0 = strokeData.m0;
-    var m1 = strokeData.m1;
-    var fbb = strokeData.fbb;
-    var clutterI = strokeData.clutterI;
-    var clutterQ = strokeData.clutterQ;
-    var sonarActive = !!strokeData.sonarActive;
-    var noiseAirDb = strokeData.noiseAirDb;
-    var noiseDopPow = Math.max(1e-14, strokeData.noiseDopPow || 1e-11);
+    var sd = strokeData || {};
+    var pFrames = sd.passiveFrames || [];
+    var bbI = sd.bbI; // includes prePad before m0 and postPad after m1
+    var bbQ = sd.bbQ;
+    var m0 = sd.m0 || 0;
+    var m1 = sd.m1 || 0;
+    var fbb = sd.fbb || 1000;
+    var clutterI = sd.clutterI || 0;
+    var clutterQ = sd.clutterQ || 0;
+    var sonarActive = !!sd.sonarActive;
+    var noiseAirDb = typeof sd.noiseAirDb === 'number' ? sd.noiseAirDb : -75;
+    var noiseDopPow = Math.max(1e-14, sd.noiseDopPow || 1e-11);
 
     var nP = pFrames.length;
-    var durMs = strokeData.durMs;
+    var durMs = sd.durMs || 0;
     var lFric = new Float64Array(nP);
     var lTilt = new Float64Array(nP);
     var octCent = new Float64Array(nP);
@@ -233,31 +235,34 @@
       sumSfm += pf.sfm;
     }
 
-    var trim0 = Math.floor(nP * 0.08);
-    var trim1 = Math.max(trim0 + 1, Math.ceil(nP * 0.92) - 1);
-    var x1 = olsSlopeUnit(lFric, trim0, trim1);
-    var x2 = olsSlopeUnit(lTilt, trim0, trim1);
-    var x3 = olsSlopeUnit(octCent, trim0, trim1);
+    var x1 = 0, x2 = 0, x3 = 0, x4 = 0;
+    if (nP >= 2) {
+      var trim0 = Math.floor(nP * 0.08);
+      var trim1 = Math.min(nP - 1, Math.max(trim0 + 1, Math.ceil(nP * 0.92) - 1));
+      x1 = olsSlopeUnit(lFric, trim0, trim1);
+      x2 = olsSlopeUnit(lTilt, trim0, trim1);
+      x3 = olsSlopeUnit(octCent, trim0, trim1);
 
-    // Crest skew: late vs early mean normalized by std + 0.25
-    var midIdx = Math.max(1, Math.floor((trim0 + trim1 + 1) * 0.5));
-    var sumEarly = 0, nEarly = 0, sumLate = 0, nLate = 0, meanC = 0;
-    for (var cIdx = trim0; cIdx <= trim1; cIdx++) {
-      meanC += crests[cIdx];
-      if (cIdx < midIdx) { sumEarly += crests[cIdx]; nEarly++; }
-      else { sumLate += crests[cIdx]; nLate++; }
+      // Crest skew: late vs early mean normalized by std + 0.25
+      var midIdx = Math.max(trim0 + 1, Math.floor((trim0 + trim1 + 1) * 0.5));
+      var sumEarly = 0, nEarly = 0, sumLate = 0, nLate = 0, meanC = 0;
+      for (var cIdx = trim0; cIdx <= trim1; cIdx++) {
+        meanC += crests[cIdx];
+        if (cIdx < midIdx) { sumEarly += crests[cIdx]; nEarly++; }
+        else { sumLate += crests[cIdx]; nLate++; }
+      }
+      var nCore = Math.max(1, trim1 - trim0 + 1);
+      meanC /= nCore;
+      var varC = 0;
+      for (var vc = trim0; vc <= trim1; vc++) {
+        var dc = crests[vc] - meanC;
+        varC += dc * dc;
+      }
+      var stdC = Math.sqrt(varC / nCore);
+      x4 = (nEarly > 0 && nLate > 0)
+        ? ((sumLate / nLate) - (sumEarly / nEarly)) / (stdC + 0.25)
+        : 0;
     }
-    var nCore = Math.max(1, trim1 - trim0 + 1);
-    meanC /= nCore;
-    var varC = 0;
-    for (var vc = trim0; vc <= trim1; vc++) {
-      var dc = crests[vc] - meanC;
-      varC += dc * dc;
-    }
-    var stdC = Math.sqrt(varC / nCore);
-    var x4 = (nEarly > 0 && nLate > 0)
-      ? ((sumLate / nLate) - (sumEarly / nEarly)) / (stdC + 0.25)
-      : 0;
 
     // --- Active Sonar Features x5 (Real-Magnitude Zero-Phase Occlusion) & x6 (MTI Bistatic Doppler) ---
     var x5 = 0;
@@ -435,11 +440,18 @@
       isSpeechVeto: isSpeechVeto,
       isNearLeftGrille: isNearLeftGrille,
       fricCurve64: resampleCurve(lFric, 64),
-      tiltCurve64: resampleCurve(lTilt, 64),
       occCurve64: occCurve64,
       dopCurve64: dopCurve64,
       specBins: specBins
     };
+  }
+
+  function isValidScaledVec6(v) {
+    if (!v || v.length !== 6) return false;
+    for (var i = 0; i < 6; i++) {
+      if (typeof v[i] !== 'number' || !Number.isFinite(v[i])) return false;
+    }
+    return true;
   }
 
   // --- 6x6 Cholesky Linear Solver for Shrinkage Fisher LDA ---
@@ -547,8 +559,16 @@
     if (!upSamples || !downSamples || upSamples.length < 2 || downSamples.length < 2) {
       return null;
     }
-    var upVecs = upSamples.map(function (s) { return s.scaledX; });
-    var dnVecs = downSamples.map(function (s) { return s.scaledX; });
+    var upVecs = [];
+    var dnVecs = [];
+    for (var ui = 0; ui < upSamples.length; ui++) {
+      if (!upSamples[ui] || !isValidScaledVec6(upSamples[ui].scaledX)) return null;
+      upVecs.push(upSamples[ui].scaledX);
+    }
+    for (var di = 0; di < downSamples.length; di++) {
+      if (!downSamples[di] || !isValidScaledVec6(downSamples[di].scaledX)) return null;
+      dnVecs.push(downSamples[di].scaledX);
+    }
     var full = fitSingleFoldLDA(upVecs, dnVecs, w0);
 
     // Standardized Leave-One-Out cross-validation for honest d'_OOF
@@ -587,23 +607,8 @@
       sigmaW: full.sigmaW,
       dPrimeOof: dPrimeOof,
       oofUp: oofUp,
-      oofDn: oofDn,
-      upFricMean: avgCurves(upSamples, 'fricCurve64'),
-      dnFricMean: avgCurves(downSamples, 'fricCurve64'),
-      upDopMean: avgCurves(upSamples, 'dopCurve64'),
-      dnDopMean: avgCurves(downSamples, 'dopCurve64')
+      oofDn: oofDn
     };
-  }
-
-  function avgCurves(samples, key) {
-    var out = new Float32Array(64);
-    if (!samples.length) return out;
-    for (var s = 0; s < samples.length; s++) {
-      var c = samples[s][key];
-      if (!c) continue;
-      for (var i = 0; i < 64; i++) out[i] += c[i] / samples.length;
-    }
-    return out;
   }
 
   function classifyStroke(feat, model, grille, sonarActive) {
@@ -667,9 +672,12 @@
     var lpQ1 = createBiquad('lowpass', 160, 0.5411961, sr);
     var lpQ2 = createBiquad('lowpass', 160, 1.3065630, sr);
 
-    // Loopback guardband reference (17.5 kHz) for 180 ms acoustic self-test
-    var bp19kProbe = createBiquad('bandpass', CARRIER_HZ, 18.0, sr);
-    var bp17kFloor = createBiquad('bandpass', Math.min(17600, sr * 0.44), 14.0, sr);
+    // Matched 2-stage 19.0 kHz probe vs ~16.2 kHz guardband floor for >= +22 dB SNR across 44.1/48/96 kHz
+    var bp19kProbe1 = createBiquad('bandpass', CARRIER_HZ, 18.0, sr);
+    var bp19kProbe2 = createBiquad('bandpass', CARRIER_HZ, 18.0, sr);
+    var guardFloorHz = Math.min(16200, sr * 0.40);
+    var bp16kFloor1 = createBiquad('bandpass', guardFloorHz, 14.0, sr);
+    var bp16kFloor2 = createBiquad('bandpass', guardFloorHz, 14.0, sr);
 
     var phi = 0;
     var dPhi = (2 * Math.PI * CARRIER_HZ) / sr;
@@ -684,6 +692,7 @@
     var ringW = 0;
     var totalBb = 0;
     var delay60 = Math.max(8, Math.round(0.060 * fbb));
+    var blankDurationBb = Math.max(32, Math.round(0.180 * fbb));
 
     var clutterI = 0, clutterQ = 0, clutterReady = false;
     var prevDelI = 0, prevDelQ = 0;
@@ -697,31 +706,70 @@
     var quietCount = 0;
     var inStroke = false;
     var postRollLeft = 0;
+    var sonarBlankLeft = 0;
+    var postStrokeHoldoff = 0;
     var strokeStartBb = 0;
     var strokeEndBb = 0;
+    var preGatePassive = [];
     var strokePassive = [];
+    var strokeClutterI = 0, strokeClutterQ = 0;
+    var strokeNoiseAirDb = -75, strokeNoiseDopPow = 1e-10;
+    var blankDopSum = 0, blankDopN = 0;
     var sonarMode = false;
 
     var probeSamples = 0, probe19Pow = 0, probe17Pow = 0, probePending = false;
 
+    function triggerGainBlanking() {
+      sonarBlankLeft = blankDurationBb;
+      blankDopSum = 0;
+      blankDopN = 0;
+      inStroke = false;
+      activeGateCount = 0;
+      quietCount = 0;
+      postRollLeft = 0;
+      preGatePassive = [];
+      strokePassive = [];
+      clutterReady = false;
+    }
+
     return {
       canSonar: canSonar,
       fbb: fbb,
+      getDebugState: function () {
+        return {
+          clutterI: clutterI,
+          clutterQ: clutterQ,
+          clutterReady: clutterReady,
+          noiseAirDb: noiseAirDb,
+          noiseDopPow: noiseDopPow,
+          sonarBlankLeft: sonarBlankLeft
+        };
+      },
       setSonarTarget: function (enabled, gainVal, runProbe) {
-        sonarMode = !!(enabled && canSonar);
-        if (!sonarMode) {
-          gTarget = 0;
+        var nextSonar = !!(enabled && canSonar);
+        var nextTarget = 0;
+        if (!nextSonar) {
+          nextTarget = 0;
           probePending = false;
         } else if (runProbe) {
-          gTarget = 0.03; // -30.5 dBFS safe 180 ms acoustic loopback check
+          nextTarget = 0.03; // -30.5 dBFS safe 180 ms acoustic loopback check
           probeSamples = 0;
           probe19Pow = 0;
           probe17Pow = 0;
+          bp19kProbe1.reset(0);
+          bp19kProbe2.reset(0);
+          bp16kFloor1.reset(0);
+          bp16kFloor2.reset(0);
           probePending = true;
         } else {
-          gTarget = clamp(gainVal || 0.13, 0, 0.25);
+          nextTarget = clamp(gainVal || 0.13, 0, 0.25);
           probePending = false;
         }
+        if (Math.abs(nextTarget - gTarget) > 1e-6) {
+          triggerGainBlanking();
+        }
+        sonarMode = nextSonar;
+        gTarget = nextTarget;
       },
       processQuantum: function (inChan, outL, outR, callbacks) {
         var n = inChan ? inChan.length : (outR ? outR.length : 128);
@@ -740,20 +788,22 @@
 
           // 180 ms loopback probe check
           if (probePending) {
-            var v19 = bp19kProbe.step(x);
-            var v17 = bp17kFloor.step(x);
+            var v19 = bp19kProbe2.step(bp19kProbe1.step(x));
+            var v16 = bp16kFloor2.step(bp16kFloor1.step(x));
             if (probeSamples > Math.round(0.035 * sr)) {
               probe19Pow += v19 * v19;
-              probe17Pow += v17 * v17;
+              probe17Pow += v16 * v16;
             }
             probeSamples++;
             if (probeSamples >= Math.round(0.180 * sr)) {
               probePending = false;
               var snr19Db = 10 * Math.log10((probe19Pow + 1e-16) / (probe17Pow + 1e-16));
               if (snr19Db >= 8.0) {
+                if (Math.abs(operatingGain - gTarget) > 1e-6) triggerGainBlanking();
                 gTarget = operatingGain;
                 if (callbacks && callbacks.onProbeResult) callbacks.onProbeResult(true, snr19Db);
               } else {
+                if (gTarget > 1e-6) triggerGainBlanking();
                 gTarget = 0;
                 sonarMode = false;
                 if (callbacks && callbacks.onProbeResult) callbacks.onProbeResult(false, snr19Db);
@@ -790,16 +840,44 @@
             ringW = (ringW + 1) % RING_LEN;
             totalBb++;
 
-            // 60 ms delayed clutter tracker (updates ONLY while idle so onset never corrupts reference)
+            if (sonarBlankLeft > 0) {
+              if (sonarBlankLeft <= 48 && totalBb >= 4) {
+                var bPrevIdx = (ringW - 2 + RING_LEN) % RING_LEN;
+                var bDi = iFilt - ringI[bPrevIdx];
+                var bDq = qFilt - ringQ[bPrevIdx];
+                blankDopSum += bDi * bDi + bDq * bDq;
+                blankDopN++;
+              }
+              sonarBlankLeft--;
+              clutterReady = false;
+              inStroke = false;
+              activeGateCount = 0;
+              quietCount = 0;
+              postRollLeft = 0;
+              preGatePassive = [];
+            }
+            if (postStrokeHoldoff > 0) {
+              postStrokeHoldoff--;
+            }
+
+            // 60 ms delayed clutter tracker (frozen whenever stroke, pre-gate, post-roll, or blanking active)
             var delIdx = (ringW - delay60 + RING_LEN) % RING_LEN;
             var delI = ringI[delIdx];
             var delQ = ringQ[delIdx];
-            if (totalBb > delay60 + 20) {
+            var baselineFrozen = inStroke || activeGateCount > 0 || postRollLeft > 0 || sonarBlankLeft > 0 || probePending;
+            if (totalBb > delay60 + 20 && sonarBlankLeft === 0 && !probePending) {
               if (!clutterReady) {
-                clutterI = delI;
-                clutterQ = delQ;
+                clutterI = iFilt;
+                clutterQ = qFilt;
+                prevDelI = delI;
+                prevDelQ = delQ;
+                if (blankDopN >= 8) {
+                  noiseDopPow = Math.max(1e-12, (blankDopSum / blankDopN) * 1.25);
+                  blankDopSum = 0;
+                  blankDopN = 0;
+                }
                 clutterReady = true;
-              } else if (!inStroke && activeGateCount === 0) {
+              } else if (!baselineFrozen && postStrokeHoldoff === 0) {
                 clutterI += 0.025 * (delI - clutterI);
                 clutterQ += 0.025 * (delQ - clutterQ);
                 var stepDiffI = delI - prevDelI;
@@ -829,10 +907,10 @@
               accSub = 0; accMid = 0; accAir = 0; accFric = 0; accCrestSq = 0; peakCrest = 0; pSamples = 0;
 
               var dbAir = 10 * Math.log10(eAir + 1e-15);
-              if (!noiseInit && totalBb > 60) {
+              if (!noiseInit && totalBb > 60 && sonarBlankLeft === 0 && !probePending) {
                 noiseAirDb = dbAir;
                 noiseInit = true;
-              } else if (noiseInit && !inStroke && activeGateCount === 0) {
+              } else if (noiseInit && !baselineFrozen) {
                 if (dbAir < noiseAirDb + 3.5) {
                   noiseAirDb = 0.96 * noiseAirDb + 0.04 * dbAir;
                 } else {
@@ -844,19 +922,19 @@
               var snrAir = noiseInit ? (dbAir - noiseAirDb) : 0;
               var curMag = Math.hypot(iFilt, qFilt);
               var clutMag = Math.hypot(clutterI, clutterQ);
-              var dipDbLive = (sonarMode && clutterReady && clutMag > 1e-5)
+              var dipDbLive = (sonarMode && clutterReady && sonarBlankLeft === 0 && clutMag > 1e-5)
                 ? 20 * Math.log10((clutMag + 1e-9) / Math.max(clutMag * 0.05, curMag + 1e-9))
                 : 0;
               var prevIdx = (ringW - 2 + RING_LEN) % RING_LEN;
               var dI = iFilt - ringI[prevIdx];
               var dQ = qFilt - ringQ[prevIdx];
-              var dopSnrDb = (sonarMode && clutterReady)
+              var dopSnrDb = (sonarMode && clutterReady && sonarBlankLeft === 0)
                 ? 10 * Math.log10((dI * dI + dQ * dQ + 1e-16) / (noiseDopPow + 1e-16))
                 : 0;
 
               var passiveTrig = snrAir > 6.2 && sfm > 0.16;
-              var sonarTrig = sonarMode && clutterReady && (dipDbLive > 2.6 || dopSnrDb > 8.2);
-              var holdTrig = (snrAir > 3.2) || (sonarMode && clutterReady && (dipDbLive > 1.3 || dopSnrDb > 4.5));
+              var sonarTrig = sonarMode && clutterReady && sonarBlankLeft === 0 && (dipDbLive > 2.6 || dopSnrDb > 8.2);
+              var holdTrig = (snrAir > 3.2) || (sonarMode && clutterReady && sonarBlankLeft === 0 && (dipDbLive > 1.3 || dopSnrDb > 4.5));
 
               // Live telemetry at ~62 Hz (every 4th passive frame ~16 ms)
               if (callbacks && callbacks.onTelemetry && (totalBb % 16 === 0)) {
@@ -870,33 +948,52 @@
                 });
               }
 
-              if (!inStroke && postRollLeft === 0) {
+              var pFrame = { eSub: eSub, eMid: eMid, eAir: eAir, eFric: eFric, crest: crest, sfm: sfm };
+
+              if (!inStroke && postRollLeft === 0 && sonarBlankLeft === 0 && !probePending) {
                 if (noiseInit && totalBb > delay60 + 30 && (passiveTrig || sonarTrig)) {
+                  if (activeGateCount === 0) {
+                    strokeClutterI = clutterI;
+                    strokeClutterQ = clutterQ;
+                    strokeNoiseAirDb = noiseAirDb;
+                    strokeNoiseDopPow = noiseDopPow;
+                    preGatePassive = [];
+                  }
                   activeGateCount++;
-                  if (activeGateCount >= 4) { // >= 16 ms sustained onset
+                  if (activeGateCount < 4) {
+                    preGatePassive.push(pFrame);
+                  } else { // >= 16 ms sustained onset; prepend frames 1..3 so passive & baseband align 1:1
                     inStroke = true;
                     quietCount = 0;
                     strokeStartBb = totalBb - activeGateCount * pHop;
-                    strokePassive = [];
+                    strokePassive = preGatePassive.slice();
+                    preGatePassive = [];
                   }
                 } else {
                   activeGateCount = 0;
+                  preGatePassive = [];
                 }
               }
 
               if (inStroke) {
-                strokePassive.push({ eSub: eSub, eMid: eMid, eAir: eAir, eFric: eFric, crest: crest, sfm: sfm });
-                if (!holdTrig) quietCount++;
-                else quietCount = 0;
+                strokePassive.push(pFrame);
+                if (!holdTrig) {
+                  quietCount++;
+                } else {
+                  quietCount = 0;
+                  postStrokeHoldoff = delay60 + 16;
+                }
 
                 var strokeDurMs = (strokePassive.length * pHop * 1000) / fbb;
                 if (quietCount >= 7 || strokeDurMs >= 920) {
                   inStroke = false;
                   activeGateCount = 0;
+                  preGatePassive = [];
                   var validPCount = Math.max(4, strokePassive.length - quietCount);
                   strokePassive = strokePassive.slice(0, validPCount);
                   strokeEndBb = strokeStartBb + validPCount * pHop;
                   postRollLeft = Math.min(48, Math.round(0.048 * fbb)); // 48 ms post-roll for zero-phase filtfilt
+                  postStrokeHoldoff = delay60 + postRollLeft + 16;
                 }
               } else if (postRollLeft > 0) {
                 postRollLeft -= pHop;
@@ -911,7 +1008,7 @@
                     var copyQ = new Float64Array(totalCopy);
                     var firstAbs = strokeStartBb - prePad;
                     for (var ci = 0; ci < totalCopy; ci++) {
-                      var rPos = (ringW - (totalBb - (firstAbs + ci)) + RING_LEN * 4) % RING_LEN;
+                      var rPos = (ringW - 1 - (totalBb - 1 - (firstAbs + ci)) + RING_LEN * 4) % RING_LEN;
                       copyI[ci] = ringI[rPos];
                       copyQ[ci] = ringQ[rPos];
                     }
@@ -922,11 +1019,11 @@
                       m0: prePad,
                       m1: prePad + rawLen,
                       fbb: fbb,
-                      clutterI: clutterI,
-                      clutterQ: clutterQ,
+                      clutterI: strokeClutterI,
+                      clutterQ: strokeClutterQ,
                       sonarActive: sonarMode,
-                      noiseAirDb: noiseAirDb,
-                      noiseDopPow: noiseDopPow,
+                      noiseAirDb: strokeNoiseAirDb,
+                      noiseDopPow: strokeNoiseDopPow,
                       durMs: (rawLen * 1000) / fbb
                     });
                     if (callbacks && callbacks.onStroke) callbacks.onStroke(feat);
@@ -942,12 +1039,14 @@
 
   // --- Synthesize Authentic Mac16,5 Physical Reference Waveforms for Demo & Unit Tests ---
   function synthesizeMac16Stroke(opts) {
-    var sr = (opts && opts.sampleRate) || 48000;
-    var dir = (opts && opts.dir) || 'UP';
-    var grille = (opts && opts.grille) || 'right';
-    var sonarOn = opts && opts.sonarOn !== undefined ? opts.sonarOn : true;
-    var seedVal = (opts && opts.seed) || 1337;
-    var kind = (opts && opts.kind) || 'swipe'; // 'swipe' | 'tap' | 'speech' | 'thump'
+    var cfg = opts || {};
+    var sr = cfg.sampleRate || 48000;
+    var dir = cfg.dir || 'UP';
+    var grille = cfg.grille || 'right';
+    var sonarOn = cfg.sonarOn !== undefined ? cfg.sonarOn : true;
+    var seedVal = cfg.seed || 1337;
+    var kind = cfg.kind || 'swipe'; // 'swipe' | 'tap' | 'speech' | 'thump'
+    var fresnelRad = typeof cfg.fresnelRad === 'number' ? cfg.fresnelRad : 0.9;
 
     var rng = function () {
       seedVal = (seedVal * 1664525 + 1013904223) >>> 0;
@@ -985,7 +1084,7 @@
         var occ = (inEvt && kind === 'swipe' && grille === 'right')
           ? 0.48 * Math.exp(-Math.pow(u - twStation, 2) / 0.022)
           : 0;
-        var fresnelShift = inEvt ? (opts.fresnelRad || 0.9) * Math.sin(Math.PI * u) : 0;
+        var fresnelShift = inEvt ? fresnelRad * Math.sin(Math.PI * u) : 0;
         var direct = 0.026 * (1 - occ) * Math.cos(phiC + fresnelShift * 0.08);
         phiC += dPhiC;
         if (phiC >= 2 * Math.PI) phiC -= 2 * Math.PI;
@@ -1045,10 +1144,11 @@
     return 10;
   }
 
-  // --- Generate Self-Contained AudioWorklet Blob Source ---
-  function buildWorkletBlobUrl() {
-    var src = [
-      'const CARRIER_HZ = 19000;',
+  // --- Generate Self-Contained AudioWorklet Source & Blob URL ---
+  function buildWorkletSource() {
+    return [
+      'const CARRIER_HZ = ' + CARRIER_HZ + ';',
+      'const FEATURE_SCALES = ' + JSON.stringify(FEATURE_SCALES) + ';',
       clamp.toString(),
       makeBiquadCoeffs.toString(),
       createBiquad.toString(),
@@ -1085,13 +1185,16 @@
       '}',
       'registerProcessor("grille-homodyne-processor", GrilleHomodyneProcessor);'
     ].join('\n');
+  }
 
+  function buildWorkletBlobUrl() {
+    var src = buildWorkletSource();
     var blob = new Blob([src], { type: 'application/javascript' });
     return URL.createObjectURL(blob);
   }
 
   // =========================================================================
-  // Interactive Browser UI Controller for Cell #1 (#cell-grille-swipe)
+  // Interactive Browser UI Controller for Cell 06 (#cell-grille-swipe)
   // =========================================================================
   function mountCell(cellEl) {
     if (!cellEl || cellEl.dataset.agMounted === 'true') return null;
@@ -1115,7 +1218,7 @@
       '      <span class="ag-title-long">' + numPrefix + ' · MBP-16 RIGHT GRILLE</span>',
       '    </span>',
       '    <span class="ag-spacer"></span>',
-      '    <span class="ag-Vernier-mini ag-num">0.0</span>',
+      '    <span class="ag-vernier-mini ag-num">+0.0</span>',
       '    <div class="ag-mic-wrap" data-warn="false">',
       '      <select class="ag-mic-select" aria-label="Microphone input source" title="Microphone input source">',
       '        <option value="">MBP 3-Mic Array</option>',
@@ -1125,27 +1228,27 @@
       '      <button type="button" class="ag-btn ag-demo-up" title="Inject synthetic Right-Grille UP swipe">Demo ↑</button>',
       '      <button type="button" class="ag-btn ag-demo-dn" title="Inject synthetic Right-Grille DOWN swipe">Demo ↓</button>',
       '    </div>',
-      '    <button type="button" class="ag-icon-btn ag-expand-btn" aria-expanded="false" aria-label="Expand 2x2 Acoustic Workbench" title="Expand 2x2 Acoustic Workbench">⤢</button>',
+      '    <button type="button" class="ag-icon-btn ag-expand-btn" aria-expanded="false" aria-label="Expand Acoustic Workbench" title="Expand Acoustic Workbench">⤢</button>',
       '  </header>',
       '  <div class="ag-lab-strip">',
-      '    <span class="ag-lab-badge ag-hw-status"><strong>HW:</strong> Unarmed · 3× MEMS Left (`~`/`tab`), 0 Right/Notch</span>',
+      '    <span class="ag-lab-badge ag-hw-status"><strong>HW:</strong> Unarmed · 3× MEMS Left (~/tab), 0 Right/Notch</span>',
       '    <span class="ag-lab-badge ag-loop-status"><strong>19kHz:</strong> Standby</span>',
       '    <label class="ag-gain-wrap"><span>Pilot</span><input type="range" class="ag-gain-slider" min="0.04" max="0.22" step="0.01" value="0.13"><span class="ag-num ag-gain-val">-18dB</span></label>',
       '    <button type="button" class="ag-btn ag-export-btn" title="Copy calibration & last stroke JSON">Copy JSON</button>',
       '  </div>',
       '  <div class="ag-workbench">',
       '    <div class="ag-primary-col">',
-      '      <div class="ag-stage-well" tabindex="0" role="slider" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0">',
+      '      <div class="ag-stage-well" tabindex="0" role="slider" aria-orientation="vertical" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0" aria-valuetext="+0.0 · Right Grille">',
       '        <div class="ag-canvas-wrap ag-stage-wrap"><canvas class="ag-stage-canvas"></canvas></div>',
       '        <div class="ag-toast" hidden><span class="ag-toast-text"></span><button type="button" class="ag-btn ag-toast-close">OK</button></div>',
       '      </div>',
       '      <div class="ag-cal-studio">',
       '        <div class="ag-cal-row">',
       '          <span><strong>4-Stroke LDA:</strong></span>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="0" data-dir="UP">↑1</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="1" data-dir="UP">↑2</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="2" data-dir="DOWN">↓1</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="3" data-dir="DOWN">↓2</button>',
+      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="0" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 1 (UP 1): empty">↑1</button>',
+      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="1" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 2 (UP 2): empty">↑2</button>',
+      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="2" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 3 (DOWN 1): empty">↓1</button>',
+      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="3" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 4 (DOWN 2): empty">↓2</button>',
       '          <button type="button" class="ag-btn ag-cal-reset" title="Clear calibration">Reset</button>',
       '          <span class="ag-spacer"></span>',
       '          <span class="ag-num ag-oof-verdict">Prior Mode</span>',
@@ -1168,7 +1271,7 @@
       '    </div>',
       '  </div>',
       '  <footer class="ag-footer">',
-      '    <button type="button" class="ag-btn ag-micro-cta"><span>Grille Swipe Lab</span><span>⤢</span></button>',
+      '    <button type="button" class="ag-btn ag-micro-cta"><span>Right Grille Lab</span><span>⤢</span></button>',
       '    <div class="ag-controls-bar">',
       '      <button type="button" class="ag-btn ag-arm-btn" data-armed="false">● Arm Mic</button>',
       '      <div class="ag-seg ag-seg-grille" role="group" aria-label="Target speaker grille">',
@@ -1187,7 +1290,7 @@
 
     var els = {
       led: cellEl.querySelector('.ag-led'),
-      vernierMini: cellEl.querySelector('.ag-Vernier-mini'),
+      vernierMini: cellEl.querySelector('.ag-vernier-mini'),
       micWrap: cellEl.querySelector('.ag-mic-wrap'),
       micSelect: cellEl.querySelector('.ag-mic-select'),
       demoUp: cellEl.querySelector('.ag-demo-up'),
@@ -1216,14 +1319,19 @@
       ldaWrap: cellEl.querySelector('.ag-lda-wrap'),
       ldaCanvas: cellEl.querySelector('.ag-lda-canvas'),
       scopeMeta: cellEl.querySelector('.ag-scope-meta'),
-      wfMeta: cellEl.querySelector('.ag-wf-meta'),
-      ldaMeta: cellEl.querySelector('.ag-lda-meta'),
       toast: cellEl.querySelector('.ag-toast'),
       toastText: cellEl.querySelector('.ag-toast-text'),
       toastClose: cellEl.querySelector('.ag-toast-close')
     };
 
     var LOUVER_N = 31;
+    var WATERFALL_MAX_COLS = 36;
+    var armGen = 0;
+    var isDestroyed = false;
+    var deviceChangeTimer = null;
+    var demoSeedSeq = 0;
+    var loadedCalKey = '';
+
     var state = {
       expanded: false,
       armed: false,
@@ -1247,7 +1355,7 @@
       calActiveSlot: -1, // 0..3 when recording calibration
       calSlots: [null, null, null, null], // [UP1, UP2, DN1, DN2]
       ldaModel: null,
-      waterfallCols: [], // ring of 48 Float32Array(33) columns
+      waterfallCols: [], // ring of 36 Float32Array(33) columns
       louverAngle: new Float32Array(LOUVER_N),
       louverVel: new Float32Array(LOUVER_N),
       audioCtx: null,
@@ -1268,8 +1376,18 @@
       lda: { w: 300, h: 90 }
     };
 
+    function isSonarEffective() {
+      return state.grille === 'right' && state.mode === 'sonar' && (!state.armed || state.sonarCoupled);
+    }
+
+    function effectiveCalMode() {
+      if (state.grille === 'left' || state.mode !== 'sonar') return 'passive';
+      if (state.armed && !state.sonarCoupled) return 'uncoupled';
+      return 'sonar';
+    }
+
     function storageKey() {
-      return 'ag_lda_v1::' + state.grille + '::' + state.mode;
+      return 'ag_lda_v1::' + state.grille + '::' + effectiveCalMode();
     }
 
     function saveCalibration() {
@@ -1282,27 +1400,59 @@
             dopCurve64: Array.from(s.dopCurve64)
           };
         });
-        sessionStorage.setItem(storageKey(), JSON.stringify(slim));
+        loadedCalKey = storageKey();
+        sessionStorage.setItem(loadedCalKey, JSON.stringify(slim));
       } catch (_) {}
     }
 
-    function loadCalibration() {
+    function loadCalibration(forceReload) {
+      var key = storageKey();
+      if (!forceReload && key === loadedCalKey) {
+        syncControlsUI();
+        return;
+      }
+      loadedCalKey = key;
       state.calSlots = [null, null, null, null];
       state.ldaModel = null;
       state.calActiveSlot = -1;
       try {
-        var raw = sessionStorage.getItem(storageKey());
+        var raw = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(key) : null;
         if (raw) {
           var parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length === 4) {
-            state.calSlots = parsed.map(function (p) {
+          if (
+            Array.isArray(parsed) &&
+            parsed.length === 4 &&
+            parsed.every(function (p) { return p && isValidScaledVec6(p.scaledX); })
+          ) {
+            var nextSlots = parsed.map(function (p) {
+              var fc = new Float32Array(64);
+              var dc = new Float32Array(64);
+              if (Array.isArray(p.fricCurve64)) {
+                for (var fi = 0; fi < Math.min(64, p.fricCurve64.length); fi++) {
+                  fc[fi] = Number.isFinite(p.fricCurve64[fi]) ? p.fricCurve64[fi] : 0;
+                }
+              }
+              if (Array.isArray(p.dopCurve64)) {
+                for (var di = 0; di < Math.min(64, p.dopCurve64.length); di++) {
+                  dc[di] = Number.isFinite(p.dopCurve64[di]) ? p.dopCurve64[di] : 0;
+                }
+              }
               return {
-                scaledX: p.scaledX,
-                fricCurve64: new Float32Array(p.fricCurve64 || 64),
-                dopCurve64: new Float32Array(p.dopCurve64 || 64)
+                scaledX: p.scaledX.slice(0, 6),
+                fricCurve64: fc,
+                dopCurve64: dc
               };
             });
-            recomputeCalibration();
+            var candidateModel = fitShrinkageLDA(
+              [nextSlots[0], nextSlots[1]],
+              [nextSlots[2], nextSlots[3]],
+              state.grille,
+              isSonarEffective()
+            );
+            if (candidateModel) {
+              state.calSlots = nextSlots;
+              state.ldaModel = candidateModel;
+            }
           }
         }
       } catch (_) {}
@@ -1311,12 +1461,11 @@
 
     function recomputeCalibration() {
       if (state.calSlots[0] && state.calSlots[1] && state.calSlots[2] && state.calSlots[3]) {
-        var sonarEff = state.mode === 'sonar' && (state.sonarCoupled || !state.armed);
         state.ldaModel = fitShrinkageLDA(
           [state.calSlots[0], state.calSlots[1]],
           [state.calSlots[2], state.calSlots[3]],
           state.grille,
-          sonarEff
+          isSonarEffective()
         );
       } else {
         state.ldaModel = null;
@@ -1334,18 +1483,33 @@
     }
 
     function resetIdleWatchdog() {
-      if (state.idleSleepTimer) clearTimeout(state.idleSleepTimer);
-      if (state.armed && state.mode === 'sonar' && state.sonarCoupled) {
-        if (state.sonarSleeping) {
-          state.sonarSleeping = false;
-          pushWorkletConfig(false);
-        }
-        state.idleSleepTimer = setTimeout(function () {
-          state.sonarSleeping = true;
-          sendWorkletRaw({ type: 'config', sonar: false, operatingGain: state.operatingGain, probe: false });
-          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Idle Sleep (swipe or click to wake)';
-        }, 60000);
+      if (state.idleSleepTimer) {
+        clearTimeout(state.idleSleepTimer);
+        state.idleSleepTimer = null;
       }
+      var canIdleSleep = state.armed &&
+        state.mode === 'sonar' &&
+        state.grille === 'right' &&
+        state.sonarCoupled &&
+        (typeof document === 'undefined' || !document.hidden);
+      if (!canIdleSleep) {
+        state.sonarSleeping = false;
+        return;
+      }
+      if (state.sonarSleeping) {
+        state.sonarSleeping = false;
+        pushWorkletConfig(false);
+        syncControlsUI();
+      }
+      state.idleSleepTimer = setTimeout(function () {
+        state.idleSleepTimer = null;
+        if (isDestroyed || !state.armed || state.mode !== 'sonar' || state.grille !== 'right' || !state.sonarCoupled) {
+          return;
+        }
+        state.sonarSleeping = true;
+        sendWorkletRaw({ type: 'config', sonar: false, operatingGain: state.operatingGain, probe: false });
+        syncControlsUI();
+      }, 60000);
     }
 
     function sendWorkletRaw(msg) {
@@ -1358,29 +1522,108 @@
     }
 
     function pushWorkletConfig(runProbe) {
-      var wantSonar = state.armed && state.mode === 'sonar' && state.grille === 'right';
+      var canTrySonar = state.armed &&
+        state.mode === 'sonar' &&
+        state.grille === 'right' &&
+        (!state.audioCtx || state.audioCtx.sampleRate >= 44100);
+      var wantSonar = canTrySonar && (!!runProbe || state.sonarCoupled) && !state.sonarSleeping;
       sendWorkletRaw({
         type: 'config',
         sonar: wantSonar,
         operatingGain: state.operatingGain,
-        probe: !!runProbe
+        probe: !!(wantSonar && runProbe)
       });
     }
 
-    // --- Two-Phase CoreAudio Built-In Mic Lock & Audio Pipeline Startup ---
+    function teardownActiveAudio(silent) {
+      state.armed = false;
+      state.sonarCoupled = false;
+      state.sonarSleeping = false;
+      state.fLive = 0;
+      if (state.idleSleepTimer) {
+        clearTimeout(state.idleSleepTimer);
+        state.idleSleepTimer = null;
+      }
+      sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
+      if (state.procNode) {
+        if (state.procNode.port) state.procNode.port.onmessage = null;
+        state.procNode.onprocessorerror = null;
+        state.procNode.onaudioprocess = null;
+        state.procNode._fallbackUpdate = null;
+        try { state.procNode.disconnect(); } catch (_) {}
+        state.procNode = null;
+      }
+      if (state.sourceNode) {
+        try { state.sourceNode.disconnect(); } catch (_) {}
+        state.sourceNode = null;
+      }
+      if (state.stream) {
+        state.stream.getTracks().forEach(function (t) {
+          try { t.stop(); } catch (_) {}
+        });
+        state.stream = null;
+      }
+      var oldCtx = state.audioCtx;
+      state.audioCtx = null;
+      if (state.workletUrl) {
+        try { URL.revokeObjectURL(state.workletUrl); } catch (_) {}
+        state.workletUrl = null;
+      }
+      if (!silent && !isDestroyed) {
+        loadCalibration(false);
+        syncControlsUI();
+      }
+      if (oldCtx && oldCtx.state !== 'closed') {
+        return Promise.resolve().then(function () { return oldCtx.close(); }).catch(function () {});
+      }
+      return Promise.resolve();
+    }
+
+    // --- Two-Phase CoreAudio Built-In Mic Lock & Race-Proof Audio Pipeline Startup ---
     async function armAudio(explicitDeviceId) {
+      if (isDestroyed) return;
+      var gen = ++armGen;
       hideToast();
+
       if (typeof window !== 'undefined' && !window.isSecureContext) {
-        showToast('Mic needs localhost/HTTPS (`python3 -m http.server 8000`). Use Demo ↑↓ meanwhile.', 'warn');
+        showToast('Mic needs localhost/HTTPS (python3 -m http.server 8000). Use Demo ↑↓ meanwhile.', 'warn');
         return;
       }
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         showToast('Browser lacks getUserMedia support. Use Demo ↑↓ to inspect strokes.', 'warn');
         return;
       }
 
+      var localStream = null;
+      var localCtx = null;
+      var localWorkletUrl = null;
+      var isStale = function () {
+        return gen !== armGen || isDestroyed;
+      };
+      var cleanupLocal = function () {
+        if (localStream) {
+          localStream.getTracks().forEach(function (t) {
+            try { t.stop(); } catch (_) {}
+          });
+          localStream = null;
+        }
+        if (localCtx) {
+          try {
+            if (localCtx.state !== 'closed') {
+              Promise.resolve(localCtx.close()).catch(function () {});
+            }
+          } catch (_) {}
+          localCtx = null;
+        }
+        if (localWorkletUrl) {
+          try { URL.revokeObjectURL(localWorkletUrl); } catch (_) {}
+          localWorkletUrl = null;
+        }
+      };
+
       try {
-        await disarmAudio(true);
+        await teardownActiveAudio(true);
+        if (isStale()) { cleanupLocal(); return; }
 
         var makeConstraints = function (devId, strictExact) {
           var flag = strictExact ? { exact: false } : false;
@@ -1395,15 +1638,20 @@
           return { audio: audio };
         };
 
-        var stream;
         try {
-          stream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, true));
+          localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, true));
         } catch (_) {
-          stream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, false));
+          if (isStale()) { cleanupLocal(); return; }
+          localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(explicitDeviceId, false));
         }
+        if (isStale()) { cleanupLocal(); return; }
 
         // Enumerate devices now that labels are unlocked, and auto-switch off DJI / iPhone / AirPods!
-        var devices = await navigator.mediaDevices.enumerateDevices();
+        var devices = navigator.mediaDevices.enumerateDevices
+          ? await navigator.mediaDevices.enumerateDevices()
+          : [];
+        if (isStale()) { cleanupLocal(); return; }
+
         var inputs = devices.filter(function (d) { return d.kind === 'audioinput'; });
         var outputs = devices.filter(function (d) { return d.kind === 'audiooutput'; });
 
@@ -1417,54 +1665,68 @@
               bestScore = sc;
             }
           }
-          var curTrack = stream.getAudioTracks()[0];
+          var curTrack = localStream.getAudioTracks()[0];
           var curSettings = curTrack && curTrack.getSettings ? curTrack.getSettings() : {};
-          if (best && best.deviceId && curSettings.deviceId && best.deviceId !== curSettings.deviceId && bestScore > rankAudioInputDevice(curTrack.label)) {
-            stream.getTracks().forEach(function (t) { t.stop(); });
+          if (
+            best &&
+            best.deviceId &&
+            curSettings.deviceId &&
+            best.deviceId !== curSettings.deviceId &&
+            bestScore > rankAudioInputDevice(curTrack.label)
+          ) {
+            localStream.getTracks().forEach(function (t) {
+              try { t.stop(); } catch (_) {}
+            });
+            localStream = null;
             try {
-              stream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, true));
+              localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, true));
             } catch (_) {
-              stream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, false));
+              if (isStale()) { cleanupLocal(); return; }
+              localStream = await navigator.mediaDevices.getUserMedia(makeConstraints(best.deviceId, false));
             }
+            if (isStale()) { cleanupLocal(); return; }
           }
         }
-
-        populateDevicePicker(inputs, stream);
 
         var AudioCtx = window.AudioContext || window.webkitAudioContext;
-        var ctx = new AudioCtx({ latencyHint: 'interactive', sampleRate: 48000 });
-        if (ctx.state === 'suspended') await ctx.resume();
+        try {
+          localCtx = new AudioCtx({ latencyHint: 'interactive', sampleRate: 48000 });
+        } catch (_) {
+          localCtx = new AudioCtx({ latencyHint: 'interactive' });
+        }
+        if (localCtx.state === 'suspended') {
+          await localCtx.resume();
+          if (isStale()) { cleanupLocal(); return; }
+        }
 
         // Pin output sink to MacBook Pro Speakers when supported (Chromium)
-        if (typeof ctx.setSinkId === 'function' && outputs.length > 0) {
-          var mbpSpk = outputs.find(function (o) { return /macbook\s*pro\s*speakers|built-in\s*output|internal\s*speakers/i.test(o.label); });
+        if (typeof localCtx.setSinkId === 'function' && outputs.length > 0) {
+          var mbpSpk = outputs.find(function (o) {
+            return /macbook\s*pro\s*speakers|built-in\s*output|internal\s*speakers/i.test(o.label);
+          });
           if (mbpSpk && mbpSpk.deviceId) {
-            try { await ctx.setSinkId(mbpSpk.deviceId); } catch (_) {}
+            try { await localCtx.setSinkId(mbpSpk.deviceId); } catch (_) {}
+            if (isStale()) { cleanupLocal(); return; }
           }
         }
 
-        state.audioCtx = ctx;
-        state.stream = stream;
-        var src = ctx.createMediaStreamSource(stream);
-        state.sourceNode = src;
-
-        var track = stream.getAudioTracks()[0];
-        var settings = track && track.getSettings ? track.getSettings() : {};
-        state.micLabel = (track && track.label) ? track.label : 'Built-in Microphone';
-        state.selectedDeviceId = settings.deviceId || '';
-        state.externalMicWarn = rankAudioInputDevice(state.micLabel) < 0;
-
-        if (ctx.sampleRate < 44100) {
-          state.mode = 'passive';
-          state.sonarCoupled = false;
-          showToast('Sample rate ' + ctx.sampleRate + ' Hz < 44.1 kHz (Bluetooth HFP?). Switched to Passive.', 'warn');
-        }
+        var src = localCtx.createMediaStreamSource(localStream);
 
         var handleMsg = function (msg) {
-          if (!msg) return;
+          if (!msg || gen !== armGen || isDestroyed || !state.armed) return;
           if (msg.type === 'probe') {
             state.loopbackSnrDb = msg.snrDb;
+            var prevCoupled = state.sonarCoupled;
             state.sonarCoupled = !!msg.ok;
+            if (prevCoupled !== state.sonarCoupled) {
+              var wasCalibrating = state.calActiveSlot >= 0;
+              loadCalibration(false);
+              if (wasCalibrating && state.calActiveSlot < 0) {
+                state.calSlots = [null, null, null, null];
+                state.ldaModel = null;
+                state.calActiveSlot = 0;
+              }
+            }
             if (!msg.ok && state.mode === 'sonar') {
               showToast('19 kHz uncoupled (' + msg.snrDb.toFixed(1) + ' dB — check Mute / Headphones / Voice Isolation). Using Passive weights.', 'warn');
             }
@@ -1479,35 +1741,59 @@
         };
 
         // Preferred: Coherent Single-Worklet TX+RX; Fallback: ScriptProcessorNode(512, 1, 2)
-        var connectedWorklet = false;
-        if (ctx.audioWorklet && typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
+        var procNode = null;
+        if (
+          localCtx.audioWorklet &&
+          typeof Blob !== 'undefined' &&
+          typeof URL !== 'undefined' &&
+          typeof AudioWorkletNode !== 'undefined'
+        ) {
           try {
-            state.workletUrl = buildWorkletBlobUrl();
-            await ctx.audioWorklet.addModule(state.workletUrl);
-            var wNode = new AudioWorkletNode(ctx, 'grille-homodyne-processor', {
+            localWorkletUrl = buildWorkletBlobUrl();
+            await localCtx.audioWorklet.addModule(localWorkletUrl);
+            if (isStale()) {
+              try { src.disconnect(); } catch (_) {}
+              cleanupLocal();
+              return;
+            }
+            var wNode = new AudioWorkletNode(localCtx, 'grille-homodyne-processor', {
               numberOfInputs: 1,
               numberOfOutputs: 1,
               outputChannelCount: [2]
             });
             wNode.port.onmessage = function (ev) { handleMsg(ev.data); };
+            wNode.onprocessorerror = function () {
+              if (gen !== armGen || isDestroyed) return;
+              disarmAudio(false);
+              showToast('AudioWorklet processor halted unexpectedly — disarmed microphone.', 'warn');
+            };
             src.connect(wNode);
-            wNode.connect(ctx.destination);
-            state.procNode = wNode;
-            connectedWorklet = true;
+            wNode.connect(localCtx.destination);
+            procNode = wNode;
           } catch (_) {
-            connectedWorklet = false;
+            if (localWorkletUrl) {
+              try { URL.revokeObjectURL(localWorkletUrl); } catch (_) {}
+              localWorkletUrl = null;
+            }
+            if (isStale()) {
+              try { src.disconnect(); } catch (_) {}
+              cleanupLocal();
+              return;
+            }
+            procNode = null;
           }
         }
 
-        if (!connectedWorklet) {
-          var engine = createStreamEngine(ctx.sampleRate);
-          var sp = ctx.createScriptProcessor(512, 1, 2);
+        if (!procNode) {
+          var engine = createStreamEngine(localCtx.sampleRate);
+          var sp = localCtx.createScriptProcessor(512, 1, 2);
           var opGain = state.operatingGain;
           sp._fallbackUpdate = function (d) {
             if (typeof d.operatingGain === 'number') opGain = d.operatingGain;
             engine.setSonarTarget(!!d.sonar, opGain, !!d.probe);
           };
           sp.onaudioprocess = function (ev) {
+            if (gen !== armGen || isDestroyed) return;
             var inCh = ev.inputBuffer.getChannelData(0);
             var outL = ev.outputBuffer.getChannelData(0);
             var outR = ev.outputBuffer.getChannelData(1);
@@ -1519,59 +1805,66 @@
             });
           };
           src.connect(sp);
-          sp.connect(ctx.destination);
-          state.procNode = sp;
+          sp.connect(localCtx.destination);
+          procNode = sp;
         }
 
+        populateDevicePicker(inputs, localStream);
+
+        var track = localStream.getAudioTracks()[0];
+        var settings = track && track.getSettings ? track.getSettings() : {};
+        state.micLabel = (track && track.label) ? track.label : 'Built-in Microphone';
+        state.selectedDeviceId = settings.deviceId || explicitDeviceId || '';
+        state.externalMicWarn = rankAudioInputDevice(state.micLabel) < 0;
+
+        state.audioCtx = localCtx;
+        state.stream = localStream;
+        state.sourceNode = src;
+        state.procNode = procNode;
+        state.workletUrl = localWorkletUrl;
+        localCtx = null;
+        localStream = null;
+        localWorkletUrl = null;
+
         state.armed = true;
-        state.sonarCoupled = state.mode === 'sonar' && state.grille === 'right' && ctx.sampleRate >= 44100;
+        state.sonarSleeping = false;
+        var sampleRateFallback = false;
+        if (state.audioCtx.sampleRate < 44100) {
+          state.mode = 'passive';
+          state.sonarCoupled = false;
+          sampleRateFallback = true;
+          loadCalibration(false);
+        } else {
+          state.sonarCoupled = state.mode === 'sonar' && state.grille === 'right';
+          loadCalibration(false);
+        }
+
         var runProbe = state.sonarCoupled;
         pushWorkletConfig(runProbe);
         syncControlsUI();
         resetIdleWatchdog();
 
-        if (state.externalMicWarn) {
+        if (sampleRateFallback) {
+          showToast('Sample rate ' + state.audioCtx.sampleRate + ' Hz < 44.1 kHz (Bluetooth HFP?). Switched to Passive.', 'warn');
+        } else if (state.externalMicWarn) {
           showToast('External mic active (' + state.micLabel + '). Select MacBook Pro Microphone above.', 'warn');
         }
       } catch (err) {
-        state.armed = false;
+        cleanupLocal();
+        if (isStale()) return;
+        await teardownActiveAudio(true);
         syncControlsUI();
         showToast('Microphone access blocked (' + (err && err.name ? err.name : 'Error') + '). Try Demo ↑↓.', 'warn');
       }
     }
 
     async function disarmAudio(silent) {
-      if (state.idleSleepTimer) {
-        clearTimeout(state.idleSleepTimer);
-        state.idleSleepTimer = null;
+      armGen++;
+      if (deviceChangeTimer) {
+        clearTimeout(deviceChangeTimer);
+        deviceChangeTimer = null;
       }
-      sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
-      if (state.procNode) {
-        try { state.procNode.disconnect(); } catch (_) {}
-        state.procNode = null;
-      }
-      if (state.sourceNode) {
-        try { state.sourceNode.disconnect(); } catch (_) {}
-        state.sourceNode = null;
-      }
-      if (state.stream) {
-        state.stream.getTracks().forEach(function (t) {
-          try { t.stop(); } catch (_) {}
-        });
-        state.stream = null;
-      }
-      if (state.audioCtx) {
-        try { await state.audioCtx.close(); } catch (_) {}
-        state.audioCtx = null;
-      }
-      if (state.workletUrl) {
-        try { URL.revokeObjectURL(state.workletUrl); } catch (_) {}
-        state.workletUrl = null;
-      }
-      state.armed = false;
-      state.sonarCoupled = false;
-      state.fLive = 0;
-      if (!silent) syncControlsUI();
+      await teardownActiveAudio(silent);
     }
 
     function populateDevicePicker(inputs, activeStream) {
@@ -1625,7 +1918,7 @@
 
       state.lastFeat = feat;
       state.waterfallCols.push(feat.specBins);
-      if (state.waterfallCols.length > 48) state.waterfallCols.shift();
+      if (state.waterfallCols.length > WATERFALL_MAX_COLS) state.waterfallCols.shift();
 
       // Guided 4-Stroke Calibration capture
       if (state.calActiveSlot >= 0) {
@@ -1640,7 +1933,7 @@
         }
       }
 
-      var sonarEff = state.mode === 'sonar' && (isSynthetic || state.sonarCoupled);
+      var sonarEff = isSonarEffective();
       var res = classifyStroke(feat, state.ldaModel, state.grille, sonarEff);
       state.lastResult = res;
 
@@ -1653,6 +1946,7 @@
 
       if (reducedMotionQuery.matches) {
         state.vernierPos = state.vernierTarget;
+        state.vernierVel = 0;
         state.wavePhase = -1;
       }
 
@@ -1660,15 +1954,17 @@
     }
 
     function injectDemoStroke(dir) {
-      var sonarOn = state.mode === 'sonar' && state.grille === 'right';
+      var sonarOn = isSonarEffective();
       var engine = createStreamEngine(48000);
       engine.setSonarTarget(sonarOn, 0.13, false);
+      demoSeedSeq = (demoSeedSeq + 1) >>> 0;
+      var seed = (((Date.now() & 0xffff) + demoSeedSeq * 7919 + (dir === 'UP' ? 17 : 53)) >>> 0) || 1;
       var buf = synthesizeMac16Stroke({
         sampleRate: 48000,
         dir: dir,
         grille: state.grille,
         sonarOn: sonarOn,
-        seed: (Date.now() & 0xffff) + (dir === 'UP' ? 17 : 53)
+        seed: seed
       });
       var outL = new Float32Array(128);
       var outR = new Float32Array(128);
@@ -1684,8 +1980,8 @@
     }
 
     function syncControlsUI() {
-      var sonarEff = state.armed && state.mode === 'sonar' && state.grille === 'right' && state.sonarCoupled;
-      els.led.dataset.state = !state.armed ? 'idle' : (state.externalMicWarn ? 'warn' : (sonarEff ? 'sonar' : 'live'));
+      var sonarLive = state.armed && state.mode === 'sonar' && state.grille === 'right' && state.sonarCoupled && !state.sonarSleeping;
+      els.led.dataset.state = !state.armed ? 'idle' : (state.externalMicWarn ? 'warn' : (sonarLive ? 'sonar' : 'live'));
       els.micWrap.dataset.warn = state.externalMicWarn ? 'true' : 'false';
 
       els.armBtn.dataset.armed = state.armed ? 'true' : 'false';
@@ -1712,25 +2008,39 @@
 
       els.slotBtns.forEach(function (sb) {
         var idx = Number(sb.dataset.slot);
-        sb.dataset.filled = state.calSlots[idx] ? 'true' : 'false';
-        sb.dataset.recording = state.calActiveSlot === idx ? 'true' : 'false';
+        var filled = !!state.calSlots[idx];
+        var rec = state.calActiveSlot === idx;
+        var dirLabel = sb.dataset.dir === 'UP' ? 'UP' : 'DOWN';
+        var numInDir = (idx % 2) + 1;
+        sb.dataset.filled = filled ? 'true' : 'false';
+        sb.dataset.recording = rec ? 'true' : 'false';
+        sb.setAttribute('aria-pressed', rec ? 'true' : 'false');
+        sb.setAttribute(
+          'aria-label',
+          'Calibration stroke ' + (idx + 1) + ' (' + dirLabel + ' ' + numInDir + '): ' +
+            (rec ? 'recording' : (filled ? 'captured' : 'empty'))
+        );
       });
 
       if (calDone) {
         var dp = state.ldaModel.dPrimeOof;
         var verd = dp >= 1.6 ? 'Locked' : (dp >= 0.9 ? 'Usable' : 'Marginal');
         els.oofVerdict.textContent = "d'_OOF " + dp.toFixed(2) + ' · ' + verd;
+      } else if (state.grille === 'left') {
+        els.oofVerdict.textContent = 'Left 3-Mic Prior (High)';
+      } else if (state.mode === 'sonar' && (!state.armed || state.sonarCoupled)) {
+        els.oofVerdict.textContent = '19kHz Sonar Prior';
+      } else if (state.mode === 'sonar') {
+        els.oofVerdict.textContent = 'Uncoupled Passive Prior';
       } else {
-        els.oofVerdict.textContent = state.grille === 'left'
-          ? 'Left 3-Mic Prior (High)'
-          : (state.mode === 'sonar' ? '19kHz Sonar Prior' : 'Passive Prior (Δ4.5% Low)');
+        els.oofVerdict.textContent = 'Passive Prior (Δ4.5% Low)';
       }
 
       if (state.armed && state.audioCtx) {
         var srK = (state.audioCtx.sampleRate / 1000).toFixed(1) + 'kHz';
         els.hwStatus.innerHTML = '<strong>HW:</strong> ' + escapeHtml(state.micLabel) + ' · ' + srK + ' · EC/NS/AGC:OFF';
       } else {
-        els.hwStatus.innerHTML = '<strong>HW:</strong> Unarmed · 3× MEMS Left (`~`/`tab`), 0 Right/Notch';
+        els.hwStatus.innerHTML = '<strong>HW:</strong> Unarmed · 3× MEMS Left (~/tab), 0 Right/Notch';
       }
 
       if (!state.armed) {
@@ -1738,15 +2048,24 @@
       } else if (state.grille === 'left' || state.mode === 'passive') {
         els.loopStatus.innerHTML = '<strong>19kHz:</strong> Muted (Passive Mode)';
       } else if (state.sonarCoupled) {
-        var snrTxt = state.loopbackSnrDb !== null ? ('+' + state.loopbackSnrDb.toFixed(1) + ' dB') : 'Locked';
-        els.loopStatus.innerHTML = '<strong>19kHz:</strong> Coupled (' + snrTxt + ' R+1.0)';
+        if (state.sonarSleeping) {
+          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Idle Sleep (swipe or click to wake)';
+        } else {
+          var snrTxt = state.loopbackSnrDb !== null ? ('+' + state.loopbackSnrDb.toFixed(1) + ' dB') : 'Locked';
+          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Coupled (' + snrTxt + ' R+1.0)';
+        }
       } else {
         els.loopStatus.innerHTML = '<strong>19kHz:</strong> Uncoupled (Fallback Passive)';
       }
 
       var vSign = state.vernierTarget >= 0 ? '+' : '';
-      els.vernierMini.textContent = vSign + state.vernierTarget.toFixed(1);
+      var vTxt = vSign + state.vernierTarget.toFixed(1);
+      els.vernierMini.textContent = vTxt;
       els.stageWell.setAttribute('aria-valuenow', String(state.vernierTarget));
+      var ariaCtx = state.lastResult
+        ? ((state.lastResult.dir === 'UP' ? 'UP ' : 'DOWN ') + Math.round(state.lastResult.confidence * 100) + '%')
+        : (state.grille === 'right' ? 'Right Grille' : 'Left Grille');
+      els.stageWell.setAttribute('aria-valuetext', vTxt + ' · ' + ariaCtx);
 
       if (state.lastResult) {
         var arrow = state.lastResult.dir === 'UP' ? '↑ UP ' : '↓ DN ';
@@ -1766,41 +2085,75 @@
     }
 
     var placeholderEl = null;
+    var expandToken = 0;
 
-    // --- Toggle Expanded Empirical Workbench (Zero Sibling Grid Reflow) ---
+    function applyExpandDOM(targetExpanded) {
+      var activeExp = !!(targetExpanded && !isDestroyed);
+      if (activeExp) {
+        if (!placeholderEl && cellEl.parentElement) {
+          placeholderEl = document.createElement('div');
+          placeholderEl.className = 'cell ag-grid-placeholder';
+          placeholderEl.setAttribute('aria-hidden', 'true');
+          cellEl.parentElement.insertBefore(placeholderEl, cellEl);
+        }
+        cellEl.classList.add('is-expanded');
+      } else {
+        cellEl.classList.remove('is-expanded');
+        if (placeholderEl && placeholderEl.parentElement) {
+          placeholderEl.parentElement.removeChild(placeholderEl);
+        }
+        placeholderEl = null;
+      }
+      var expLabel = activeExp ? 'Collapse Acoustic Workbench (Esc)' : 'Expand Acoustic Workbench';
+      els.expandBtn.setAttribute('aria-expanded', activeExp ? 'true' : 'false');
+      els.expandBtn.setAttribute('aria-label', expLabel);
+      els.expandBtn.title = expLabel;
+      els.expandBtn.textContent = activeExp ? '⤡' : '⤢';
+      if (!isDestroyed) requestRender();
+    }
+
+    // --- Toggle Expanded Empirical Workbench (Zero Sibling Grid Reflow & Race-Safe ViewTransition) ---
     function toggleExpand(forceVal) {
+      if (isDestroyed && forceVal !== false) return;
       var next = typeof forceVal === 'boolean' ? forceVal : !state.expanded;
       if (next === state.expanded) return;
-      var apply = function () {
-        state.expanded = next;
-        if (next) {
-          if (!placeholderEl && cellEl.parentElement) {
-            placeholderEl = document.createElement('div');
-            placeholderEl.className = 'cell ag-grid-placeholder';
-            placeholderEl.setAttribute('aria-hidden', 'true');
-            cellEl.parentElement.insertBefore(placeholderEl, cellEl);
+      state.expanded = next;
+      var tok = ++expandToken;
+
+      if (
+        !isDestroyed &&
+        typeof document !== 'undefined' &&
+        typeof document.startViewTransition === 'function' &&
+        !reducedMotionQuery.matches
+      ) {
+        try {
+          var vt = document.startViewTransition(function () {
+            if (tok !== expandToken && !isDestroyed) {
+              applyExpandDOM(state.expanded);
+              return;
+            }
+            applyExpandDOM(state.expanded);
+          });
+          if (vt) {
+            if (vt.ready && typeof vt.ready.catch === 'function') vt.ready.catch(function () {});
+            if (vt.finished && typeof vt.finished.catch === 'function') vt.finished.catch(function () {});
+            if (vt.updateCallbackDone && typeof vt.updateCallbackDone.catch === 'function') vt.updateCallbackDone.catch(function () {});
           }
-          cellEl.classList.add('is-expanded');
-        } else {
-          cellEl.classList.remove('is-expanded');
-          if (placeholderEl && placeholderEl.parentElement) {
-            placeholderEl.parentElement.removeChild(placeholderEl);
-          }
-          placeholderEl = null;
+        } catch (_) {
+          applyExpandDOM(state.expanded);
         }
-        els.expandBtn.setAttribute('aria-expanded', next ? 'true' : 'false');
-        els.expandBtn.textContent = next ? '⤡' : '⤢';
-        els.expandBtn.title = next ? 'Collapse Workbench (Esc)' : 'Expand Acoustic Workbench';
-        requestRender();
-      };
-      if (typeof document !== 'undefined' && document.startViewTransition && !reducedMotionQuery.matches) {
-        document.startViewTransition(apply);
       } else {
-        apply();
+        applyExpandDOM(state.expanded);
       }
     }
 
     // --- Event Listeners ---
+    cellEl.addEventListener('click', function (ev) {
+      if (state.sonarSleeping && state.armed && (!els.armBtn || !els.armBtn.contains(ev.target))) {
+        resetIdleWatchdog();
+      }
+    });
+
     els.armBtn.addEventListener('click', function () {
       if (state.armed) disarmAudio(false);
       else armAudio('');
@@ -1813,8 +2166,19 @@
     els.grilleBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         state.grille = btn.dataset.grille;
-        loadCalibration();
-        if (state.armed) pushWorkletConfig(state.mode === 'sonar' && state.grille === 'right');
+        if (state.armed) {
+          if (state.grille === 'right' && state.mode === 'sonar' && state.audioCtx && state.audioCtx.sampleRate >= 44100) {
+            state.sonarSleeping = false;
+            var needProbe = !state.sonarCoupled;
+            if (needProbe) state.sonarCoupled = true;
+            pushWorkletConfig(needProbe);
+          } else {
+            state.sonarSleeping = false;
+            pushWorkletConfig(false);
+          }
+        }
+        resetIdleWatchdog();
+        loadCalibration(false);
         syncControlsUI();
       });
     });
@@ -1822,8 +2186,19 @@
     els.modeBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         state.mode = btn.dataset.mode;
-        loadCalibration();
-        if (state.armed) pushWorkletConfig(state.mode === 'sonar' && state.grille === 'right');
+        if (state.armed) {
+          if (state.mode === 'sonar' && state.grille === 'right' && state.audioCtx && state.audioCtx.sampleRate >= 44100) {
+            state.sonarSleeping = false;
+            var needProbe = !state.sonarCoupled;
+            if (needProbe) state.sonarCoupled = true;
+            pushWorkletConfig(needProbe);
+          } else {
+            state.sonarSleeping = false;
+            pushWorkletConfig(false);
+          }
+        }
+        resetIdleWatchdog();
+        loadCalibration(false);
         syncControlsUI();
       });
     });
@@ -1836,7 +2211,12 @@
         state.ldaModel = null;
         state.calActiveSlot = 0;
         if (!state.armed) {
-          showToast('Calibrating: Arm Mic for live grille swipes, or click Demo ↑ / Demo ↓ 2× each.', 'info');
+          var cellW = cellEl.clientWidth || 0;
+          if (state.expanded || cellW >= 500) {
+            showToast('Calibrating: Arm Mic for live grille swipes, or click Demo ↑ / Demo ↓ 2× each.', 'info');
+          } else {
+            showToast('Calibrating: Arm Mic for live swipes, press ↑ / ↓ keys 2×, or open ⤢ Workbench.', 'info');
+          }
         }
       }
       syncControlsUI();
@@ -1867,7 +2247,12 @@
       state.operatingGain = parseFloat(els.gainSlider.value) || 0.13;
       var db = Math.round(20 * Math.log10(state.operatingGain));
       els.gainVal.textContent = db + 'dB';
-      if (state.armed && state.sonarCoupled) pushWorkletConfig(false);
+      if (state.armed && state.sonarCoupled) {
+        state.sonarSleeping = false;
+        pushWorkletConfig(false);
+        resetIdleWatchdog();
+        syncControlsUI();
+      }
     });
 
     els.exportBtn.addEventListener('click', function () {
@@ -1876,22 +2261,29 @@
         micPlacement: '3x MEMS triangle under upper-left speaker grille beside ~ and tab; 0 in notch or right grille',
         grille: state.grille,
         mode: state.mode,
+        sonarCoupled: state.sonarCoupled,
         loopbackSnrDb: state.loopbackSnrDb,
         dPrimeOof: state.ldaModel ? state.ldaModel.dPrimeOof : null,
-        weights: state.ldaModel ? state.ldaModel.w : getPriorWeights(state.grille, state.mode === 'sonar'),
+        weights: state.ldaModel ? state.ldaModel.w : getPriorWeights(state.grille, isSonarEffective()),
         lastFeatures: state.lastFeat ? state.lastFeat.rawX : null,
         lastResult: state.lastResult
       };
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(function () {
+      var jsonStr = JSON.stringify(payload, null, 2);
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(jsonStr).then(function () {
           showToast('Copied telemetry & LDA JSON to clipboard.', 'info');
-        }).catch(function () {});
+        }).catch(function () {
+          showToast('Clipboard write blocked in this context — use HTTPS/localhost.', 'warn');
+        });
+      } else {
+        showToast('Clipboard API unavailable (requires HTTPS/localhost).', 'warn');
       }
     });
 
     // Direct pointer / wheel / keyboard Demo scrub on the stage
     els.stageWell.addEventListener('pointerdown', function (ev) {
-      if (ev.target.closest('button')) return;
+      if (state.sonarSleeping && state.armed) resetIdleWatchdog();
+      if (ev.target && ev.target.closest && ev.target.closest('button')) return;
       state.scrubDragging = true;
       state.lastDragY = ev.clientY;
       try { els.stageWell.setPointerCapture(ev.pointerId); } catch (_) {}
@@ -1904,8 +2296,13 @@
       state.vernierTarget = clamp(state.vernierTarget + dy * 0.06, -10, 10);
       var rect = els.stageWell.getBoundingClientRect();
       state.stationY = clamp(1 - (ev.clientY - rect.top) / Math.max(1, rect.height), 0, 1);
-      var idx = clamp(Math.floor((1 - state.stationY) * (LOUVER_N - 1)), 0, LOUVER_N - 1);
-      state.louverVel[idx] += clamp(dy * 0.28, -4, 4);
+      if (reducedMotionQuery.matches) {
+        state.vernierPos = state.vernierTarget;
+        state.vernierVel = 0;
+      } else {
+        var idx = clamp(Math.floor((1 - state.stationY) * (LOUVER_N - 1)), 0, LOUVER_N - 1);
+        state.louverVel[idx] += clamp(dy * 0.28, -4, 4);
+      }
       syncControlsUI();
     });
 
@@ -1913,6 +2310,10 @@
       if (!state.scrubDragging) return;
       state.scrubDragging = false;
       state.vernierTarget = Math.round(state.vernierTarget * 2) / 2;
+      if (reducedMotionQuery.matches) {
+        state.vernierPos = state.vernierTarget;
+        state.vernierVel = 0;
+      }
       syncControlsUI();
     };
     els.stageWell.addEventListener('pointerup', endDrag);
@@ -1920,18 +2321,48 @@
 
     els.stageWell.addEventListener('wheel', function (ev) {
       ev.preventDefault();
+      if (state.sonarSleeping && state.armed) resetIdleWatchdog();
       var step = ev.deltaY < 0 ? 0.5 : -0.5;
       state.vernierTarget = clamp(Math.round((state.vernierTarget + step) * 2) / 2, -10, 10);
       state.stationY = clamp(state.stationY + step * 0.08, 0, 1);
       state.waveDir = step > 0 ? 'UP' : 'DOWN';
-      state.wavePhase = 0;
+      if (reducedMotionQuery.matches) {
+        state.vernierPos = state.vernierTarget;
+        state.vernierVel = 0;
+        state.wavePhase = -1;
+      } else {
+        state.wavePhase = 0;
+      }
       syncControlsUI();
     }, { passive: false });
 
     els.stageWell.addEventListener('keydown', function (ev) {
-      if (ev.key === 'ArrowUp' || ev.key === 'ArrowDown') {
+      if (ev.key === 'ArrowUp' || ev.key === 'ArrowRight') {
         ev.preventDefault();
-        injectDemoStroke(ev.key === 'ArrowUp' ? 'UP' : 'DOWN');
+        injectDemoStroke('UP');
+      } else if (ev.key === 'ArrowDown' || ev.key === 'ArrowLeft') {
+        ev.preventDefault();
+        injectDemoStroke('DOWN');
+      } else if (ev.key === 'Home') {
+        ev.preventDefault();
+        state.vernierTarget = -10;
+        state.stationY = 0;
+        if (reducedMotionQuery.matches) {
+          state.vernierPos = state.vernierTarget;
+          state.vernierVel = 0;
+          state.wavePhase = -1;
+        }
+        syncControlsUI();
+      } else if (ev.key === 'End') {
+        ev.preventDefault();
+        state.vernierTarget = 10;
+        state.stationY = 1;
+        if (reducedMotionQuery.matches) {
+          state.vernierPos = state.vernierTarget;
+          state.vernierVel = 0;
+          state.wavePhase = -1;
+        }
+        syncControlsUI();
       } else if (ev.key === 'Escape' && state.expanded) {
         toggleExpand(false);
       }
@@ -1949,13 +2380,29 @@
     window.addEventListener('pointerdown', onGlobalPointerDown);
 
     var onVisChange = function () {
-      if (!state.audioCtx) return;
+      if (isDestroyed || !state.audioCtx) return;
       if (document.hidden) {
+        if (state.idleSleepTimer) {
+          clearTimeout(state.idleSleepTimer);
+          state.idleSleepTimer = null;
+        }
         sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
         state.audioCtx.suspend().catch(function () {});
       } else if (state.armed) {
-        state.audioCtx.resume().then(function () {
-          pushWorkletConfig(false);
+        var resumeGen = armGen;
+        var resumeCtx = state.audioCtx;
+        resumeCtx.resume().then(function () {
+          if (isDestroyed || resumeGen !== armGen || !state.armed || state.audioCtx !== resumeCtx || document.hidden) {
+            return;
+          }
+          if (state.sonarCoupled && state.mode === 'sonar' && state.grille === 'right') {
+            state.sonarSleeping = false;
+            pushWorkletConfig(false);
+            resetIdleWatchdog();
+          } else {
+            sendWorkletRaw({ type: 'config', sonar: false, operatingGain: 0, probe: false });
+          }
+          syncControlsUI();
         }).catch(function () {});
       }
     };
@@ -1965,9 +2412,28 @@
     window.addEventListener('pagehide', onPageHide);
 
     var onDeviceChange = function () {
-      if (state.armed) armAudio('');
+      if (isDestroyed || !state.armed) return;
+      if (deviceChangeTimer) clearTimeout(deviceChangeTimer);
+      deviceChangeTimer = setTimeout(async function () {
+        deviceChangeTimer = null;
+        if (isDestroyed || !state.armed) return;
+        var keepDeviceId = '';
+        if (state.selectedDeviceId && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+          try {
+            var devs = await navigator.mediaDevices.enumerateDevices();
+            if (isDestroyed || !state.armed) return;
+            var stillPresent = devs.some(function (d) {
+              return d.kind === 'audioinput' && d.deviceId === state.selectedDeviceId;
+            });
+            if (stillPresent) keepDeviceId = state.selectedDeviceId;
+          } catch (_) {}
+        }
+        if (!isDestroyed && state.armed) {
+          armAudio(keepDeviceId);
+        }
+      }, 180);
     };
-    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
       navigator.mediaDevices.addEventListener('devicechange', onDeviceChange);
     }
 
@@ -2016,7 +2482,7 @@
     }
 
     function requestRender() {
-      if (!rafId) {
+      if (!rafId && !isDestroyed) {
         lastTs = 0;
         rafId = requestAnimationFrame(frame);
       }
@@ -2025,6 +2491,8 @@
     function stepPhysics(dt) {
       if (reducedMotionQuery.matches) {
         state.vernierPos = state.vernierTarget;
+        state.vernierVel = 0;
+        state.wavePhase = -1;
         for (var r = 0; r < LOUVER_N; r++) {
           state.louverAngle[r] = 0;
           state.louverVel[r] = 0;
@@ -2109,25 +2577,25 @@
         ctx.lineTo(w - padX, padY + 6);
         ctx.stroke();
 
-        var notchW = Math.min(86, w * 0.24);
-        var notchX = w * 0.42 - notchW * 0.5;
+        var notchW = Math.min(90, Math.max(74, w * 0.24));
+        var notchX = clamp(w * 0.42 - notchW * 0.5, padX + 4, w - padX - notchW - 4);
         ctx.fillStyle = '#f6f6f4';
         ctx.fillRect(notchX - 4, padY, notchW + 8, 12);
         ctx.strokeStyle = '#bcbab3';
         ctx.setLineDash([2, 2]);
         ctx.strokeRect(notchX, padY + 1, notchW, 10);
         ctx.setLineDash([]);
-        ctx.fillStyle = '#706f6a';
+        ctx.fillStyle = '#62615c';
         ctx.font = '500 8px ui-monospace, "SF Mono", Menlo, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText('NOTCH · 0 MICS', notchX + notchW * 0.5, padY + 6.5);
       }
 
-      var leftZoneW = compact ? w * 0.22 : w * 0.26;
-      var vernierW = compact ? 0 : Math.min(92, Math.max(58, w * 0.21));
-      var rightGrilleW = compact ? w * 0.42 : Math.min(148, Math.max(76, w * 0.31));
-      var bridgeW = Math.max(20, w - 2 * padX - leftZoneW - rightGrilleW - vernierW - (compact ? 6 : 14));
+      var leftZoneW = compact ? w * 0.22 : Math.max(72, w * 0.27);
+      var vernierW = compact ? 0 : Math.min(92, Math.max(54, w * 0.20));
+      var rightGrilleW = compact ? w * 0.42 : Math.min(148, Math.max(66, w * 0.28));
+      var bridgeW = Math.max(24, w - 2 * padX - leftZoneW - rightGrilleW - vernierW - (compact ? 6 : 14));
 
       var leftX = padX;
       var bridgeX = leftX + leftZoneW + 4;
@@ -2135,9 +2603,9 @@
       var vernierX = rightX + rightGrilleW + 6;
 
       // --- 1. Left Grille & 3-MEMS Triangle (Upper Third beside esc / ~ / tab) ---
-      var lgW = compact ? Math.max(16, leftZoneW * 0.46) : Math.max(22, leftZoneW * 0.36);
+      var lgW = compact ? Math.max(16, leftZoneW * 0.46) : clamp(Math.round(leftZoneW * 0.34), 22, 42);
       ctx.fillStyle = state.grille === 'left' ? '#e7efe9' : '#eae9e4';
-      ctx.strokeStyle = state.grille === 'left' ? '#157a44' : '#cfcec8';
+      ctx.strokeStyle = state.grille === 'left' ? '#047857' : '#cfcec8';
       ctx.lineWidth = 1;
       roundRect(ctx, leftX, innerY, lgW, innerH, 4);
       ctx.fill();
@@ -2158,7 +2626,7 @@
       var micCx = (mic1X + mic2X + mic3X) / 3;
       var micCy = (mic1Y + mic2Y + mic3Y) / 3;
 
-      ctx.strokeStyle = 'rgba(21, 122, 68, 0.35)';
+      ctx.strokeStyle = 'rgba(4, 120, 87, 0.35)';
       ctx.beginPath();
       ctx.moveTo(mic1X, mic1Y);
       ctx.lineTo(mic2X, mic2Y);
@@ -2167,21 +2635,25 @@
       ctx.stroke();
 
       [[mic1X, mic1Y], [mic2X, mic2Y], [mic3X, mic3Y]].forEach(function (pt) {
-        ctx.fillStyle = '#157a44';
+        ctx.fillStyle = '#047857';
         ctx.beginPath();
         ctx.arc(pt[0], pt[1], compact ? 2.1 : 2.7, 0, Math.PI * 2);
         ctx.fill();
       });
 
-      // 3 whisper-quiet landmark keys (esc, ~, tab) anchoring the 3-MEMS position
+      // 3 sequential landmark keys (esc, ~, tab) with 0 overlap at any stage height
+      var keyX = leftX + lgW + 4;
+      var keyW = Math.max(24, Math.min(44, leftZoneW - lgW - 6));
+      var keyH = clamp(Math.floor(innerH * 0.105), 12, 17);
+      var keyGap = clamp(Math.floor(innerH * 0.025), 3, 5);
+      var yEsc = innerY + 4;
+      var yTilde = yEsc + keyH + keyGap;
+      var yTab = yTilde + keyH + keyGap;
       if (!compact) {
-        var keyX = leftX + lgW + 4;
-        var keyW = Math.max(22, leftZoneW - lgW - 6);
-        var keyH = Math.min(18, innerH * 0.12);
         var keys = [
-          { label: 'esc', y: innerY + innerH * 0.04 },
-          { label: '~ `', y: innerY + innerH * 0.17 - keyH * 0.3 },
-          { label: 'tab', y: innerY + innerH * 0.31 - keyH * 0.2 }
+          { label: 'esc', y: yEsc },
+          { label: '~ `', y: yTilde },
+          { label: 'tab', y: yTab }
         ];
         ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
         ctx.textAlign = 'left';
@@ -2192,16 +2664,9 @@
           roundRect(ctx, keyX, k.y, keyW, keyH, 2.5);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = '#706f6a';
+          ctx.fillStyle = '#62615c';
           ctx.fillText(k.label, keyX + 4, k.y + keyH * 0.52);
         });
-
-        ctx.fillStyle = '#157a44';
-        ctx.font = '600 8px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.fillText('3× MEMS', leftX, innerY + innerH * 0.50);
-        ctx.fillStyle = '#706f6a';
-        ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.fillText('LEFT · 1ch', leftX, innerY + innerH * 0.50 + 10);
       }
 
       // --- 2. Magnified Right Grille = 31-Blade Kinetic Louver Sensor ---
@@ -2220,7 +2685,8 @@
       if (!compact) {
         ctx.font = '600 7.5px ui-monospace, "SF Mono", Menlo, monospace';
         ctx.textAlign = 'center';
-        ctx.fillStyle = '#706f6a';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#62615c';
         ctx.fillText('RIGHT · 0 MICS', rightX + rightGrilleW * 0.5, innerY + 7);
         ctx.fillText('PALM PLATE', rightX + rightGrilleW * 0.5, innerY + innerH - 5.5);
       }
@@ -2234,8 +2700,8 @@
 
         if (mag > 0.08) {
           ctx.strokeStyle = ang >= 0
-            ? 'rgba(30, 86, 217, ' + (0.28 + 0.68 * mag).toFixed(2) + ')'
-            : 'rgba(224, 72, 25, ' + (0.28 + 0.68 * mag).toFixed(2) + ')';
+            ? 'rgba(0, 82, 204, ' + (0.28 + 0.68 * mag).toFixed(2) + ')'
+            : 'rgba(201, 55, 0, ' + (0.28 + 0.68 * mag).toFixed(2) + ')';
           ctx.lineWidth = compact ? 2.0 : 2.3;
         } else {
           ctx.strokeStyle = '#c2c1bb';
@@ -2250,7 +2716,7 @@
       // Right Tweeter R+1.0 marker (upper-mid station u = 0.68 from bottom -> y = 0.32 from top)
       var twY = innerY + bladePadY + 0.32 * bladeSpanH;
       var sonarVis = state.mode === 'sonar' && state.grille === 'right';
-      ctx.fillStyle = sonarVis ? '#1e56d9' : '#8d8c86';
+      ctx.fillStyle = sonarVis ? '#0052cc' : '#8d8c86';
       ctx.beginPath();
       ctx.arc(rightX + rightGrilleW - 4, twY, 2.5, 0, Math.PI * 2);
       ctx.fill();
@@ -2264,7 +2730,7 @@
         for (var arc = 0; arc < 3; arc++) {
           var rad = 10 + ((phaseAnim + arc / 3) % 1) * bridgeW * 0.92;
           var alphaArc = (1 - rad / (bridgeW + 12)) * (state.armed && state.sonarCoupled ? 0.36 : 0.18);
-          ctx.strokeStyle = 'rgba(30, 86, 217, ' + Math.max(0.03, alphaArc).toFixed(2) + ')';
+          ctx.strokeStyle = 'rgba(0, 82, 204, ' + Math.max(0.03, alphaArc).toFixed(2) + ')';
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.arc(rightX, twY, rad, Math.PI * 0.72, Math.PI * 1.28);
@@ -2281,18 +2747,50 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
+      // Clean key-column callout below `tab` (never crosses Left Grille border or chord line)
       if (!compact) {
-        var midBridgeX = bridgeX + bridgeW * 0.5;
-        var midBridgeY = (micCy + targetY) * 0.5;
+        var memsLabelY = yTab + keyH + Math.max(9, Math.min(13, innerH * 0.065));
+        var colBoxW = Math.min(48, Math.max(34, leftZoneW - lgW - 4));
         ctx.fillStyle = '#f6f6f4';
-        ctx.fillRect(midBridgeX - 24, midBridgeY - 11, 48, 22);
-        ctx.fillStyle = '#141413';
-        ctx.font = '600 8.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(pathCm.toFixed(1) + 'cm', midBridgeX, midBridgeY - 3);
-        ctx.fillStyle = '#706f6a';
+        ctx.fillRect(keyX - 1, memsLabelY - 6, colBoxW, 21);
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = '#047857';
+        ctx.font = '600 8px ui-monospace, "SF Mono", Menlo, monospace';
+        ctx.fillText('3× MEMS', keyX, memsLabelY);
+        ctx.fillStyle = '#62615c';
         ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.fillText('Δ4.5%', midBridgeX, midBridgeY + 6.5);
+        ctx.fillText('LEFT · 1ch', keyX, memsLabelY + 10);
+
+        var midBridgeX = bridgeX + bridgeW * 0.5;
+        var midBridgeY = clamp((micCy + targetY) * 0.5, innerY + 14, innerY + innerH - 14);
+        var pillW = Math.min(46, Math.max(22, bridgeW - 2));
+        ctx.fillStyle = '#f6f6f4';
+        ctx.fillRect(midBridgeX - pillW * 0.5, midBridgeY - 10.5, pillW, 21);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        if (bridgeW >= 42) {
+          ctx.fillStyle = '#141413';
+          ctx.font = '600 8.5px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText(pathCm.toFixed(1) + 'cm', midBridgeX, midBridgeY - 4);
+          ctx.fillStyle = '#62615c';
+          ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText('Δ4.5%', midBridgeX, midBridgeY + 5.5);
+        } else if (bridgeW >= 30) {
+          ctx.fillStyle = '#141413';
+          ctx.font = '600 7px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText(pathCm.toFixed(1) + 'cm', midBridgeX, midBridgeY - 3.5);
+          ctx.fillStyle = '#62615c';
+          ctx.font = '500 6.8px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText('Δ4.5%', midBridgeX, midBridgeY + 5);
+        } else {
+          ctx.fillStyle = '#141413';
+          ctx.font = '600 6.8px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText(Math.round(pathCm) + 'cm', midBridgeX, midBridgeY - 3.5);
+          ctx.fillStyle = '#62615c';
+          ctx.font = '500 6.5px ui-monospace, "SF Mono", Menlo, monospace';
+          ctx.fillText('4.5%', midBridgeX, midBridgeY + 5);
+        }
       }
 
       // --- 4. Vertical Vernier Detent Carriage (-10..+10) & Direction Lock Badge ---
@@ -2319,7 +2817,7 @@
 
         var carY = railTop + ((10 - clamp(state.vernierPos, -10, 10)) / 20) * railH;
         var res = state.lastResult;
-        var accent = !res ? '#141413' : (res.dir === 'UP' ? '#1e56d9' : '#e04819');
+        var accent = !res ? '#141413' : (res.dir === 'UP' ? '#0052cc' : '#c93700');
 
         ctx.fillStyle = accent;
         ctx.beginPath();
@@ -2332,32 +2830,38 @@
         var cardX = railX + 14;
         var cardW = Math.max(38, vernierW - 22);
         ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
         ctx.fillStyle = '#141413';
         ctx.font = '700 12px ui-monospace, "SF Mono", Menlo, monospace';
         var vPre = state.vernierTarget >= 0 ? '+' : '';
-        ctx.fillText(vPre + state.vernierTarget.toFixed(1), cardX, innerY + 18);
+        ctx.fillText(vPre + state.vernierTarget.toFixed(1), cardX, innerY + 16);
 
         if (res) {
-          var badgeBg = res.dir === 'UP' ? 'rgba(30, 86, 217, 0.12)' : 'rgba(224, 72, 25, 0.12)';
-          ctx.fillStyle = badgeBg;
-          roundRect(ctx, cardX - 2, innerY + 29, cardW, 20, 3.5);
+          ctx.fillStyle = '#ffffff';
+          roundRect(ctx, cardX - 2, innerY + 28, cardW, 20, 3.5);
           ctx.fill();
+          ctx.fillStyle = res.dir === 'UP' ? 'rgba(0, 82, 204, 0.07)' : 'rgba(201, 55, 0, 0.06)';
+          ctx.strokeStyle = res.dir === 'UP' ? 'rgba(0, 82, 204, 0.38)' : 'rgba(201, 55, 0, 0.38)';
+          ctx.lineWidth = 1;
+          roundRect(ctx, cardX - 2, innerY + 28, cardW, 20, 3.5);
+          ctx.fill();
+          ctx.stroke();
           ctx.fillStyle = accent;
           ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText((res.dir === 'UP' ? '↑ ' : '↓ ') + Math.round(res.confidence * 100) + '%', cardX + 2, innerY + 40);
+          ctx.fillText((res.dir === 'UP' ? '↑ ' : '↓ ') + Math.round(res.confidence * 100) + '%', cardX + 2, innerY + 38.5);
         } else {
-          ctx.fillStyle = '#706f6a';
+          ctx.fillStyle = '#62615c';
           ctx.font = '500 8px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText(state.armed ? 'SWIPE' : 'SCRUB', cardX, innerY + 38);
+          ctx.fillText(state.armed ? 'SWIPE' : 'SCRUB', cardX, innerY + 37);
         }
 
         // Bottom empirical d' / prior status tag
-        ctx.fillStyle = state.ldaModel ? '#157a44' : '#706f6a';
+        ctx.fillStyle = state.ldaModel ? '#047857' : '#62615c';
         ctx.font = '600 8px ui-monospace, "SF Mono", Menlo, monospace';
         var tagTxt = state.ldaModel
           ? ("d' " + state.ldaModel.dPrimeOof.toFixed(1))
           : (sonarVis ? '19kHz' : 'PRIOR');
-        ctx.fillText(tagTxt, cardX, innerY + innerH - 6);
+        ctx.fillText(tagTxt, cardX, innerY + innerH - 7);
       }
     }
 
@@ -2406,7 +2910,7 @@
           var dc = state.lastFeat.dopCurve64;
           var botZero = midH + (sSz.h - midH) * 0.5;
           var botAmp = (sSz.h - midH) * 0.42;
-          sCtx.strokeStyle = state.lastResult && state.lastResult.dir === 'UP' ? '#1e56d9' : '#e04819';
+          sCtx.strokeStyle = state.lastResult && state.lastResult.dir === 'UP' ? '#0052cc' : '#c93700';
           sCtx.lineWidth = 1.6;
           sCtx.beginPath();
           for (var m = 0; m < 64; m++) {
@@ -2419,7 +2923,7 @@
 
           if (state.lastFeat.dipDb > 0.8) {
             var dipX = 4 + state.lastFeat.tauDip * (sSz.w - 8);
-            sCtx.strokeStyle = 'rgba(224, 72, 25, 0.65)';
+            sCtx.strokeStyle = 'rgba(201, 55, 0, 0.65)';
             sCtx.setLineDash([2, 2]);
             sCtx.beginPath();
             sCtx.moveTo(dipX, midH + 2);
@@ -2428,7 +2932,7 @@
             sCtx.setLineDash([]);
           }
         } else {
-          sCtx.fillStyle = '#706f6a';
+          sCtx.fillStyle = '#62615c';
           sCtx.font = '500 9px ui-monospace, "SF Mono", Menlo, monospace';
           sCtx.fillText('Swipe grille or click Demo ↑↓ to freeze stroke profile', 6, midH * 0.55);
         }
@@ -2447,7 +2951,7 @@
         wCtx.fillRect(0, wSz.h * 0.42, wSz.w, wSz.h * 0.16);
 
         var cols = state.waterfallCols;
-        var maxCols = 36;
+        var maxCols = WATERFALL_MAX_COLS;
         var colW = wSz.w / maxCols;
         var binH = wSz.h / 33;
         for (var ci = 0; ci < cols.length; ci++) {
@@ -2460,8 +2964,8 @@
             if (norm < 0.06) continue;
             var cy = (32 - b2) * binH; // top = +100 Hz blueshift, bottom = -100 Hz redshift
             wCtx.fillStyle = b2 >= 16
-              ? 'rgba(30, 86, 217, ' + (0.15 + 0.8 * norm).toFixed(2) + ')'
-              : 'rgba(224, 72, 25, ' + (0.15 + 0.8 * norm).toFixed(2) + ')';
+              ? 'rgba(0, 82, 204, ' + (0.15 + 0.8 * norm).toFixed(2) + ')'
+              : 'rgba(201, 55, 0, ' + (0.15 + 0.8 * norm).toFixed(2) + ')';
             wCtx.fillRect(cx, cy, Math.ceil(colW), Math.ceil(binH));
           }
         }
@@ -2500,7 +3004,7 @@
           var val = contribs ? clamp(contribs[f] / 1.6, -1, 1) : 0;
           var barLen = Math.abs(val) * (plotW * 0.46);
           if (barLen >= 1) {
-            lCtx.fillStyle = val >= 0 ? '#1e56d9' : '#e04819';
+            lCtx.fillStyle = val >= 0 ? '#0052cc' : '#c93700';
             lCtx.fillRect(val >= 0 ? zeroX : zeroX - barLen, ry - Math.max(2.5, rowH * 0.30), barLen, Math.max(5, rowH * 0.60));
           }
         }
@@ -2520,6 +3024,7 @@
 
     function frame(ts) {
       rafId = 0;
+      if (isDestroyed) return;
       var dt = lastTs ? (ts - lastTs) / 1000 : 0.016;
       lastTs = ts;
       stepPhysics(dt);
@@ -2530,7 +3035,7 @@
       }
     }
 
-    loadCalibration();
+    loadCalibration(true);
     syncCanvasSize(els.stageWrap, els.stageCanvas, 'stage');
     requestRender();
 
@@ -2539,16 +3044,27 @@
       injectDemoStroke: injectDemoStroke,
       toggleExpand: toggleExpand,
       destroy: function () {
-        if (state.expanded) toggleExpand(false);
-        cancelAnimationFrame(rafId);
+        isDestroyed = true;
+        state.expanded = false;
+        expandToken++;
+        applyExpandDOM(false);
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
         if (ro) ro.disconnect();
+        if (deviceChangeTimer) {
+          clearTimeout(deviceChangeTimer);
+          deviceChangeTimer = null;
+        }
         window.removeEventListener('keydown', onGlobalKey);
         window.removeEventListener('pointerdown', onGlobalPointerDown);
         document.removeEventListener('visibilitychange', onVisChange);
         window.removeEventListener('pagehide', onPageHide);
-        if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+        if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
           navigator.mediaDevices.removeEventListener('devicechange', onDeviceChange);
         }
+        delete cellEl.dataset.agMounted;
         return disarmAudio(true);
       }
     };
@@ -2572,12 +3088,15 @@
     FEATURE_SCALES: FEATURE_SCALES,
     createBiquad: createBiquad,
     filtfiltReal: filtfiltReal,
+    resampleCurve: resampleCurve,
     extractStrokeFeatures: extractStrokeFeatures,
     fitShrinkageLDA: fitShrinkageLDA,
     classifyStroke: classifyStroke,
     createStreamEngine: createStreamEngine,
     synthesizeMac16Stroke: synthesizeMac16Stroke,
     rankAudioInputDevice: rankAudioInputDevice,
+    buildWorkletSource: buildWorkletSource,
+    buildWorkletBlobUrl: buildWorkletBlobUrl,
     mountCell: mountCell
   };
 });

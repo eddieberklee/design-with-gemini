@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Cell 01 — 16" MacBook Pro (Mac16,5) Acoustic Grille Swipe & 19 kHz Sonar Lab
+   Cell 06 — 16" MacBook Pro (Mac16,5) Acoustic Grille Swipe & 19 kHz Sonar Lab
    Swiss-Braun token palette scoped strictly to .cell-acoustic so sibling cells
    and the host #fafafa / #ffffff / #e5e5e5 bento grid stay untouched.
    ========================================================================== */
@@ -15,7 +15,7 @@
   --ag-rule: #d5d4ce;
   --ag-ink: #141413;
   --ag-ink-sec: #52514d;
-  --ag-ink-muted: #706f6a;
+  --ag-ink-muted: #62615c;
   --ag-up: #0052cc;
   --ag-up-soft: rgba(0, 82, 204, 0.11);
   --ag-down: #c93700;
@@ -116,7 +116,7 @@
 
 .ag-led[data-state="warn"] {
   background: var(--ag-warn);
-  box-shadow: 0 0 0 2px rgba(168, 75, 8, 0.16);
+  box-shadow: 0 0 0 2px rgba(154, 71, 0, 0.16);
 }
 
 .ag-title {
@@ -190,12 +190,18 @@
   outline-offset: 1px;
 }
 
-/* Invisible touch-target expansion for compact tiers */
-.ag-icon-btn::after,
-.ag-btn::after {
+/* Non-overlapping WCAG 24x24px hit-area slop only where visual box < 24px */
+.ag-icon-btn::after {
   content: "";
   position: absolute;
-  inset: -4px;
+  inset: -2px 0 -2px -4px;
+}
+
+.ag-demo-pair .ag-btn::after,
+.ag-toast-close::after {
+  content: "";
+  position: absolute;
+  inset: -2px -1px;
 }
 
 .ag-icon-btn {
@@ -231,14 +237,14 @@
 
 .ag-mic-wrap[data-warn="true"] .ag-mic-select {
   background-color: var(--ag-warn-bg);
-  border-color: rgba(168, 75, 8, 0.45);
+  border-color: rgba(154, 71, 0, 0.45);
   color: var(--ag-warn);
 }
 
 .ag-demo-pair {
   display: none;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   flex: 0 0 auto;
 }
 
@@ -297,7 +303,7 @@
   display: block;
 }
 
-/* Status banner floating subtly at top-left of stage only when needed */
+/* Status banner floating subtly at bottom of stage only when needed */
 .ag-toast {
   position: absolute;
   left: 6px;
@@ -305,7 +311,7 @@
   bottom: 6px;
   padding: 4px 7px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.95);
   border: 1px solid var(--ag-rule);
   font-family: var(--ag-mono);
   font-size: 9.5px;
@@ -326,7 +332,7 @@
 
 .ag-toast[data-tone="warn"] {
   background: var(--ag-warn-bg);
-  border-color: rgba(168, 75, 8, 0.4);
+  border-color: rgba(154, 71, 0, 0.42);
   color: var(--ag-warn);
 }
 
@@ -352,6 +358,17 @@
   padding: 0 8px;
   justify-content: space-between;
   font-size: 9.5px;
+  min-width: 0;
+}
+
+.ag-micro-cta > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-micro-cta > span:last-child {
+  flex: 0 0 auto;
 }
 
 .ag-controls-bar {
@@ -431,19 +448,19 @@
 }
 
 .ag-cal-btn[data-calibrated="true"] {
-  border-color: rgba(21, 122, 68, 0.45);
+  border-color: rgba(4, 120, 87, 0.45);
   background: var(--ag-ok-soft);
   color: var(--ag-ok);
 }
 
-/* Lab-only panels hidden unless compound 2x2 desktop expand is active */
+/* Lab-only panels hidden unless .is-expanded Workbench is active */
 .ag-lab-col,
 .ag-cal-studio,
 .ag-lab-strip {
   display: none;
 }
 
-.ag-Vernier-mini {
+.ag-vernier-mini {
   font-family: var(--ag-mono);
   font-size: 9.5px;
   font-weight: 600;
@@ -453,7 +470,7 @@
 
 /* ==========================================================================
    Tier 1: @container cell (width >= 280px)
-   Covers 616..767px 2-col 1x1, 320..414px mobile 2x1 expand, 926..1254px 3-col
+   Covers 616..767px 2-col 1x1, 320..414px mobile expanded, 926..1254px 3-col
    ========================================================================== */
 @container cell (width >= 280px) {
   .ag-shell {
@@ -467,12 +484,16 @@
     height: 22px;
   }
 
+  .ag-icon-btn::after {
+    inset: -1px 0 -1px -2px;
+  }
+
   .ag-mic-wrap {
     display: inline-flex;
     max-width: 108px;
   }
 
-  .ag-Vernier-mini {
+  .ag-vernier-mini {
     display: none;
   }
 
@@ -487,7 +508,8 @@
 
 /* ==========================================================================
    Tier 2: @container cell (width >= 380px)
-   Covers 1280px (388x290), 1440px (437x327), 1512px 14" MBP (459x344)
+   Covers 1280px (388x290), 1440px (437x327) — keeps .ag-seg-grille deferred
+   until >= 445px so .ag-cal-btn always retains >= 75px breathing room.
    ========================================================================== */
 @container cell (width >= 380px) {
   .ag-shell {
@@ -514,8 +536,8 @@
     height: 24px;
   }
 
-  .ag-seg-grille {
-    display: inline-flex;
+  .ag-icon-btn::after {
+    content: none;
   }
 
   .ag-arm-btn,
@@ -532,8 +554,18 @@
 }
 
 /* ==========================================================================
+   Tier 2b: @container cell (width >= 445px)
+   Covers 1512px 14" MBP (459x344) and wider 1x1 tiles
+   ========================================================================== */
+@container cell (width >= 445px) {
+  .ag-seg-grille {
+    display: inline-flex;
+  }
+}
+
+/* ==========================================================================
    Tier 3: @container cell (width >= 500px)
-   Covers 1728px 16" MBP 1x1 (525x393) and mobile/desktop expanded tiles
+   Covers 1728px 16" MBP 1x1 (525x393) and wide expanded tiles
    ========================================================================== */
 @container cell (width >= 500px) {
   .ag-shell {
@@ -572,149 +604,271 @@
 }
 
 /* ==========================================================================
-   Compound-Gated 2x2 Empirical Acoustic Workbench
-   Strictly requires .is-expanded + desktop >=768px + container >= 540px so
-   wide <768px mobile 2x1 rows never trigger tall multi-panel stacks.
+   Expanded Empirical Acoustic Workbench (.cell-acoustic.is-expanded)
+   - Narrow / Mobile (< 560px): Fitted/scrollable 1-column Workbench exposing
+     Demo ↑/↓, R Grille / L Ctrl, 4-Stroke LDA, and all 3 diagnostic panels.
+   - Desktop / Tablet (@container cell (width >= 560px)): Side-by-side 2-column
+     Empirical Workbench.
    ========================================================================== */
-@media (min-width: 768px) {
-  @container cell (width >= 540px) {
-    .cell-acoustic.is-expanded .ag-shell {
-      padding: 12px 14px;
-      grid-template-rows: 28px 26px minmax(0, 1fr) 30px;
-      row-gap: 8px;
-    }
+.cell-acoustic.is-expanded .ag-shell {
+  padding: 8px 10px;
+  grid-template-rows: auto 24px minmax(0, 1fr) auto;
+  row-gap: 6px;
+}
 
-    .cell-acoustic.is-expanded .ag-lab-strip {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 0 8px;
-      background: var(--ag-well);
-      border: 1px solid var(--ag-well-border);
-      border-radius: 5px;
-      font-family: var(--ag-mono);
-      font-size: 9.5px;
-      color: var(--ag-ink-sec);
-      min-width: 0;
-      overflow: hidden;
-    }
+.cell-acoustic.is-expanded .ag-micro-cta,
+.cell-acoustic.is-expanded .ag-vernier-mini {
+  display: none;
+}
 
-    .cell-acoustic.is-expanded .ag-lab-badge {
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
+.cell-acoustic.is-expanded .ag-demo-pair,
+.cell-acoustic.is-expanded .ag-seg-grille {
+  display: inline-flex;
+}
 
-    .cell-acoustic.is-expanded .ag-lab-badge strong {
-      color: var(--ag-ink);
-      font-weight: 600;
-    }
+.cell-acoustic.is-expanded .ag-mic-wrap {
+  display: none;
+}
 
-    .cell-acoustic.is-expanded .ag-gain-wrap {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-left: auto;
-      flex: 0 0 auto;
-    }
+.cell-acoustic.is-expanded .ag-controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
 
-    .cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
-      width: 68px;
-      accent-color: var(--ag-up);
-      cursor: pointer;
-    }
+.cell-acoustic.is-expanded .ag-hw-status {
+  display: none;
+}
 
-    .cell-acoustic.is-expanded .ag-workbench {
-      grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.08fr);
-      gap: 10px;
-    }
+.cell-acoustic.is-expanded .ag-lab-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 7px;
+  background: var(--ag-well);
+  border: 1px solid var(--ag-well-border);
+  border-radius: 5px;
+  font-family: var(--ag-mono);
+  font-size: 9px;
+  color: var(--ag-ink-sec);
+  min-width: 0;
+  overflow: hidden;
+}
 
-    .cell-acoustic.is-expanded .ag-primary-col {
-      grid-template-rows: minmax(0, 1fr) auto;
-      gap: 8px;
-    }
+.cell-acoustic.is-expanded .ag-lab-badge {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 
-    .cell-acoustic.is-expanded .ag-cal-studio {
-      display: grid;
-      grid-template-rows: auto auto;
-      gap: 5px;
-      padding: 7px 9px;
-      background: var(--ag-well);
-      border: 1px solid var(--ag-well-border);
-      border-radius: 6px;
-      font-family: var(--ag-mono);
-      font-size: 9.5px;
-    }
+.cell-acoustic.is-expanded .ag-lab-badge strong {
+  color: var(--ag-ink);
+  font-weight: 600;
+}
 
-    .cell-acoustic.is-expanded .ag-cal-row {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      flex-wrap: nowrap;
-      min-width: 0;
-    }
+.cell-acoustic.is-expanded .ag-gain-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
 
-    .cell-acoustic.is-expanded .ag-slot-btn {
-      height: 24px;
-      padding: 0 6px;
-      font-size: 9px;
-    }
+.cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
+  width: 50px;
+  accent-color: var(--ag-up);
+  cursor: pointer;
+}
 
-    .cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="UP"] {
-      border-color: rgba(30, 86, 217, 0.5);
-      background: var(--ag-up-soft);
-      color: var(--ag-up);
-    }
+.cell-acoustic.is-expanded .ag-export-btn {
+  height: 20px;
+  padding: 0 5px;
+  font-size: 8.5px;
+  flex: 0 0 auto;
+}
 
-    .cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="DOWN"] {
-      border-color: rgba(224, 72, 25, 0.5);
-      background: var(--ag-down-soft);
-      color: var(--ag-down);
-    }
+.cell-acoustic.is-expanded .ag-workbench {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(170px, 1.04fr) minmax(208px, 1.24fr);
+  gap: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
-    .cell-acoustic.is-expanded .ag-slot-btn[data-recording="true"] {
-      border-color: var(--ag-ink);
-      background: var(--ag-ink);
-      color: #ffffff;
-    }
+.cell-acoustic.is-expanded .ag-primary-col {
+  grid-template-rows: minmax(128px, 1fr) auto;
+  gap: 6px;
+}
 
-    .cell-acoustic.is-expanded .ag-lab-col {
-      display: grid;
-      grid-template-rows: minmax(0, 1.25fr) minmax(0, 0.72fr) minmax(0, 0.95fr);
-      gap: 8px;
-      min-width: 0;
-      min-height: 0;
-    }
+.cell-acoustic.is-expanded .ag-cal-studio {
+  display: grid;
+  grid-template-rows: auto;
+  gap: 4px;
+  padding: 5px 7px;
+  background: var(--ag-well);
+  border: 1px solid var(--ag-well-border);
+  border-radius: 6px;
+  font-family: var(--ag-mono);
+  font-size: 9px;
+}
 
-    .cell-acoustic.is-expanded .ag-panel {
-      display: grid;
-      grid-template-rows: 18px minmax(0, 1fr);
-      gap: 3px;
-      padding: 6px 8px;
-      background: var(--ag-well);
-      border: 1px solid var(--ag-well-border);
-      border-radius: 6px;
-      min-width: 0;
-      min-height: 0;
-      overflow: hidden;
-    }
+.cell-acoustic.is-expanded .ag-cal-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 
-    .cell-acoustic.is-expanded .ag-panel-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      font-family: var(--ag-mono);
-      font-size: 9px;
-      color: var(--ag-ink-sec);
-      min-width: 0;
-    }
+.cell-acoustic.is-expanded .ag-oof-verdict {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-    .cell-acoustic.is-expanded .ag-panel-head span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+.cell-acoustic.is-expanded .ag-slot-btn,
+.cell-acoustic.is-expanded .ag-cal-reset {
+  height: 22px;
+  padding: 0 5px;
+  font-size: 8.5px;
+}
+
+.cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="UP"] {
+  border-color: rgba(0, 82, 204, 0.45);
+  background: var(--ag-up-soft);
+  color: var(--ag-up);
+}
+
+.cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="DOWN"] {
+  border-color: rgba(201, 55, 0, 0.45);
+  background: var(--ag-down-soft);
+  color: var(--ag-down);
+}
+
+.cell-acoustic.is-expanded .ag-slot-btn[data-recording="true"] {
+  border-color: var(--ag-ink);
+  background: var(--ag-ink);
+  color: #ffffff;
+}
+
+.cell-acoustic.is-expanded .ag-lab-col {
+  display: grid;
+  grid-template-rows: minmax(68px, 1.22fr) minmax(52px, 0.75fr) minmax(72px, 0.98fr);
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.cell-acoustic.is-expanded .ag-panel {
+  display: grid;
+  grid-template-rows: 16px minmax(0, 1fr);
+  gap: 2px;
+  padding: 5px 7px;
+  background: var(--ag-well);
+  border: 1px solid var(--ag-well-border);
+  border-radius: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cell-acoustic.is-expanded .ag-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-family: var(--ag-mono);
+  font-size: 8.5px;
+  color: var(--ag-ink-sec);
+  min-width: 0;
+}
+
+.cell-acoustic.is-expanded .ag-panel-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container cell (width >= 445px) {
+  .cell-acoustic.is-expanded .ag-mic-wrap {
+    display: inline-flex;
+  }
+
+  .cell-acoustic.is-expanded .ag-controls-bar {
+    flex-wrap: nowrap;
+  }
+}
+
+@container cell (width >= 560px) {
+  .cell-acoustic.is-expanded .ag-shell {
+    padding: 12px 14px;
+    grid-template-rows: 28px 26px minmax(0, 1fr) 30px;
+    row-gap: 8px;
+  }
+
+  .cell-acoustic.is-expanded .ag-hw-status {
+    display: inline;
+  }
+
+  .cell-acoustic.is-expanded .ag-lab-strip {
+    gap: 8px;
+    padding: 0 8px;
+    font-size: 9.5px;
+  }
+
+  .cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
+    width: 68px;
+  }
+
+  .cell-acoustic.is-expanded .ag-export-btn {
+    height: 22px;
+    padding: 0 6px;
+    font-size: 9px;
+  }
+
+  .cell-acoustic.is-expanded .ag-workbench {
+    grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.08fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .cell-acoustic.is-expanded .ag-primary-col {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .cell-acoustic.is-expanded .ag-cal-studio {
+    padding: 7px 9px;
+    font-size: 9.5px;
+  }
+
+  .cell-acoustic.is-expanded .ag-cal-row {
+    gap: 5px;
+    flex-wrap: nowrap;
+  }
+
+  .cell-acoustic.is-expanded .ag-slot-btn,
+  .cell-acoustic.is-expanded .ag-cal-reset {
+    height: 24px;
+    padding: 0 6px;
+    font-size: 9px;
+  }
+
+  .cell-acoustic.is-expanded .ag-lab-col {
+    grid-template-rows: minmax(0, 1.25fr) minmax(0, 0.72fr) minmax(0, 0.95fr);
+    gap: 8px;
+  }
+
+  .cell-acoustic.is-expanded .ag-panel {
+    grid-template-rows: 18px minmax(0, 1fr);
+    gap: 3px;
+    padding: 6px 8px;
+  }
+
+  .cell-acoustic.is-expanded .ag-panel-head {
+    font-size: 9px;
   }
 }
 
