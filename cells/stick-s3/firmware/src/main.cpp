@@ -473,7 +473,9 @@ void loop() {
     const auto imu = M5.Imu.getImuData();
     const float alpha = 0.24f;  // crisp low-latency EMA filter
     if (isfinite(imu.accel.x) && isfinite(imu.accel.y) && isfinite(imu.accel.z)) {
-      gSmoothAx += alpha * (imu.accel.x - gSmoothAx);
+      // Negate proper-acceleration X reaction force so physical tilt-right = +X (+tx) and tilt-left = -X (-tx)
+      const float tiltRightAx = -imu.accel.x;
+      gSmoothAx += alpha * (tiltRightAx - gSmoothAx);
       gSmoothAy += alpha * (imu.accel.y - gSmoothAy);
       gSmoothAz += alpha * (imu.accel.z - gSmoothAz);
     }
@@ -486,7 +488,7 @@ void loop() {
     if (!isfinite(gSmoothAy)) gSmoothAy = 0.0f;
     if (!isfinite(gSmoothAz)) gSmoothAz = 1.0f;
 
-    const float axSample = isfinite(imu.accel.x) ? imu.accel.x : gSmoothAx;
+    const float axSample = isfinite(imu.accel.x) ? -imu.accel.x : gSmoothAx;
     const float aySample = isfinite(imu.accel.y) ? imu.accel.y : gSmoothAy;
     const float azSample = isfinite(imu.accel.z) ? imu.accel.z : gSmoothAz;
     const float magG = hypotf(hypotf(axSample, aySample), azSample);
