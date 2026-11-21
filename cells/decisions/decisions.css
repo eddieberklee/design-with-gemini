@@ -76,22 +76,23 @@
   transition: border-color 180ms ease;
 }
 
-/* Desktop (>= 768px): joined 3-cell horizontal triptych across Row 1 */
+/* Desktop (>= 768px): joined 3-cell horizontal triptych across Row 1
+   Double-class specificity (.cell.cell--decisions-*) cleanly overrides index.html's .cell */
 @media (min-width: 768px) {
-  .cell--decisions-input {
+  .cell.cell--decisions-input {
     border-radius: 8px 3px 3px 8px;
   }
-  .cell--decisions-verdict {
+  .cell.cell--decisions-verdict {
     border-radius: 3px;
   }
-  .cell--decisions-score {
+  .cell.cell--decisions-score {
     border-radius: 3px 8px 8px 3px;
   }
 }
 
 /* Mobile (< 768px, 2-col grid): Input spans full width above Verdicts + Score */
 @media (max-width: 767px) {
-  .cell--decisions-input {
+  .cell.cell--decisions-input {
     grid-column: 1 / -1;
     aspect-ratio: 16 / 10;
   }
@@ -704,6 +705,7 @@
   flex: 1;
   min-height: 0;
   justify-content: flex-end;
+  overflow: hidden;
 }
 
 .dc-card-bars {
@@ -711,7 +713,9 @@
   display: grid;
   align-items: end;
   gap: 6px;
-  height: 58px;
+  flex: 1;
+  min-height: 36px;
+  max-height: 88px;
   padding-bottom: 3px;
   border-bottom: 1px solid var(--dc-border-strong);
 }
@@ -722,6 +726,7 @@
   align-items: center;
   justify-content: flex-end;
   height: 100%;
+  min-height: 0;
   gap: 2px;
 }
 
@@ -730,6 +735,7 @@
   font-size: 9px;
   color: var(--dc-ink-3);
   line-height: 1;
+  flex-shrink: 0;
 }
 
 .dc-card-bar {
@@ -970,49 +976,78 @@
    ========================================================================== */
 
 @container dc-card (max-width: 340px) {
-  .dc-card-header { padding: 5px 9px; min-height: 28px; }
+  .dc-card-header { padding: 5px 9px; min-height: 27px; }
   .dc-card-title { font-size: 11px; }
   .dc-api-whisper { display: none; }
-  .dc-input-body { padding: 6px 9px 7px; gap: 6px; }
-  .dc-explainer { font-size: 10px; }
+  .dc-input-body { padding: 5px 8px 6px; gap: 5px; }
+  .dc-explainer { font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dc-specimen-stage { padding: 5px 8px; gap: 8px; }
+  .dc-specimen-img-btn { max-height: 82px; }
+  .dc-specimen-quote { font-size: 10.5px; line-height: 1.32; -webkit-line-clamp: 3; }
   .dc-flip-btn { height: 24px; font-size: 10px; padding: 0 5px; }
+  .dc-card-footer { padding: 3px 8px; }
+  .dc-card-footer .dc-step-arrow { display: none; }
+  .dc-preset-btn { height: 18px; padding: 0 5px; font-size: 10px; }
   .dc-half { padding: 6px 9px; gap: 4px; }
   .dc-plain-q { font-size: 11px; }
   .dc-verdict-pill { font-size: 10.5px; padding: 1.5px 5px; }
   .dc-score-main { padding: 6px 9px 4px; gap: 4px; }
   .dc-score-big { font-size: 16px; }
   .dc-score-tier { font-size: 11px; }
-  .dc-card-bars { height: 42px; gap: 4px; }
+  .dc-card-bars { min-height: 28px; max-height: 44px; gap: 4px; }
   .dc-proof-strip { padding: 5px 9px; }
   .dc-proof-meta { display: none; }
 }
 
 @container dc-card (max-width: 255px) {
-  .dc-card-header { padding: 4px 7px; min-height: 24px; }
-  .dc-step-pill { display: none; }
+  .dc-card-header { padding: 3px 7px; min-height: 23px; gap: 4px; }
+  .cell--decisions-input .dc-step-pill { display: none; }
+  .dc-step-pill { font-size: 8.5px; letter-spacing: 0.02em; }
+  .dc-step-arrow { display: none; }
   .dc-card-title { font-size: 10.5px; }
-  .dc-icon-btn { height: 19px; padding: 0 5px; font-size: 9.5px; }
-  .dc-half { padding: 4px 7px; gap: 3px; }
+  .dc-mode-pill { height: 18px; padding: 0 6px; font-size: 9px; gap: 4px; }
+  .dc-icon-btn { height: 18px; padding: 0 5px; font-size: 9.5px; }
+
+  /* Cell 1 compact layout (e.g. 768px 3-col = 232.85x174.63) */
+  .dc-input-body { padding: 4px 6px 5px; gap: 4px; }
+  .dc-explainer { display: none; }
+  .dc-specimen-stage { padding: 4px 6px; gap: 6px; }
+  .dc-specimen-img-btn { height: 46px; max-height: 46px; }
+  .dc-specimen-heading { font-size: 10.5px; }
+  .dc-specimen-bullets li { font-size: 9.5px; }
+  .dc-specimen-bullets li:nth-child(n + 2) { display: none; }
+  .dc-specimen-quote { font-size: 9.5px; line-height: 1.25; -webkit-line-clamp: 2; }
+  .dc-flip-row { padding: 2px; gap: 2px; }
+  .dc-flip-btn { height: 21px; font-size: 9.5px; padding: 0 4px; }
+  .dc-card-footer { padding: 2px 6px; }
+  .dc-preset-btn { height: 17px; padding: 0 4px; font-size: 9px; }
+
+  /* Cell 2 compact layout (down to 160x120px) */
+  .dc-half { padding: 3px 6px; gap: 2px; }
+  .dc-half:first-child { flex: 0 0 auto; }
   .dc-eyebrow-row { display: none; }
-  .dc-plain-q { font-size: 10px; }
-  .dc-verdict-pill { font-size: 9.5px; padding: 1px 4px; }
+  .dc-plain-q { font-size: 10px; line-height: 1.2; }
+  .dc-verdict-pill { font-size: 9px; padding: 1px 4px; }
   .dc-verdict-subrow { display: none; }
-  .dc-noul-track { height: 8px; }
+  .dc-noul-track { height: 7px; }
   .dc-cat-bars { gap: 2px; }
   .dc-cat-row:nth-child(n + 3) { display: none; }
   .dc-cat-row { grid-template-columns: minmax(48px, 46%) minmax(0, 1fr) 26px; gap: 4px; }
   .dc-cat-name { font-size: 9.5px; }
   .dc-cat-pct { font-size: 9px; }
-  .dc-score-main { padding: 4px 7px 3px; gap: 3px; }
+
+  /* Cell 3 compact layout (down to 160x120px) */
+  .dc-score-main { padding: 3px 6px 2px; gap: 2px; }
   .dc-certainty-tag { display: none; }
-  .dc-score-big { font-size: 14px; }
-  .dc-score-tier { font-size: 10px; }
-  .dc-card-bars { height: 32px; gap: 3px; }
+  .dc-score-big { font-size: 13px; }
+  .dc-score-denom { font-size: 9.5px; }
+  .dc-score-tier { font-size: 9.5px; }
+  .dc-card-bars { min-height: 20px; max-height: 24px; gap: 3px; }
   .dc-card-bar-pct { display: none; }
-  .dc-card-bar-lbl { font-size: 8.5px; }
-  .dc-proof-strip { padding: 3px 7px; }
-  .dc-zero-badge { font-size: 9px; padding: 1px 5px; }
-  .dc-link-btn { font-size: 9px; }
+  .dc-card-bar-lbl { font-size: 8.5px; line-height: 1.1; }
+  .dc-proof-strip { padding: 3px 6px; gap: 4px; }
+  .dc-zero-badge { font-size: 8.5px; padding: 1px 4px; }
+  .dc-link-btn { font-size: 8.5px; padding: 1px 3px; }
 }
 
 /* ==========================================================================
@@ -1555,6 +1590,10 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.dc-validation-box[hidden] {
+  display: none;
 }
 
 /* Right Pane: Provenance Banner & Tabs */

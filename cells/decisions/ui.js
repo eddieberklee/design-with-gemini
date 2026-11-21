@@ -77,29 +77,44 @@
   }
 
   function humanizeKey(key) {
-    return String(key || '')
+    const raw = String(key || '').trim();
+    const cleaned = raw
       .replace(/[_-]+/g, ' ')
-      .replace(/\b\w/g, function (c) {
-        return c.toUpperCase();
-      });
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return raw || 'Option';
+    return cleaned.replace(/\b\w/g, function (c) {
+      return c.toUpperCase();
+    });
   }
 
-  function certaintyLabel(stdDev) {
-    if (!Number.isFinite(stdDev)) return '';
-    if (stdDev < 0.52) return 'High certainty';
-    if (stdDev < 0.85) return 'Moderate spread';
+  function certaintyLabel(stdDev, min, max, sum) {
+    if (!Number.isFinite(stdDev) || (Number.isFinite(sum) && sum <= 0)) return '';
+    const maxPossible = Math.max(0.5, ((Number.isFinite(max) && Number.isFinite(min) ? max - min : 3) * 0.5));
+    const rel = stdDev / maxPossible;
+    if (rel < 0.36) return 'High certainty';
+    if (rel < 0.62) return 'Moderate spread';
     return 'Mixed signals';
   }
 
   function shortLevelLabel(q, lvl, idx) {
-    if (q && Array.isArray(q.levelLabels) && q.levelLabels[idx]) {
-      return q.levelLabels[idx];
+    if (q && Array.isArray(q.levelLabels)) {
+      if (lvl && Number.isInteger(lvl.index) && q.levelLabels[lvl.index]) {
+        return q.levelLabels[lvl.index];
+      }
+      if (q.levelLabels[idx]) return q.levelLabels[idx];
     }
-    const raw = String((lvl && lvl.description) || '');
+    const raw = String((lvl && lvl.description) || '').trim();
     const colon = raw.indexOf(':');
-    if (colon > 0 && colon <= 18) return raw.slice(0, colon).trim();
-    const firstWord = raw.split(/\s+/)[0];
-    return firstWord ? firstWord.replace(/[^A-Za-z0-9-]/g, '') : String(lvl.index);
+    if (colon > 0 && colon <= 18) {
+      const prefix = raw.slice(0, colon).replace(/^[\s•—–\-:]+/, '').trim();
+      if (prefix) return prefix;
+    }
+    const cleaned = raw.replace(/^[\s•—–\-:]+/, '').trim();
+    const firstWord = cleaned.split(/\s+/)[0] || '';
+    const trimmedWord = firstWord.replace(/^[^\w\u00C0-\u024F\u3000-\u9FFF]+|[^\w\u00C0-\u024F\u3000-\u9FFF-]+$/g, '');
+    if (trimmedWord) return trimmedWord;
+    return 'Level ' + (lvl ? lvl.index : idx);
   }
 
   function optionHumanLabel(q, key) {
@@ -107,7 +122,7 @@
       const match = q.options.find(function (o) {
         return o && (o.key || '').trim() === key;
       });
-      if (match && match.label) return match.label;
+      if (match && match.label && match.label.trim()) return match.label.trim();
     }
     return humanizeKey(key);
   }
@@ -141,18 +156,29 @@
   }
 
   function noulBand(p, threshold) {
-    if (p >= Math.max(threshold, 0.78)) return 'YES · HIGH';
-    if (p >= threshold) return p - threshold < 0.12 ? 'YES · MARGINAL' : 'LEAN YES';
-    if (p <= Math.min(threshold, 0.22)) return 'NO · HIGH';
-    return threshold - p < 0.12 ? 'NO · MARGINAL' : 'LEAN NO';
+    if (p >= threshold) {
+      const margin = p - threshold;
+      if (p >= 0.78 && margin >= 0.12) return 'YES · HIGH';
+      if (margin < 0.12) return 'YES · MARGINAL';
+      return 'LEAN YES';
+    }
+    const margin = threshold - p;
+    if (p <= 0.22 && margin >= 0.12) return 'NO · HIGH';
+    if (margin < 0.12) return 'NO · MARGINAL';
+    return 'LEAN NO';
   }
 
   function snapshotStateForNormalization(state) {
     return {
       questions: (state.questions || []).map(function (q) {
         return {
+          id: q.id,
+          enabled: q.enabled !== false,
           key: q.key,
+          cardQuestion: q.cardQuestion,
+          instructions: q.instructions,
           type: q.type,
+          threshold: q.threshold,
           options: Array.isArray(q.options)
             ? q.options.map(function (o) {
                 return { key: o.key, label: o.label, description: o.description };
@@ -259,8 +285,14 @@
     }
 
     function runEvaluation(opts) {
+      if (app.abortController) {
+        app.abortController.abort();
+        app.abortController = null;
+      }
+      const seq = ++app.runSeq;
       const validation = getValidation();
       if (!validation.valid) {
+        setLoadingState(false);
         renderWorkbenchValidation(validation);
         updateRunButton(validation);
         if (wbRefs.rightPane) renderWorkbenchWirePreview();
@@ -268,14 +300,9 @@
         return;
       }
 
-      if (app.abortController) {
-        app.abortController.abort();
-        app.abortController = null;
-      }
-
-      const seq = ++app.runSeq;
       const body = Schema.buildRequestBody(app.state);
       const keepGhost = !(opts && opts.resetGhost);
+      const stateSnapshot = snapshotStateForNormalization(app.state);
 
       if (app.mode === 'simulated') {
         setLoadingState(false);
@@ -290,7 +317,8 @@
           mode: 'simulated',
           httpStatus: null,
           latencyMs: null,
-          normalized: Schema.normalizeResponse(simRes.raw, app.state),
+          normalized: Schema.normalizeResponse(simRes.raw, stateSnapshot),
+          evaluatedQuestions: stateSnapshot.questions,
           raw: simRes.raw,
           evaluatedAt: simRes.evaluatedAt
         };
@@ -323,7 +351,6 @@
         return;
       }
 
-      const stateSnapshot = snapshotStateForNormalization(app.state);
       const ac = new AbortController();
       app.abortController = ac;
       app.error = null;
@@ -333,7 +360,7 @@
 
       Client.runLive(body, apiKey, ac.signal)
         .then(function (liveRes) {
-          if (seq !== app.runSeq) return;
+          if (seq !== app.runSeq || app.mode !== 'live') return;
           app.abortController = null;
           setLoadingState(false);
           if (keepGhost && app.result) {
@@ -346,6 +373,7 @@
             httpStatus: liveRes.httpStatus,
             latencyMs: liveRes.latencyMs,
             normalized: Schema.normalizeResponse(liveRes.raw, stateSnapshot),
+            evaluatedQuestions: stateSnapshot.questions,
             raw: liveRes.raw,
             evaluatedAt: liveRes.evaluatedAt
           };
@@ -365,7 +393,7 @@
           );
         })
         .catch(function (err) {
-          if (seq !== app.runSeq) return;
+          if (seq !== app.runSeq || app.mode !== 'live') return;
           if (err && err.aborted) return;
           app.abortController = null;
           setLoadingState(false);
@@ -386,6 +414,7 @@
     }
 
     function switchPreset(presetId, variantIndex) {
+      setPeerHighlight(false);
       const samePreset = app.state.presetId === presetId;
       app.uploadSeq++;
       app.state = Presets.createPresetState(presetId, variantIndex);
@@ -400,6 +429,7 @@
     }
 
     function switchVariant(variantIndex) {
+      setPeerHighlight(false);
       const preset = Presets.getPreset(app.state.presetId);
       const variant = preset.variants[variantIndex];
       if (!variant) return;
@@ -427,10 +457,17 @@
 
       function applyInPlace(nextThreshold) {
         questionObj.threshold = nextThreshold;
+        // Also mirror threshold onto matching live app.state question if questionObj came from evaluated snapshot
+        const liveMatch = (app.state.questions || []).find(function (sq) {
+          return sq && ((questionObj.id && sq.id === questionObj.id) || (sq.key || '').trim() === (questionObj.key || '').trim());
+        });
+        if (liveMatch) liveMatch.threshold = nextThreshold;
+
         const pct = Math.round(nextThreshold * 100) + '%';
         const isYes = prob >= nextThreshold;
         pinEl.style.left = pct;
         pinEl.setAttribute('aria-valuenow', fmtProb(nextThreshold));
+        pinEl.setAttribute('aria-valuetext', pct + ' cutoff (' + (isYes ? 'YES' : 'NO') + ')');
         fillEl.classList.toggle('is-below', !isYes);
         trackEl.title = 'Drag to move Yes/No cutoff (' + pct + ')';
 
@@ -469,8 +506,16 @@
       }
 
       trackEl.addEventListener('pointerdown', function (e) {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
         e.preventDefault();
         e.stopPropagation();
+        if (typeof pinEl.focus === 'function') {
+          try {
+            pinEl.focus({ preventScroll: true });
+          } catch (_err) {
+            pinEl.focus();
+          }
+        }
         if (trackEl.setPointerCapture) {
           try {
             trackEl.setPointerCapture(e.pointerId);
@@ -531,11 +576,22 @@
               dataset: { mode: modeKey, focusRole: 'mode-pill' },
               title: effectiveLive ? 'Using your Gemini API key — click to manage' : 'Local preview — click to add your Gemini API key',
               onClick: function () {
-                openWorkbench('mode-pill', { openKeyPopover: true });
+                openWorkbench('mode-pill', { openKeyPopover: true, initialTab: 'results' });
               }
             },
             [el('span', { className: 'dc-dot', 'aria-hidden': 'true' }), modeLabel]
-          )
+          ),
+          !scoreEl
+            ? el('button', {
+                type: 'button',
+                className: 'dc-icon-btn',
+                dataset: { focusRole: 'expand-btn' },
+                textContent: 'Customize ↗',
+                onClick: function () {
+                  openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
+                }
+              })
+            : null
         ])
       ]);
 
@@ -555,7 +611,7 @@
               'aria-label': 'Inspect or replace specimen image in Workbench',
               onClick: function () {
                 app.mediaExpanded = true;
-                openWorkbench('specimen-img', { openKeyPopover: false });
+                openWorkbench('specimen-img', { openKeyPopover: false, initialTab: 'results' });
               }
             },
             [el('img', { src: app.state.image.dataUrl, alt: app.state.image.name })]
@@ -609,6 +665,14 @@
           },
           onMouseleave: function () {
             setPeerHighlight(false);
+          },
+          onFocusin: function () {
+            setPeerHighlight(true);
+          },
+          onFocusout: function (e) {
+            if (!flipRow.contains(e.relatedTarget)) {
+              setPeerHighlight(false);
+            }
           }
         },
         activePreset.variants.map(function (v, idx) {
@@ -628,7 +692,7 @@
       const body = el('div', { className: 'dc-cell-body dc-input-body' }, [
         el('div', {
           className: 'dc-explainer',
-          textContent: 'Pick an input below — Gemini answers all 3 rules to the right in 1 call.'
+          textContent: 'Pick an input below — Gemini answers all 3 rules in 1 call.'
         }),
         specimenStage,
         flipRow
@@ -691,6 +755,16 @@
                   runEvaluation({ resetGhost: false });
                 }
               }),
+              app.error.httpStatus === 401 || app.error.code === 'MISSING_KEY'
+                ? el('button', {
+                    type: 'button',
+                    className: 'dc-btn dc-btn--sm',
+                    textContent: 'Update API Key',
+                    onClick: function () {
+                      openWorkbench('mode-pill', { openKeyPopover: true, initialTab: 'results' });
+                    }
+                  })
+                : null,
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
@@ -707,18 +781,23 @@
       } else if (app.result && app.result.normalized) {
         const answers = app.result.normalized.answers;
         const prevAnswers = app.prevResult && app.prevResult.normalized ? app.prevResult.normalized.answers : {};
-        const activeQuestions = app.state.questions.filter(function (q) {
-          return q.enabled !== false;
+        const renderQuestions = (Array.isArray(app.result.evaluatedQuestions) ? app.result.evaluatedQuestions : app.state.questions).filter(function (q) {
+          return q && q.enabled !== false;
+        });
+        const liveEnabledQuestions = app.state.questions.filter(function (q) {
+          return q && q.enabled !== false;
         });
 
-        const noulQ = activeQuestions.find(function (q) {
+        const noulQ = renderQuestions.find(function (q) {
           const qk = (q.key || '').trim();
           return q.type === 'noul' && Boolean(answers[qk]);
         });
-        const choiceQ = activeQuestions.find(function (q) {
+        const choiceQ = renderQuestions.find(function (q) {
           const qk = (q.key || '').trim();
           return q.type === 'choice' && Boolean(answers[qk]);
         });
+        const hasPendingNoul = !noulQ && liveEnabledQuestions.some(function (q) { return q.type === 'noul'; });
+        const hasPendingChoice = !choiceQ && liveEnabledQuestions.some(function (q) { return q.type === 'choice'; });
 
         // Top Half: Yes/No Check (noul)
         if (noulQ) {
@@ -755,6 +834,7 @@
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
             'aria-valuenow': fmtProb(thresh),
+            'aria-valuetext': fmtPct(thresh) + ' cutoff (' + (isYes ? 'YES' : 'NO') + ')',
             style: { left: Math.round(thresh * 100) + '%' }
           });
           track.appendChild(pin);
@@ -805,7 +885,12 @@
         } else {
           body.appendChild(
             el('div', { className: 'dc-half' }, [
-              el('div', { className: 'dc-empty-state', textContent: 'No Yes/No question active — enable in Customize ↗' })
+              el('div', {
+                className: 'dc-empty-state',
+                textContent: hasPendingNoul
+                  ? 'Yes/No question edited — click Run in Customize ↗'
+                  : 'No Yes/No question active — enable in Customize ↗'
+              })
             ])
           );
         }
@@ -854,7 +939,12 @@
         } else {
           body.appendChild(
             el('div', { className: 'dc-half' }, [
-              el('div', { className: 'dc-empty-state', textContent: 'No Category question active — enable in Customize ↗' })
+              el('div', {
+                className: 'dc-empty-state',
+                textContent: hasPendingChoice
+                  ? 'Category question edited — click Run in Customize ↗'
+                  : 'No Category question active — enable in Customize ↗'
+              })
             ])
           );
         }
@@ -884,7 +974,7 @@
               dataset: { focusRole: 'expand-btn' },
               'aria-label': 'Open Decisions API Workbench to customize questions, upload images, or view JSON',
               onClick: function () {
-                openWorkbench('expand-btn', { openKeyPopover: false });
+                openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
               }
             },
             'Customize ↗'
@@ -898,13 +988,13 @@
       if (app.error) {
         mainArea.appendChild(
           el('div', { className: 'dc-empty-state' }, [
-            el('div', { textContent: 'Waiting on Live Gemini Decisions API…' }),
+            el('div', { textContent: 'Live evaluation paused — resolve API error in Cell 2 or Customize.' }),
             el('button', {
               type: 'button',
               className: 'dc-btn dc-btn--sm',
               textContent: 'Open Workbench',
               onClick: function () {
-                openWorkbench('expand-btn', { openKeyPopover: false });
+                openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
               }
             })
           ])
@@ -912,14 +1002,18 @@
       } else if (app.result && app.result.normalized) {
         const answers = app.result.normalized.answers;
         const prevAnswers = app.prevResult && app.prevResult.normalized ? app.prevResult.normalized.answers : {};
-        const activeQuestions = app.state.questions.filter(function (q) {
-          return q.enabled !== false;
+        const renderQuestions = (Array.isArray(app.result.evaluatedQuestions) ? app.result.evaluatedQuestions : app.state.questions).filter(function (q) {
+          return q && q.enabled !== false;
+        });
+        const liveEnabledQuestions = app.state.questions.filter(function (q) {
+          return q && q.enabled !== false;
         });
 
-        const scoreQ = activeQuestions.find(function (q) {
+        const scoreQ = renderQuestions.find(function (q) {
           const qk = (q.key || '').trim();
           return q.type === 'score' && Boolean(answers[qk]);
         });
+        const hasPendingScore = !scoreQ && liveEnabledQuestions.some(function (q) { return q.type === 'score'; });
 
         if (scoreQ) {
           const qk = (scoreQ.key || '').trim();
@@ -933,17 +1027,20 @@
           }) || ans.levels[0];
           const peakIdx = Math.max(0, ans.levels.indexOf(peakLvl));
           const peakName = peakLvl ? shortLevelLabel(scoreQ, peakLvl, peakIdx) : '';
+          const cert = certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum);
 
           mainArea.appendChild(
             el('div', { className: 'dc-eyebrow-row' }, [
               el('span', { className: 'dc-eyebrow', textContent: 'Rubric Score (' + ans.min + '–' + ans.max + ')' }),
               el('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } }, [
                 deltaStr ? el('span', { className: 'dc-delta-chip', textContent: deltaStr }) : null,
-                el('span', {
-                  className: 'dc-certainty-tag',
-                  textContent: certaintyLabel(ans.stdDev),
-                  title: 'Distribution spread σ = ' + ans.stdDev.toFixed(2)
-                })
+                cert
+                  ? el('span', {
+                      className: 'dc-certainty-tag',
+                      textContent: cert,
+                      title: 'Distribution spread σ = ' + ans.stdDev.toFixed(2)
+                    })
+                  : null
               ])
             ])
           );
@@ -957,7 +1054,7 @@
               el('div', { className: 'dc-score-hero-left' }, [
                 el('span', { className: 'dc-score-big', textContent: ans.score.toFixed(1) }),
                 el('span', { className: 'dc-score-denom', textContent: '/ ' + ans.max }),
-                el('span', { className: 'dc-score-tier', textContent: '· ' + peakName })
+                peakName ? el('span', { className: 'dc-score-tier', textContent: '· ' + peakName }) : null
               ])
             ])
           );
@@ -973,7 +1070,7 @@
                 el('span', { className: 'dc-card-bar-pct', textContent: fmtPct(lvl.prob) }),
                 el('div', {
                   className: 'dc-card-bar' + (isPeak ? ' is-peak' : ''),
-                  style: { height: Math.max(3, Math.round(lvl.prob * 42)) + 'px' }
+                  style: { height: Math.max(8, Math.round(lvl.prob * 72)) + '%' }
                 })
               ])
             );
@@ -1004,33 +1101,42 @@
           mainArea.appendChild(el('div', { className: 'dc-card-chart' }, [barsGrid, labelsGrid]));
         } else {
           mainArea.appendChild(
-            el('div', { className: 'dc-empty-state', textContent: 'No Rubric question active — enable in Customize ↗' })
+            el('div', {
+              className: 'dc-empty-state',
+              textContent: hasPendingScore
+                ? 'Rubric question edited — click Run in Customize ↗'
+                : 'No Rubric question active — enable in Customize ↗'
+            })
           );
         }
       }
 
       // Signature Zero-Output-Token Proof Strip
-      const usage = app.result && app.result.normalized ? app.result.normalized.usage : null;
+      const usage = !app.error && app.result && app.result.normalized ? app.result.normalized.usage : null;
       const outTok = usage ? usage.total_output_tokens : 0;
-      const qCount = app.state.questions.filter(function (q) {
-        return q.enabled !== false;
-      }).length;
-      const resultIsLive = Boolean(app.result && app.result.mode === 'live');
+      const answerCount = !app.error && app.result && app.result.normalized
+        ? Object.keys(app.result.normalized.answers || {}).length
+        : 0;
+      const resultIsLive = Boolean(!app.error && app.result && app.result.mode === 'live');
       const timingText = app.isRunning
         ? 'running…'
         : resultIsLive
           ? app.result.latencyMs + 'ms · Live'
-          : '1 call · ' + qCount + ' answers';
+          : '1 call · ' + answerCount + ' answer' + (answerCount === 1 ? '' : 's');
+
+      const proofLeftChildren = app.error
+        ? [el('span', { className: 'dc-proof-meta', textContent: 'Live error · no active result' })]
+        : [
+            el('span', {
+              className: 'dc-zero-badge',
+              textContent: outTok + ' words generated',
+              title: 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text'
+            }),
+            el('span', { className: 'dc-proof-meta', textContent: timingText })
+          ];
 
       const proofStrip = el('footer', { className: 'dc-proof-strip' }, [
-        el('div', { className: 'dc-proof-left' }, [
-          el('span', {
-            className: 'dc-zero-badge',
-            textContent: outTok + ' words generated',
-            title: 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text'
-          }),
-          el('span', { className: 'dc-proof-meta', textContent: timingText })
-        ]),
+        el('div', { className: 'dc-proof-left' }, proofLeftChildren),
         el('button', {
           type: 'button',
           className: 'dc-link-btn',
@@ -1038,8 +1144,7 @@
           textContent: 'JSON ↗',
           title: 'Inspect exact v1beta/decisions Request JSON and cURL',
           onClick: function () {
-            app.activeTab = 'request';
-            openWorkbench('json-btn', { openKeyPopover: false });
+            openWorkbench('json-btn', { openKeyPopover: false, initialTab: 'request' });
           }
         })
       ]);
@@ -1189,14 +1294,18 @@
       }
     }
 
-    function renderKeyPopover() {
+    function renderKeyPopover(forceRebuild) {
       const pop = wbRefs.keyPopover;
       if (!pop) return;
       if (wbRefs.keyBtn) {
         wbRefs.keyBtn.setAttribute('aria-expanded', String(app.showKeyPopover));
       }
+      const wasOpen = !pop.hidden;
       pop.hidden = !app.showKeyPopover;
       if (!app.showKeyPopover) return;
+      if (wasOpen && !forceRebuild && wbRefs.keyInput && document.activeElement === wbRefs.keyInput) {
+        return;
+      }
 
       clearNode(pop);
       const existing = Client.KeyStore.get();
@@ -1220,13 +1329,21 @@
         ])
       );
 
+      let saveAndGoLive;
       const input = el('input', {
         type: app.keyVisible ? 'text' : 'password',
         className: 'dc-input dc-input--mono',
         autocomplete: 'off',
         spellcheck: 'false',
         placeholder: 'AIza...',
-        value: existing
+        value: existing,
+        onKeydown: function (e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (saveAndGoLive) saveAndGoLive();
+          }
+        }
       });
       wbRefs.keyInput = input;
 
@@ -1264,28 +1381,30 @@
         );
       }
 
-      const saveBtn = el('button', {
-        type: 'button',
-        className: 'dc-btn dc-btn--live dc-btn--sm',
-        textContent: 'Save & Go Live',
-        onClick: function () {
-          const val = input.value.trim();
-          if (!val) {
-            Client.KeyStore.clear();
-            app.mode = 'simulated';
-            app.error = null;
-            closeKeyPopover(false);
-            renderWorkbenchHeaderControls();
-            runEvaluation({ resetGhost: true });
-            return;
-          }
-          Client.KeyStore.set(val, persistCheck.checked);
-          app.mode = 'live';
+      saveAndGoLive = function () {
+        const val = input.value.trim();
+        if (!val) {
+          Client.KeyStore.clear();
+          app.mode = 'simulated';
           app.error = null;
           closeKeyPopover(false);
           renderWorkbenchHeaderControls();
           runEvaluation({ resetGhost: true });
+          return;
         }
+        Client.KeyStore.set(val, persistCheck.checked);
+        app.mode = 'live';
+        app.error = null;
+        closeKeyPopover(false);
+        renderWorkbenchHeaderControls();
+        runEvaluation({ resetGhost: true });
+      };
+
+      const saveBtn = el('button', {
+        type: 'button',
+        className: 'dc-btn dc-btn--live dc-btn--sm',
+        textContent: 'Save & Go Live',
+        onClick: saveAndGoLive
       });
 
       const clearBtn = el('button', {
@@ -1951,8 +2070,8 @@
 
       const answers = app.result.normalized.answers;
       const prevAnswers = app.prevResult && app.prevResult.normalized ? app.prevResult.normalized.answers : {};
-      const activeQuestions = app.state.questions.filter(function (q) {
-        return q.enabled !== false;
+      const activeQuestions = (Array.isArray(app.result.evaluatedQuestions) ? app.result.evaluatedQuestions : app.state.questions).filter(function (q) {
+        return q && q.enabled !== false;
       });
 
       activeQuestions.forEach(function (q) {
@@ -1989,6 +2108,7 @@
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
             'aria-valuenow': fmtProb(thresh),
+            'aria-valuetext': fmtPct(thresh) + ' cutoff (' + (isYes ? 'YES' : 'NO') + ')',
             style: { left: Math.round(thresh * 100) + '%' }
           });
           track.appendChild(pin);
@@ -2172,7 +2292,7 @@
                   el('span', { className: 'dc-hero-num', textContent: ans.score.toFixed(2) }),
                   el('span', {
                     className: 'dc-hero-sub',
-                    textContent: '/ ' + ans.max + ' · ' + certaintyLabel(ans.stdDev) + ' (σ ' + ans.stdDev.toFixed(2) + ')'
+                    textContent: '/ ' + ans.max + (certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum) ? ' · ' + certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum) : '') + ' (σ ' + ans.stdDev.toFixed(2) + ')'
                   })
                 ])
               ]),
@@ -2206,7 +2326,7 @@
       clearNode(right);
 
       const provMode = app.error ? 'error' : app.result && app.result.mode === 'live' ? 'live' : 'simulated';
-      const usage = app.result && app.result.normalized ? app.result.normalized.usage : null;
+      const usage = !app.error && app.result && app.result.normalized ? app.result.normalized.usage : null;
       const modSummary = usage && usage.input_tokens_by_modality.length
         ? usage.input_tokens_by_modality
             .map(function (m) {
@@ -2227,18 +2347,18 @@
           el('span', { className: 'dc-dot', 'aria-hidden': 'true' }),
           provLabel
         ]),
-        el('div', { className: 'dc-telemetry-chips' }, [
-          el('span', {
-            className: 'dc-chip dc-chip--hero',
-            textContent: 'output_tokens: ' + (usage ? usage.total_output_tokens : 0)
-          }),
-          usage
-            ? el('span', {
+        usage
+          ? el('div', { className: 'dc-telemetry-chips' }, [
+              el('span', {
+                className: 'dc-chip dc-chip--hero',
+                textContent: 'output_tokens: ' + usage.total_output_tokens
+              }),
+              el('span', {
                 className: 'dc-chip',
                 textContent: (provMode === 'simulated' ? '~' : '') + 'in: ' + usage.total_input_tokens + (modSummary ? ' (' + modSummary + ')' : '')
               })
-            : null
-        ])
+            ])
+          : null
       ]);
 
       const tabSpecs = [
@@ -2428,6 +2548,7 @@
     function openWorkbench(focusRole, opts) {
       app.returnFocusRole = focusRole || 'expand-btn';
       app.showKeyPopover = Boolean(opts && opts.openKeyPopover);
+      app.activeTab = (opts && opts.initialTab) || 'results';
 
       if (!wbRefs.leftPane) {
         buildWorkbenchShell();
@@ -2448,33 +2569,46 @@
       app.showKeyPopover = false;
       app.keyVisible = false;
       if (dialog.open) dialog.close();
+    }
+
+    dialog.addEventListener('close', function () {
+      app.showKeyPopover = false;
+      app.keyVisible = false;
       renderAllCells();
       restoreCardTriggerFocus();
-    }
+    });
 
     dialog.addEventListener('cancel', function (e) {
       if (app.showKeyPopover) {
         e.preventDefault();
         closeKeyPopover(true);
-        return;
       }
-      setTimeout(function () {
-        renderAllCells();
-        restoreCardTriggerFocus();
-      }, 0);
+    });
+
+    let pointerDownOnBackdrop = false;
+    let pointerDownOutsideKey = false;
+    dialog.addEventListener('mousedown', function (e) {
+      pointerDownOnBackdrop = e.target === dialog;
+      pointerDownOutsideKey = Boolean(app.showKeyPopover && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target));
     });
 
     dialog.addEventListener('click', function (e) {
-      if (e.target === dialog) {
+      if (e.target === dialog && pointerDownOnBackdrop) {
         closeWorkbench();
         return;
       }
-      if (app.showKeyPopover && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target)) {
+      if (app.showKeyPopover && pointerDownOutsideKey && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target)) {
         closeKeyPopover(false);
       }
     });
 
     dialog.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && app.showKeyPopover) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeKeyPopover(true);
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
         e.preventDefault();
         runEvaluation({ resetGhost: false });

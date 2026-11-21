@@ -288,7 +288,6 @@
       id: 'receipt',
       shortLabel: 'Receipt',
       title: 'Expense Receipt Audit',
-      modality: 'image+text',
       variants: [
         {
           id: 'clean',
@@ -360,7 +359,6 @@
       id: 'support',
       shortLabel: 'Ticket',
       title: 'Support Ticket Triage',
-      modality: 'text',
       variants: [
         {
           id: 'calm',
@@ -432,7 +430,6 @@
       id: 'ui_qa',
       shortLabel: 'UI QA',
       title: 'UI Craft & A11y QA',
-      modality: 'image+text',
       variants: [
         {
           id: 'polished',
@@ -504,7 +501,6 @@
       id: 'release',
       shortLabel: 'PR Gate',
       title: 'PR Release Gate',
-      modality: 'text',
       variants: [
         {
           id: 'safe',
