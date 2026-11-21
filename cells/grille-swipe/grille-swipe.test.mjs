@@ -1014,9 +1014,12 @@ test('Suite 6a: tile title is README number 06 even when the cell is the 8th gri
   env.install();
   try {
     const api = Lab.mountCell(env.cellEl);
-    assert.match(env.cellEl.innerHTML, /06 · RIGHT GRILLE/);
-    assert.match(env.cellEl.innerHTML, /06 · MBP-16 RIGHT GRILLE/);
-    assert.doesNotMatch(env.cellEl.innerHTML, /08 · /);
+    // Shared tile header (ui/NOTES.md section 2): two-digit index + sans title, no mono caps title.
+    assert.match(env.cellEl.innerHTML, /<span class="ui-tile-index">06<\/span>/);
+    assert.match(env.cellEl.innerHTML, /<span class="ui-tile-title ag-title">Right Grille</);
+    assert.doesNotMatch(env.cellEl.innerHTML, /ui-tile-index">08</);
+    assert.doesNotMatch(env.cellEl.innerHTML, /RIGHT GRILLE/);
+    assert.equal(env.cellEl.classList.contains('ui-tile'), true, 'mountCell opts the tile into ui-tile');
     await api.destroy();
   } finally {
     env.restore();

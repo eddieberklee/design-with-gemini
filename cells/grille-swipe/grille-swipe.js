@@ -10,6 +10,41 @@
   var CARRIER_HZ = 19000;
   var CELL_NUMBER = '06';
   var AUDIO_RESUME_TIMEOUT_MS = 2000;
+
+  // Tooltip copy (ui/NOTES.md section 4). State-dependent tips are rewritten in syncControlsUI
+  // and applyExpandDOM. No double quotes: these go into data-tip="…" attributes.
+  var LED_TIPS = {
+    idle: 'Microphone off. Arm Mic starts listening; Demo plays a simulated swipe.',
+    live: 'Microphone on, listening for finger friction on the grille. ■ Live stops it.',
+    probe: 'Loopback self-test: checking that the 19 kHz tone reaches the mic before trusting sonar.',
+    sonar: 'Listening, with an inaudible 19 kHz tone echoing off your finger.',
+    sleep: 'Listening; the 19 kHz tone paused after a minute without swipes. Swipe or click to wake it.',
+    uncoupled: 'The mic cannot hear the 19 kHz tone (muted or headphones?), so it listens passively.',
+    warn: 'Listening through an external mic; pick the MacBook Pro microphone for real results.'
+  };
+  var LED_LABELS = {
+    idle: 'Off',
+    live: 'Listening',
+    probe: 'Self-test',
+    sonar: 'Sonar',
+    sleep: 'Asleep',
+    uncoupled: 'Uncoupled',
+    warn: 'Ext mic'
+  };
+  var ARM_TIPS = {
+    idle: 'Start listening with the microphone; the browser asks permission.',
+    armed: 'Stop listening and release the microphone.'
+  };
+  var CAL_TIPS = {
+    idle: 'Record four practice swipes (up, up, down, down) to train the detector.',
+    active: 'Recording practice swipes. Click to cancel and keep the previous calibration.'
+  };
+  var EXPAND_TIP = 'Open the workbench: charts, calibration and every control.';
+  var VETO_TIPS = {
+    tap: 'Tap veto: anything shorter than 88 ms counts as a tap, not a swipe.',
+    thump: 'Thump veto: far more bass than friction noise, like a knock on the desk.',
+    speech: 'Voice veto: tonal sound (spectral flatness under 0.19) looks like speech, not friction.'
+  };
   var FEATURE_SCALES = [6.0, 4.5, 0.40, 0.30, 0.25, 0.35];
   var FEATURE_NAMES = [
     'Env Slope',
@@ -1195,6 +1230,43 @@
     return URL.createObjectURL(blob);
   }
 
+  // Canvas palette: the --ui-* tokens (ui/base.css) plus the hero's --ag-* signal colours
+  // (grille-swipe.css), read once per mount. The defaults equal the token values so Node tests
+  // and a missing stylesheet draw the same picture.
+  var PAL_TOKENS = {
+    ink: ['--ui-ink', '#161615'],
+    ink2: ['--ui-ink-2', '#4f4f4b'],
+    ink3: ['--ui-ink-3', '#66665f'],
+    line: ['--ui-line', '#d3d3ce'],
+    hairline: ['--ui-hairline', '#e5e5e2'],
+    surface: ['--ui-surface', '#ffffff'],
+    accent: ['--ui-accent', '#b4441a'],
+    up: ['--ag-up', '#0052cc'],
+    down: ['--ag-down', '#c93700'],
+    grille: ['--ag-grille', '#ecebe7'],
+    blade: ['--ag-blade', '#c2c1bb'],
+    perf: ['--ag-perf', '#c5c4be'],
+    rule: ['--ag-rule', '#9e9d97']
+  };
+
+  function readPalette(el) {
+    var cs = null;
+    try {
+      if (el && typeof window !== 'undefined' && typeof window.getComputedStyle === 'function') cs = window.getComputedStyle(el);
+    } catch (_) {}
+    var pal = {};
+    Object.keys(PAL_TOKENS).forEach(function (k) {
+      var v = cs ? String(cs.getPropertyValue(PAL_TOKENS[k][0]) || '').trim() : '';
+      pal[k] = /^#[0-9a-f]{6}$/i.test(v) ? v : PAL_TOKENS[k][1];
+    });
+    return pal;
+  }
+
+  function withAlpha(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return 'rgba(' + ((n >> 16) & 255) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255) + ', ' + a + ')';
+  }
+
   // Only a constraint failure is worth a relaxed second getUserMedia. Retrying after
   // NotAllowedError / NotFoundError re-prompts (Safari, Firefox) or just fails twice.
   function isConstraintError(err) {
@@ -1264,86 +1336,117 @@
     // even though it is the 8th child of main.grid. Never derive it from DOM position.
     var numPrefix = CELL_NUMBER;
 
+    // Shared tile anatomy (ui/base.css): head / flush hero body / foot. The workbench is the
+    // same element expanded in place; applyExpandDOM swaps the head to the studio-bar look.
+    // Diagram labels are HTML over the canvas (.ag-stage-labels) so they take tooltips; drawStage
+    // positions them. Lab-only parts (.ag-lab-strip, .ag-cal-studio, .ag-lab-col, .ag-wb-only)
+    // show only while .is-expanded.
+    cellEl.classList.add('ui-tile');
     cellEl.innerHTML = [
-      '<div class="ag-shell" role="region" aria-label="16-inch MacBook Pro Right Grille Acoustic Swipe Instrument">',
-      '  <header class="ag-header">',
-      '    <span class="ag-led" data-state="idle" aria-hidden="true"></span>',
-      '    <span class="ag-title">',
-      '      <span class="ag-title-short">' + numPrefix + ' · RIGHT GRILLE</span>',
-      '      <span class="ag-title-long">' + numPrefix + ' · MBP-16 RIGHT GRILLE</span>',
-      '    </span>',
-      '    <span class="ag-spacer"></span>',
-      '    <span class="ag-vernier-mini ag-num">+0.0</span>',
-      '    <div class="ag-mic-wrap" data-warn="false">',
-      '      <select class="ag-mic-select" aria-label="Microphone input source" title="Microphone input source">',
+      '<header class="ui-tile-head ag-header">',
+      '  <span class="ui-tile-index">' + numPrefix + '</span>',
+      '  <span class="ui-tile-title ag-title">Right Grille<span class="ag-title-wb"> Workbench</span></span>',
+      '  <div class="ui-tile-actions ag-actions">',
+      '    <span class="ui-pill ag-led" data-state="idle" data-tone="idle" role="status" data-tip="' + LED_TIPS.idle + '"><span class="ui-pill-label ag-led-label">Off</span></span>',
+      '    <div class="ag-mic-wrap ui-hide-compact" data-warn="false">',
+      '      <select class="ag-mic-select" aria-label="Microphone input" data-tip="Microphone to listen with; choosing one starts listening. The built-in mics work best.">',
       '        <option value="">MBP 3-Mic Array</option>',
       '      </select>',
       '    </div>',
-      '    <div class="ag-demo-pair">',
-      '      <button type="button" class="ag-btn ag-demo-up" title="Inject synthetic Right-Grille UP swipe">Demo ↑</button>',
-      '      <button type="button" class="ag-btn ag-demo-dn" title="Inject synthetic Right-Grille DOWN swipe">Demo ↓</button>',
-      '    </div>',
-      '    <button type="button" class="ag-icon-btn ag-expand-btn" aria-expanded="false" aria-label="Expand Acoustic Workbench" title="Expand Acoustic Workbench">⤢</button>',
-      '  </header>',
-      '  <div class="ag-lab-strip">',
-      '    <span class="ag-lab-badge ag-hw-status"><strong>HW:</strong> Unarmed · 3× MEMS Left (~/tab), 0 Right/Notch</span>',
-      '    <span class="ag-lab-badge ag-loop-status"><strong>19kHz:</strong> Standby</span>',
-      '    <label class="ag-gain-wrap"><span>Pilot</span><input type="range" class="ag-gain-slider" min="0.04" max="0.22" step="0.01" value="0.13"><span class="ag-num ag-gain-val">-18dB</span></label>',
-      '    <button type="button" class="ag-btn ag-export-btn" title="Copy calibration & last stroke JSON">Copy JSON</button>',
+      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--icon ag-expand-btn" aria-expanded="false" aria-label="Open the workbench" data-tip="' + EXPAND_TIP + '">⤢</button>',
       '  </div>',
-      '  <div class="ag-workbench">',
-      '    <div class="ag-primary-col">',
-      '      <div class="ag-stage-well" tabindex="0" role="slider" aria-orientation="vertical" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0" aria-valuetext="+0.0 · Right Grille">',
-      '        <div class="ag-canvas-wrap ag-stage-wrap"><canvas class="ag-stage-canvas"></canvas></div>',
-      '        <div class="ag-toast" hidden><span class="ag-toast-text"></span><button type="button" class="ag-btn ag-toast-close">OK</button></div>',
+      '</header>',
+      '<div class="ag-lab-strip">',
+      '  <span class="ag-lab-badge ag-hw-status"><span class="ui-label">Mic</span><span class="ag-strip-val">Off · 3 mics under the left grille</span></span>',
+      '  <span class="ag-lab-badge ag-loop-status"><span class="ui-label">Sonar</span><span class="ag-strip-val">Standby · right tweeter</span></span>',
+      '  <label class="ag-gain-wrap"><span class="ui-label">Pilot</span><input type="range" class="ui-slider ag-gain-slider" min="0.04" max="0.22" step="0.01" value="0.13" data-tip="Loudness of the inaudible 19 kHz tone from the right speaker, in dB of full scale."><span class="ui-readout ag-num ag-gain-val">-18dB</span></label>',
+      '  <button type="button" class="ui-btn ui-btn--sm ag-export-btn" data-tip="Copy the classifier weights, calibration score and last swipe as JSON.">Copy JSON</button>',
+      '</div>',
+      '<div class="ui-tile-body ui-tile-body--flush ag-workbench">',
+      '  <div class="ag-primary-col">',
+      '    <div class="ag-stage-well" tabindex="0" role="slider" aria-orientation="vertical" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0" aria-valuetext="+0.0 · Right Grille" aria-description="Drag or scroll to scrub. Arrow keys play a demo swipe; Home and End jump to the ends.">',
+      '      <div class="ag-canvas-wrap ag-stage-wrap"><canvas class="ag-stage-canvas"></canvas></div>',
+      '      <div class="ag-stage-labels" aria-hidden="true">',
+      '        <span class="ag-lbl ag-lbl--c ag-lbl-notch" data-tip="The camera notch has no microphones; all three sit under the left grille.">Notch · 0 mics</span>',
+      '        <span class="ag-lbl ag-lbl--l ag-lbl-key">esc</span>',
+      '        <span class="ag-lbl ag-lbl--l ag-lbl-key">~ `</span>',
+      '        <span class="ag-lbl ag-lbl--l ag-lbl-key">tab</span>',
+      '        <span class="ag-lbl ag-lbl--l ag-lbl-mems" data-tip="Three tiny MEMS mics under the left grille; macOS mixes them into one mono channel."><span class="ag-lbl-strong">3× MEMS</span><span>Mono</span></span>',
+      '        <span class="ag-lbl ag-lbl--c ag-lbl-chord" data-tip="Sound path from the mics to your finger; top and bottom of the grille differ by only 4.5%."><span class="ag-lbl-strong ag-lbl-chord-cm">31.7cm</span><span>Δ4.5%</span></span>',
+      '        <span class="ag-lbl ag-lbl--c ag-lbl-right" data-tip="No microphones under the right grille, only the tweeter and woofers.">Right · 0 mics</span>',
+      '        <span class="ag-lbl ag-lbl--c ag-lbl-palm" data-tip="Lower end of the grille, beside the palm rest; it sounds duller than the stiff top.">Palm plate</span>',
+      '        <span class="ag-lbl ag-lbl--r ag-lbl-value ag-vernier-mini ag-num" data-tip="Scrub position, −10 at the palm rest to +10 at the hinge; each swipe moves it one step.">+0.0</span>',
+      '        <span class="ag-lbl ag-lbl--r ag-lbl-result" data-dir="">Scrub</span>',
+      '        <span class="ag-lbl ag-lbl--r ag-lbl-demo" data-tip="This reading came from a simulated Demo swipe, not the microphone.">Demo</span>',
+      '        <span class="ag-lbl ag-lbl--r ag-lbl-tag">19kHz</span>',
       '      </div>',
-      '      <div class="ag-cal-studio">',
-      '        <div class="ag-cal-row">',
-      '          <span><strong>4-Stroke LDA:</strong></span>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="0" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 1 (UP 1): empty">↑1</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="1" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 2 (UP 2): empty">↑2</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="2" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 3 (DOWN 1): empty">↓1</button>',
-      '          <button type="button" class="ag-btn ag-slot-btn" data-slot="3" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 4 (DOWN 2): empty">↓2</button>',
-      '          <button type="button" class="ag-btn ag-cal-reset" title="Clear calibration">Reset</button>',
-      '          <span class="ag-spacer"></span>',
-      '          <span class="ag-num ag-oof-verdict">Prior Mode</span>',
-      '        </div>',
-      '      </div>',
+      '      <div class="ag-toast" hidden><span class="ag-toast-text"></span><button type="button" class="ui-btn ui-btn--sm ag-toast-close">OK</button></div>',
       '    </div>',
-      '    <div class="ag-lab-col">',
-      '      <div class="ag-panel">',
-      '        <div class="ag-panel-head"><span><strong>STROKE TRAJECTORY</strong> s ∈ [0 → 1] · Fric/Tilt + 19k Dop/Occ</span><span class="ag-num ag-scope-meta">Idle</span></div>',
-      '        <div class="ag-canvas-wrap ag-scope-wrap"><canvas class="ag-scope-canvas"></canvas></div>',
-      '      </div>',
-      '      <div class="ag-panel">',
-      '        <div class="ag-panel-head"><span><strong>19.00 kHz MTI WATERFALL</strong> −100..+100 Hz</span><span class="ag-num ag-wf-meta">±15Hz Notch</span></div>',
-      '        <div class="ag-canvas-wrap ag-wf-wrap"><canvas class="ag-wf-canvas"></canvas></div>',
-      '      </div>',
-      '      <div class="ag-panel">',
-      '        <div class="ag-panel-head"><span><strong>FISHER LOG-ODDS</strong> wⱼ·(x̃ⱼ − c̃ⱼ)</span><span class="ag-num ag-lda-meta">← DN | UP →</span></div>',
-      '        <div class="ag-canvas-wrap ag-lda-wrap"><canvas class="ag-lda-canvas"></canvas></div>',
+      '    <div class="ag-cal-studio">',
+      '      <div class="ag-cal-row">',
+      '        <span class="ui-label ag-cal-label" data-tip="Linear discriminant (LDA): a small classifier trained on two up and two down practice swipes.">4-stroke LDA</span>',
+      '        <button type="button" class="ui-btn ui-btn--sm ag-slot-btn" data-slot="0" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 1 (UP 1): empty">↑1</button>',
+      '        <button type="button" class="ui-btn ui-btn--sm ag-slot-btn" data-slot="1" data-dir="UP" aria-pressed="false" aria-label="Calibration stroke 2 (UP 2): empty">↑2</button>',
+      '        <button type="button" class="ui-btn ui-btn--sm ag-slot-btn" data-slot="2" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 3 (DOWN 1): empty">↓1</button>',
+      '        <button type="button" class="ui-btn ui-btn--sm ag-slot-btn" data-slot="3" data-dir="DOWN" aria-pressed="false" aria-label="Calibration stroke 4 (DOWN 2): empty">↓2</button>',
+      '        <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ag-cal-reset" data-tip="Delete the saved practice swipes for this grille and mode.">Reset</button>',
+      '        <span class="ui-readout ag-num ag-oof-verdict">Prior Mode</span>',
       '      </div>',
       '    </div>',
       '  </div>',
-      '  <footer class="ag-footer">',
-      '    <button type="button" class="ag-btn ag-micro-cta"><span>Right Grille Lab</span><span>⤢</span></button>',
-      '    <div class="ag-controls-bar">',
-      '      <button type="button" class="ag-btn ag-arm-btn" data-armed="false">● Arm Mic</button>',
-      '      <div class="ag-seg ag-seg-grille" role="group" aria-label="Target speaker grille">',
-      '        <button type="button" class="ag-seg-btn" data-grille="right" aria-pressed="true" title="Right Speaker Grille (0 mics, ~31.7cm from left 3-mic array)">R Grille</button>',
-      '        <button type="button" class="ag-seg-btn" data-grille="left" aria-pressed="false" title="Left Speaker Grille Control (3x MEMS under upper third)">L Ctrl</button>',
-      '      </div>',
-      '      <div class="ag-seg ag-seg-mode" role="group" aria-label="Acoustic sensing mode">',
-      '        <button type="button" class="ag-seg-btn" data-mode="sonar" aria-pressed="true" title="19.0 kHz Hard-Right Tweeter Ultrasonic Sonar + Friction">19k Sonar</button>',
-      '        <button type="button" class="ag-seg-btn" data-mode="passive" aria-pressed="false" title="Passive Perforation Friction & Chassis Tilt Only">Passive</button>',
-      '      </div>',
-      '      <button type="button" class="ag-btn ag-cal-btn" data-active="false" data-calibrated="false" title="Calibrate Right Grille with 2 UP + 2 DOWN strokes">Cal ↑↑↓↓</button>',
+      '  <div class="ag-lab-col">',
+      '    <div class="ag-panel">',
+      '      <div class="ag-panel-head"><span class="ui-label" data-tip="Last swipe from start to end: friction loudness above, 19 kHz echo shift below.">Stroke trajectory</span><span class="ag-panel-sub">friction · 19 kHz Doppler</span><span class="ui-readout ui-readout--quiet ag-num ag-scope-meta" data-tip="Last detected direction, the classifier\'s confidence and the swipe\'s length.">Idle</span></div>',
+      '      <div class="ag-canvas-wrap ag-scope-wrap"><canvas class="ag-scope-canvas"></canvas></div>',
       '    </div>',
-      '  </footer>',
-      '</div>'
+      '    <div class="ag-panel">',
+      '      <div class="ag-panel-head"><span class="ui-label" data-tip="One column per swipe: the 19 kHz echo shift, up swipes above the centre line, down below.">Doppler waterfall</span><span class="ag-panel-sub"><span class="ag-term" data-tip="Moving-target filter: hides still echoes so only your moving hand shows.">MTI</span> · ±100 Hz</span><span class="ui-readout ui-readout--quiet ag-num ag-wf-meta" data-tip="Echo shifts under 15 Hz are filtered out as still clutter (the shaded band).">±15 Hz notch</span></div>',
+      '      <div class="ag-canvas-wrap ag-wf-wrap"><canvas class="ag-wf-canvas"></canvas></div>',
+      '    </div>',
+      '    <div class="ag-panel">',
+      '      <div class="ag-panel-head"><span class="ui-label" data-tip="How much each sound feature pushed the last swipe toward up or down.">Fisher log-odds</span><span class="ag-panel-sub"><span class="ag-term" data-tip="Linear discriminant analysis: a small trained classifier that separates up from down swipes.">LDA</span> · per feature</span><span class="ui-readout ui-readout--quiet ag-num ag-lda-meta" data-tip="Bars right of the centre line vote up; bars left of it vote down.">← DN | UP →</span></div>',
+      '      <div class="ag-canvas-wrap ag-lda-wrap"><canvas class="ag-lda-canvas"></canvas></div>',
+      '    </div>',
+      '  </div>',
+      '</div>',
+      '<footer class="ui-tile-foot ag-footer">',
+      '  <button type="button" class="ag-micro-cta"><span>Right Grille Lab</span><span>⤢</span></button>',
+      '  <div class="ag-controls-bar">',
+      '    <button type="button" class="ui-btn ui-btn--sm ag-arm-btn" data-armed="false" data-tone="idle" data-tip="' + ARM_TIPS.idle + '">● Arm Mic</button>',
+      '    <div class="ui-seg ag-seg ag-seg-grille ag-wb-only" role="group" aria-label="Speaker grille to swipe">',
+      '      <button type="button" class="ag-seg-btn" data-grille="right" aria-pressed="true" data-tip="Swipe the right speaker grille, which has no mics under it.">R Grille</button>',
+      '      <button type="button" class="ag-seg-btn" data-grille="left" aria-pressed="false" data-tip="Control test: swipe the left grille, right over the three mics.">L Ctrl</button>',
+      '    </div>',
+      '    <div class="ui-seg ag-seg ag-seg-mode" role="group" aria-label="Sensing mode">',
+      '      <button type="button" class="ag-seg-btn" data-mode="sonar" aria-pressed="true" data-tip="Play an inaudible 19 kHz tone from the right speaker and track its echo.">19k Sonar</button>',
+      '      <button type="button" class="ag-seg-btn" data-mode="passive" aria-pressed="false" data-tip="Listen to finger friction only; no tone plays.">Passive</button>',
+      '    </div>',
+      '    <button type="button" class="ui-btn ui-btn--sm ag-cal-btn ag-wb-only" data-active="false" data-calibrated="false" data-tip="' + CAL_TIPS.idle + '">Cal ↑↑↓↓</button>',
+      '    <div class="ag-demo-pair" role="group" aria-label="Demo swipes">',
+      '      <span class="ui-label" aria-hidden="true">Demo</span>',
+      '      <button type="button" class="ui-btn ui-btn--sm ui-btn--icon ag-demo-up" aria-label="Demo swipe up" data-tip="Play a simulated upward swipe through the detector.">↑</button>',
+      '      <button type="button" class="ui-btn ui-btn--sm ui-btn--icon ag-demo-dn" aria-label="Demo swipe down" data-tip="Play a simulated downward swipe through the detector.">↓</button>',
+      '    </div>',
+      '  </div>',
+      '</footer>'
     ].join('\n');
 
     var els = {
+      header: cellEl.querySelector('.ag-header'),
+      title: cellEl.querySelector('.ag-title'),
+      actions: cellEl.querySelector('.ag-actions'),
+      ledLabel: cellEl.querySelector('.ag-led-label'),
+      stageLabels: cellEl.querySelector('.ag-stage-labels'),
+      lblNotch: cellEl.querySelector('.ag-lbl-notch'),
+      lblKeys: cellEl.querySelectorAll('.ag-lbl-key'),
+      lblMems: cellEl.querySelector('.ag-lbl-mems'),
+      lblChord: cellEl.querySelector('.ag-lbl-chord'),
+      lblChordCm: cellEl.querySelector('.ag-lbl-chord-cm'),
+      lblRight: cellEl.querySelector('.ag-lbl-right'),
+      lblPalm: cellEl.querySelector('.ag-lbl-palm'),
+      lblResult: cellEl.querySelector('.ag-lbl-result'),
+      lblDemo: cellEl.querySelector('.ag-lbl-demo'),
+      lblTag: cellEl.querySelector('.ag-lbl-tag'),
       led: cellEl.querySelector('.ag-led'),
       vernierMini: cellEl.querySelector('.ag-vernier-mini'),
       micWrap: cellEl.querySelector('.ag-mic-wrap'),
@@ -1410,6 +1513,7 @@
       wavePhase: -1,
       waveDir: 'UP',
       lastResult: null,
+      lastSynthetic: false, // lastResult came from a Demo stroke (display only)
       lastFeat: null,
       calActiveSlot: -1, // 0..3 when recording calibration
       calSlots: [null, null, null, null], // [UP1, UP2, DN1, DN2]
@@ -1429,6 +1533,8 @@
       scrubDragging: false,
       lastDragY: 0
     };
+
+    var PAL = readPalette(cellEl); // canvas colours from tokens, cached (never read per frame)
 
     var sizes = {
       stage: { w: 300, h: 200 },
@@ -1534,8 +1640,10 @@
       }
     }
 
-    function showToast(msg, tone, owner) {
+    // tip (optional): explains jargon in msg (veto names); '' shows no tooltip.
+    function showToast(msg, tone, owner, tip) {
       els.toastText.textContent = msg;
+      els.toastText.setAttribute('data-tip', tip || '');
       els.toast.dataset.tone = tone || 'info';
       els.toast.hidden = false;
       toastOwner = owner || '';
@@ -1543,6 +1651,7 @@
 
     function hideToast() {
       els.toast.hidden = true;
+      els.toastText.setAttribute('data-tip', '');
       toastOwner = '';
     }
 
@@ -2033,12 +2142,13 @@
           var demoReason = feat.isTapVeto ? 'tap veto (' + Math.round(feat.durMs) + ' ms < 88 ms)'
             : feat.isThumpVeto ? 'desk-thump veto'
               : 'voice-harmonic veto (spectral flatness ' + (Number.isFinite(feat.meanSfm) ? feat.meanSfm.toFixed(3) : '?') + ' < 0.19)';
-          showToast('Demo stroke rejected by ' + demoReason + '. Click again for a new sample.', 'warn', 'demo');
+          var vetoTip = feat.isTapVeto ? VETO_TIPS.tap : feat.isThumpVeto ? VETO_TIPS.thump : VETO_TIPS.speech;
+          showToast('Demo stroke rejected by ' + demoReason + '. Click again for a new sample.', 'warn', 'demo', vetoTip);
         } else if (state.calActiveSlot >= 0) {
           var reason = feat.isTapVeto ? 'Tap (<88ms) ignored — glide smoothly along grille.'
             : feat.isThumpVeto ? 'Low-freq desk thump ignored — brush perforations lightly.'
               : 'Voice harmonic ignored — swipe speaker grille.';
-          showToast(reason, 'warn', 'cal');
+          showToast(reason, 'warn', 'cal', feat.isTapVeto ? VETO_TIPS.tap : feat.isThumpVeto ? VETO_TIPS.thump : VETO_TIPS.speech);
         }
         return;
       }
@@ -2070,6 +2180,7 @@
       var sonarEff = isSonarEffective();
       var res = classifyStroke(feat, state.ldaModel, state.grille, sonarEff);
       state.lastResult = res;
+      state.lastSynthetic = !!isSynthetic; // display only: the stage and the scope say "Demo"
 
       // Drive kinetic 31-louver directional wave & Vernier carriage
       var stepDelta = res.dir === 'UP' ? +1.0 : -1.0;
@@ -2118,19 +2229,41 @@
     }
 
     function syncControlsUI() {
-      var sonarLive = state.armed && state.mode === 'sonar' && state.grille === 'right' && state.sonarCoupled &&
-        !state.sonarSleeping && !state.probePending && !state.reprobeOnVisible;
-      els.led.dataset.state = !state.armed ? 'idle' : (state.externalMicWarn ? 'warn' : (sonarLive ? 'sonar' : 'live'));
+      // Status pill: 'sonar' only once the loopback probe has passed; never green (not a connection).
+      var ledState = 'idle';
+      if (state.armed) {
+        if (state.externalMicWarn) ledState = 'warn';
+        else if (state.mode === 'sonar' && state.grille === 'right') {
+          if (state.probePending || state.reprobeOnVisible) ledState = 'probe';
+          else if (!state.sonarCoupled) ledState = 'uncoupled';
+          else if (state.sonarSleeping) ledState = 'sleep';
+          else ledState = 'sonar';
+        } else ledState = 'live';
+      }
+      // Write only on change: the pill is role="status", and this runs on every scrub pointermove.
+      if (els.led.dataset.state !== ledState) {
+        els.led.dataset.state = ledState;
+        els.led.setAttribute('data-tone', ledState === 'idle' ? 'idle' : 'attention');
+        els.led.setAttribute('data-tip', LED_TIPS[ledState]);
+        if (els.ledLabel) els.ledLabel.textContent = LED_LABELS[ledState];
+      }
       els.micWrap.dataset.warn = state.externalMicWarn ? 'true' : 'false';
 
       els.armBtn.dataset.armed = state.armed ? 'true' : 'false';
       els.armBtn.textContent = state.armed ? '■ Live' : '● Arm Mic';
+      els.armBtn.setAttribute('data-tone', state.armed ? 'attention' : 'idle');
+      els.armBtn.setAttribute('data-tip', state.armed ? ARM_TIPS.armed : ARM_TIPS.idle);
 
       els.grilleBtns.forEach(function (b) {
         b.setAttribute('aria-pressed', b.dataset.grille === state.grille ? 'true' : 'false');
       });
       els.modeBtns.forEach(function (b) {
         b.setAttribute('aria-pressed', b.dataset.mode === state.mode ? 'true' : 'false');
+        if (b.dataset.mode === 'sonar') {
+          b.setAttribute('data-tip', state.grille === 'left'
+            ? 'No tone on the left grille: 19k Sonar works only with R Grille selected.'
+            : 'Play an inaudible 19 kHz tone from the right speaker and track its echo.');
+        }
       });
 
       if (state.calActiveSlot < 0) hideToastOwnedBy('cal');
@@ -2141,10 +2274,14 @@
       if (state.calActiveSlot >= 0) {
         var prompts = ['Swipe ↑ 1/4', 'Swipe ↑ 2/4', 'Swipe ↓ 3/4', 'Swipe ↓ 4/4'];
         els.calBtn.textContent = prompts[state.calActiveSlot];
+        els.calBtn.setAttribute('data-tip', CAL_TIPS.active);
       } else if (calDone) {
         els.calBtn.textContent = "Cal ✓ d'" + state.ldaModel.dPrimeOof.toFixed(1);
+        els.calBtn.setAttribute('data-tip', 'Calibrated: up and down separate by d′ ' + state.ldaModel.dPrimeOof.toFixed(1) +
+          '. Click to record four new practice swipes.');
       } else {
         els.calBtn.textContent = 'Cal ↑↑↓↓';
+        els.calBtn.setAttribute('data-tip', CAL_TIPS.idle);
       }
 
       els.slotBtns.forEach(function (sb) {
@@ -2161,45 +2298,67 @@
           'Calibration stroke ' + (idx + 1) + ' (' + dirLabel + ' ' + numInDir + '): ' +
             (rec ? 'recording' : (filled ? 'captured' : 'empty'))
         );
+        var word = dirLabel === 'UP' ? 'up' : 'down';
+        var arrowKey = dirLabel === 'UP' ? '↑' : '↓';
+        sb.setAttribute('data-tip', rec
+          ? 'Recording practice ' + word + ' swipe ' + numInDir + ': swipe ' + word + ' now, or press Demo ' + arrowKey + '.'
+          : 'Practice ' + word + ' swipe ' + numInDir + (filled ? ' is recorded' : ' is empty') +
+            '. Click, then swipe ' + word + ' to record it' + (filled ? ' again.' : '.'));
       });
 
       if (calDone) {
         var dp = state.ldaModel.dPrimeOof;
         var verd = dp >= 1.6 ? 'Locked' : (dp >= 0.9 ? 'Usable' : 'Marginal');
-        els.oofVerdict.textContent = "d'_OOF " + dp.toFixed(2) + ' · ' + verd;
-      } else if (state.grille === 'left') {
-        els.oofVerdict.textContent = 'Left 3-Mic Prior (High)';
-      } else if (state.mode === 'sonar' && (!state.armed || state.sonarCoupled)) {
-        els.oofVerdict.textContent = '19kHz Sonar Prior';
-      } else if (state.mode === 'sonar') {
-        els.oofVerdict.textContent = 'Uncoupled Passive Prior';
+        els.oofVerdict.textContent = 'd′ ' + dp.toFixed(2) + ' · ' + verd;
+        els.oofVerdict.setAttribute('data-tip', 'd′: how far apart up and down practice swipes score on held-out tries; 1.6+ locked, 0.9+ usable.');
       } else {
-        els.oofVerdict.textContent = 'Passive Prior (Δ4.5% Low)';
+        if (state.grille === 'left') {
+          els.oofVerdict.textContent = 'Left 3-Mic Prior (High)';
+        } else if (state.mode === 'sonar' && (!state.armed || state.sonarCoupled)) {
+          els.oofVerdict.textContent = '19kHz Sonar Prior';
+        } else if (state.mode === 'sonar') {
+          els.oofVerdict.textContent = 'Uncoupled Passive Prior';
+        } else {
+          els.oofVerdict.textContent = 'Passive Prior (Δ4.5% Low)';
+        }
+        els.oofVerdict.setAttribute('data-tip', 'No calibration yet: built-in weights for this grille and mode. Record four swipes to train.');
       }
 
+      // The strip badges keep their element; only their inner HTML changes, so tips live on them.
       if (state.armed && state.audioCtx) {
-        var srK = (state.audioCtx.sampleRate / 1000).toFixed(1) + 'kHz';
-        els.hwStatus.innerHTML = '<strong>HW:</strong> ' + escapeHtml(state.micLabel) + ' · ' + srK + ' · EC/NS/AGC:OFF';
+        var srK = (state.audioCtx.sampleRate / 1000).toFixed(1) + ' kHz';
+        els.hwStatus.innerHTML = '<span class="ui-label">Mic</span><span class="ag-strip-val">' + escapeHtml(state.micLabel) + ' · ' + srK + ' · EC/NS/AGC off</span>';
+        els.hwStatus.setAttribute('data-tip', 'Active mic and sample rate; echo cancelling, noise suppression and auto gain are off.');
       } else {
-        els.hwStatus.innerHTML = '<strong>HW:</strong> Unarmed · 3× MEMS Left (~/tab), 0 Right/Notch';
+        els.hwStatus.innerHTML = '<span class="ui-label">Mic</span><span class="ag-strip-val">Off · 3 mics under the left grille</span>';
+        els.hwStatus.setAttribute('data-tip', 'Where the MacBook mics are: all three under the left grille, none on the right or in the notch.');
       }
 
+      var loopTxt, loopTip;
       if (!state.armed) {
-        els.loopStatus.innerHTML = '<strong>19kHz:</strong> Standby (Right Tweeter R+1.0)';
+        loopTxt = 'Standby · right tweeter';
+        loopTip = 'Once armed in 19k Sonar mode, the right speaker plays an inaudible 19 kHz tone.';
       } else if (state.grille === 'left' || state.mode === 'passive') {
-        els.loopStatus.innerHTML = '<strong>19kHz:</strong> Muted (Passive Mode)';
+        loopTxt = 'Muted · passive';
+        loopTip = 'No tone plays in Passive mode or on the left grille.';
       } else if (state.sonarCoupled) {
         if (state.probePending || state.reprobeOnVisible) {
-          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Loopback self-test…';
+          loopTxt = 'Loopback self-test…';
+          loopTip = 'Checking that the mic hears the tone before trusting sonar.';
         } else if (state.sonarSleeping) {
-          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Idle Sleep (swipe or click to wake)';
+          loopTxt = 'Idle sleep · swipe or click to wake';
+          loopTip = 'The tone paused after a minute without swipes; any swipe or click wakes it.';
         } else {
-          var snrTxt = state.loopbackSnrDb !== null ? ('+' + state.loopbackSnrDb.toFixed(1) + ' dB') : 'Locked';
-          els.loopStatus.innerHTML = '<strong>19kHz:</strong> Coupled (' + snrTxt + ' R+1.0)';
+          var snrTxt = state.loopbackSnrDb !== null ? ('+' + state.loopbackSnrDb.toFixed(1) + ' dB') : 'locked';
+          loopTxt = 'Coupled · ' + snrTxt;
+          loopTip = 'The mic hears the tone this far above the noise, so sonar works.';
         }
       } else {
-        els.loopStatus.innerHTML = '<strong>19kHz:</strong> Uncoupled (Fallback Passive)';
+        loopTxt = 'Uncoupled · passive fallback';
+        loopTip = 'The mic cannot hear the tone (muted or headphones?); using passive sensing.';
       }
+      els.loopStatus.innerHTML = '<span class="ui-label">Sonar</span><span class="ag-strip-val">' + loopTxt + '</span>';
+      els.loopStatus.setAttribute('data-tip', loopTip);
 
       var vSign = state.vernierTarget >= 0 ? '+' : '';
       var vTxt = vSign + state.vernierTarget.toFixed(1);
@@ -2214,7 +2373,7 @@
         var arrow = state.lastResult.dir === 'UP' ? '↑ UP ' : '↓ DN ';
         var pct = Math.round(state.lastResult.confidence * 100) + '%';
         els.microCta.innerHTML = '<span class="ag-num">' + arrow + pct + '</span><span>⤢</span>';
-        els.scopeMeta.textContent = arrow + pct + ' · ' + Math.round(state.lastFeat.durMs) + 'ms';
+        els.scopeMeta.textContent = (state.lastSynthetic ? 'Demo ' : '') + arrow + pct + ' · ' + Math.round(state.lastFeat.durMs) + 'ms';
       } else {
         els.microCta.innerHTML = '<span>Right Grille Lab</span><span>⤢</span>';
       }
@@ -2247,11 +2406,28 @@
         }
         placeholderEl = null;
       }
-      var expLabel = activeExp ? 'Collapse Acoustic Workbench (Esc)' : 'Expand Acoustic Workbench';
+      // Expanded, the head takes the studio-bar look and the expand button becomes "Close"
+      // (ui/NOTES.md section 0, close rule); collapsed it is the ⤢ icon button.
+      var swap = function (el, from, to) {
+        if (!el) return;
+        el.classList.remove(from);
+        el.classList.add(to);
+      };
+      swap(els.header, activeExp ? 'ui-tile-head' : 'ui-studio-bar', activeExp ? 'ui-studio-bar' : 'ui-tile-head');
+      swap(els.title, activeExp ? 'ui-tile-title' : 'ui-studio-title', activeExp ? 'ui-studio-title' : 'ui-tile-title');
+      swap(els.actions, activeExp ? 'ui-tile-actions' : 'ui-studio-actions', activeExp ? 'ui-studio-actions' : 'ui-tile-actions');
+      if (activeExp) {
+        els.expandBtn.classList.remove('ui-btn--sm', 'ui-btn--icon');
+        els.expandBtn.classList.add('ag-close-btn');
+      } else {
+        els.expandBtn.classList.remove('ag-close-btn');
+        els.expandBtn.classList.add('ui-btn--sm', 'ui-btn--icon');
+      }
       els.expandBtn.setAttribute('aria-expanded', activeExp ? 'true' : 'false');
-      els.expandBtn.setAttribute('aria-label', expLabel);
-      els.expandBtn.title = expLabel;
-      els.expandBtn.textContent = activeExp ? '⤡' : '⤢';
+      els.expandBtn.setAttribute('aria-label', activeExp ? 'Close the workbench' : 'Open the workbench');
+      els.expandBtn.setAttribute('data-tip', activeExp ? 'Back to the grid.' : EXPAND_TIP);
+      els.expandBtn.setAttribute('data-tip-key', activeExp ? 'Esc' : '');
+      els.expandBtn.textContent = activeExp ? 'Close' : '⤢';
       if (manageFocus && !isDestroyed) moveFocusAfterExpand(activeExp);
       if (!isDestroyed) requestRender();
     }
@@ -2738,6 +2914,31 @@
       }
     }
 
+    // --- Diagram labels: HTML spans over the stage canvas (.ag-stage-labels) ---
+    // drawStage computes the geometry and places each label at an anchor; CSS aligns it
+    // (.ag-lbl--l / --c / --r). Writes happen only when a value changes.
+    function placeLabel(el, x, y, text, tip) {
+      if (!el || !el.style) return;
+      var rx = Math.round(x);
+      var ry = Math.round(y);
+      if (el._agX !== rx) { el.style.left = rx + 'px'; el._agX = rx; }
+      if (el._agY !== ry) { el.style.top = ry + 'px'; el._agY = ry; }
+      if (typeof text === 'string' && el._agText !== text) { el.textContent = text; el._agText = text; }
+      if (typeof tip === 'string' && el._agTip !== tip) { el.setAttribute('data-tip', tip); el._agTip = tip; }
+      if (!el._agPlaced) { el.setAttribute('data-placed', ''); el._agPlaced = true; }
+    }
+
+    function setLabelText(el, text) {
+      if (el && el._agText !== text) { el.textContent = text; el._agText = text; }
+    }
+
+    function setLabelsCompact(compact) {
+      var v = compact ? 'true' : 'false';
+      if (els.stageLabels && els.stageLabels.dataset && els.stageLabels.dataset.compact !== v) {
+        els.stageLabels.dataset.compact = v;
+      }
+    }
+
     function drawStage(nowMs) {
       var sz = sizes.stage;
       var ctx = els.stageCanvas.getContext('2d');
@@ -2747,42 +2948,35 @@
       ctx.clearRect(0, 0, sz.w, sz.h);
 
       var w = sz.w, h = sz.h;
-      var compact = w < 260 || h < 130;
+      // Below about 316 x 150 (compact tiles, the phone grid) the 10 px labels no longer fit:
+      // draw the simplified diagram and keep only the scrub readout.
+      var compact = w < 316 || h < 150;
+      setLabelsCompact(compact);
 
       // Layout columns inside unified Mac16,5 stage:
       // [Left 3-MEMS Origin] --- [Cross-Deck Chord] --- [Magnified Right Grille 31-Louver Stack] --- [Vernier Rail]
-      var padX = compact ? 6 : 10;
-      var padY = compact ? 6 : 10;
-      var topBarH = compact ? 0 : 14;
+      var padX = compact ? 6 : 12;
+      var padY = compact ? 6 : 8;
+      var topBarH = compact ? 0 : 24;
       var innerY = padY + topBarH;
       var innerH = Math.max(24, h - innerY - padY);
 
       if (!compact) {
-        // Top display hinge datum & NOTCH · 0 MICS callout
-        ctx.strokeStyle = '#d4d3cd';
+        // Top display hinge datum; the NOTCH · 0 MICS label sits on it and masks it
+        var datumY = padY + 10;
+        ctx.strokeStyle = PAL.line;
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(padX, padY + 6);
-        ctx.lineTo(w - padX, padY + 6);
+        ctx.moveTo(padX, datumY);
+        ctx.lineTo(w - padX, datumY);
         ctx.stroke();
-
         var notchW = Math.min(90, Math.max(74, w * 0.24));
         var notchX = clamp(w * 0.42 - notchW * 0.5, padX + 4, w - padX - notchW - 4);
-        ctx.fillStyle = '#f6f6f4';
-        ctx.fillRect(notchX - 4, padY, notchW + 8, 12);
-        ctx.strokeStyle = '#bcbab3';
-        ctx.setLineDash([2, 2]);
-        ctx.strokeRect(notchX, padY + 1, notchW, 10);
-        ctx.setLineDash([]);
-        ctx.fillStyle = '#62615c';
-        ctx.font = '500 8px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('NOTCH · 0 MICS', notchX + notchW * 0.5, padY + 6.5);
+        placeLabel(els.lblNotch, notchX + notchW * 0.5, datumY);
       }
 
-      var leftZoneW = compact ? w * 0.22 : Math.max(72, w * 0.27);
-      var vernierW = compact ? 0 : Math.min(92, Math.max(54, w * 0.20));
+      var leftZoneW = compact ? w * 0.22 : Math.max(76, w * 0.27);
+      var vernierW = compact ? 0 : Math.min(92, Math.max(64, w * 0.20));
       var rightGrilleW = compact ? w * 0.42 : Math.min(148, Math.max(66, w * 0.28));
       var bridgeW = Math.max(24, w - 2 * padX - leftZoneW - rightGrilleW - vernierW - (compact ? 6 : 14));
 
@@ -2793,29 +2987,31 @@
 
       // --- 1. Left Grille & 3-MEMS Triangle (Upper Third beside esc / ~ / tab) ---
       var lgW = compact ? Math.max(16, leftZoneW * 0.46) : clamp(Math.round(leftZoneW * 0.34), 22, 42);
-      ctx.fillStyle = state.grille === 'left' ? '#e7efe9' : '#eae9e4';
-      ctx.strokeStyle = state.grille === 'left' ? '#047857' : '#cfcec8';
+      ctx.fillStyle = PAL.grille;
+      ctx.strokeStyle = state.grille === 'left' ? PAL.rule : PAL.line;
       ctx.lineWidth = 1;
       roundRect(ctx, leftX, innerY, lgW, innerH, 4);
       ctx.fill();
       ctx.stroke();
 
       // Subtle micro-perforation dot matrix on Left Grille
-      ctx.fillStyle = '#c5c4be';
+      ctx.fillStyle = PAL.perf;
       for (var py = innerY + 5; py < innerY + innerH - 4; py += 5) {
         for (var px = leftX + 4; px < leftX + lgW - 3; px += 5) {
           ctx.fillRect(px, py, 1, 1);
         }
       }
 
-      // Acute 3-MEMS Microphone Triangle in UPPER THIRD (y = 14%..34% from top)
+      // Acute 3-MEMS Microphone Triangle in UPPER THIRD (y = 14%..34% from top).
+      // Rust while the mic is live (the page's "live" colour), ink otherwise; never green.
       var mic1X = leftX + lgW * 0.36, mic1Y = innerY + innerH * 0.17;
       var mic2X = leftX + lgW * 0.72, mic2Y = innerY + innerH * 0.24;
       var mic3X = leftX + lgW * 0.36, mic3Y = innerY + innerH * 0.32;
       var micCx = (mic1X + mic2X + mic3X) / 3;
       var micCy = (mic1Y + mic2Y + mic3Y) / 3;
+      var micColor = state.armed ? PAL.accent : PAL.ink2;
 
-      ctx.strokeStyle = 'rgba(4, 120, 87, 0.35)';
+      ctx.strokeStyle = withAlpha(micColor, 0.35);
       ctx.beginPath();
       ctx.moveTo(mic1X, mic1Y);
       ctx.lineTo(mic2X, mic2Y);
@@ -2824,7 +3020,7 @@
       ctx.stroke();
 
       [[mic1X, mic1Y], [mic2X, mic2Y], [mic3X, mic3Y]].forEach(function (pt) {
-        ctx.fillStyle = '#047857';
+        ctx.fillStyle = micColor;
         ctx.beginPath();
         ctx.arc(pt[0], pt[1], compact ? 2.1 : 2.7, 0, Math.PI * 2);
         ctx.fill();
@@ -2833,51 +3029,39 @@
       // 3 sequential landmark keys (esc, ~, tab) with 0 overlap at any stage height
       var keyX = leftX + lgW + 4;
       var keyW = Math.max(24, Math.min(44, leftZoneW - lgW - 6));
-      var keyH = clamp(Math.floor(innerH * 0.105), 12, 17);
+      var keyH = clamp(Math.floor(innerH * 0.105), 14, 18);
       var keyGap = clamp(Math.floor(innerH * 0.025), 3, 5);
       var yEsc = innerY + 4;
       var yTilde = yEsc + keyH + keyGap;
       var yTab = yTilde + keyH + keyGap;
       if (!compact) {
-        var keys = [
-          { label: 'esc', y: yEsc },
-          { label: '~ `', y: yTilde },
-          { label: 'tab', y: yTab }
-        ];
-        ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        keys.forEach(function (k) {
-          ctx.fillStyle = '#ffffff';
-          ctx.strokeStyle = '#d8d7d1';
-          roundRect(ctx, keyX, k.y, keyW, keyH, 2.5);
+        var keyYs = [yEsc, yTilde, yTab];
+        ctx.fillStyle = PAL.surface;
+        ctx.strokeStyle = PAL.line;
+        for (var ki = 0; ki < 3; ki++) {
+          roundRect(ctx, keyX, keyYs[ki], keyW, keyH, 2.5);
           ctx.fill();
           ctx.stroke();
-          ctx.fillStyle = '#62615c';
-          ctx.fillText(k.label, keyX + 4, k.y + keyH * 0.52);
-        });
+          if (els.lblKeys && els.lblKeys[ki]) placeLabel(els.lblKeys[ki], keyX + 4, keyYs[ki] + keyH * 0.5);
+        }
       }
 
       // --- 2. Magnified Right Grille = 31-Blade Kinetic Louver Sensor ---
-      ctx.fillStyle = '#ecebe7';
-      ctx.strokeStyle = state.grille === 'right' ? '#aba9a2' : '#d5d4ce';
+      ctx.fillStyle = PAL.grille;
+      ctx.strokeStyle = state.grille === 'right' ? PAL.rule : PAL.line;
       ctx.lineWidth = 1;
       roundRect(ctx, rightX, innerY, rightGrilleW, innerH, 5);
       ctx.fill();
       ctx.stroke();
 
       var bladeCount = compact ? 15 : LOUVER_N;
-      var bladePadY = compact ? 5 : 13;
+      var bladePadY = compact ? 5 : 18;
       var bladeSpanH = Math.max(16, innerH - 2 * bladePadY);
       var bladeW = rightGrilleW - 10;
 
       if (!compact) {
-        ctx.font = '600 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#62615c';
-        ctx.fillText('RIGHT · 0 MICS', rightX + rightGrilleW * 0.5, innerY + 7);
-        ctx.fillText('PALM PLATE', rightX + rightGrilleW * 0.5, innerY + innerH - 5.5);
+        placeLabel(els.lblRight, rightX + rightGrilleW * 0.5, innerY + 9, rightGrilleW >= 104 ? 'Right · 0 mics' : '0 mics');
+        placeLabel(els.lblPalm, rightX + rightGrilleW * 0.5, innerY + innerH - 9);
       }
 
       // Render coupled spring-damper louvers inside Right Grille
@@ -2888,12 +3072,10 @@
         var mag = Math.min(1, Math.abs(ang) * 1.4);
 
         if (mag > 0.08) {
-          ctx.strokeStyle = ang >= 0
-            ? 'rgba(0, 82, 204, ' + (0.28 + 0.68 * mag).toFixed(2) + ')'
-            : 'rgba(201, 55, 0, ' + (0.28 + 0.68 * mag).toFixed(2) + ')';
+          ctx.strokeStyle = withAlpha(ang >= 0 ? PAL.up : PAL.down, (0.28 + 0.68 * mag).toFixed(2));
           ctx.lineWidth = compact ? 2.0 : 2.3;
         } else {
-          ctx.strokeStyle = '#c2c1bb';
+          ctx.strokeStyle = PAL.blade;
           ctx.lineWidth = 1.2;
         }
         ctx.beginPath();
@@ -2905,7 +3087,7 @@
       // Right Tweeter R+1.0 marker (upper-mid station u = 0.68 from bottom -> y = 0.32 from top)
       var twY = innerY + bladePadY + 0.32 * bladeSpanH;
       var sonarVis = state.mode === 'sonar' && state.grille === 'right';
-      ctx.fillStyle = sonarVis ? '#0052cc' : '#8d8c86';
+      ctx.fillStyle = sonarVis ? PAL.up : PAL.ink3;
       ctx.beginPath();
       ctx.arc(rightX + rightGrilleW - 4, twY, 2.5, 0, Math.PI * 2);
       ctx.fill();
@@ -2919,7 +3101,7 @@
         for (var arc = 0; arc < 3; arc++) {
           var rad = 10 + ((phaseAnim + arc / 3) % 1) * bridgeW * 0.92;
           var alphaArc = (1 - rad / (bridgeW + 12)) * (state.armed && state.sonarCoupled ? 0.36 : 0.18);
-          ctx.strokeStyle = 'rgba(0, 82, 204, ' + Math.max(0.03, alphaArc).toFixed(2) + ')';
+          ctx.strokeStyle = withAlpha(PAL.up, Math.max(0.03, alphaArc).toFixed(2));
           ctx.lineWidth = 1;
           ctx.beginPath();
           ctx.arc(rightX, twY, rad, Math.PI * 0.72, Math.PI * 1.28);
@@ -2927,7 +3109,7 @@
         }
       }
 
-      ctx.strokeStyle = '#9e9d97';
+      ctx.strokeStyle = PAL.rule;
       ctx.lineWidth = 1;
       ctx.setLineDash([3, 3]);
       ctx.beginPath();
@@ -2936,55 +3118,18 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Clean key-column callout below `tab` (never crosses Left Grille border or chord line)
       if (!compact) {
-        var memsLabelY = yTab + keyH + Math.max(9, Math.min(13, innerH * 0.065));
-        var colBoxW = Math.min(48, Math.max(34, leftZoneW - lgW - 4));
-        ctx.fillStyle = '#f6f6f4';
-        ctx.fillRect(keyX - 1, memsLabelY - 6, colBoxW, 21);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#047857';
-        ctx.font = '600 8px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.fillText('3× MEMS', keyX, memsLabelY);
-        ctx.fillStyle = '#62615c';
-        ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-        ctx.fillText('LEFT · 1ch', keyX, memsLabelY + 10);
-
-        var midBridgeX = bridgeX + bridgeW * 0.5;
+        // MEMS callout below `tab`; the chord readout rides the dashed path (labels mask the line)
+        placeLabel(els.lblMems, keyX, yTab + keyH + Math.max(16, Math.min(20, innerH * 0.08)));
         var midBridgeY = clamp((micCy + targetY) * 0.5, innerY + 14, innerY + innerH - 14);
-        var pillW = Math.min(46, Math.max(22, bridgeW - 2));
-        ctx.fillStyle = '#f6f6f4';
-        ctx.fillRect(midBridgeX - pillW * 0.5, midBridgeY - 10.5, pillW, 21);
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        if (bridgeW >= 42) {
-          ctx.fillStyle = '#141413';
-          ctx.font = '600 8.5px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText(pathCm.toFixed(1) + 'cm', midBridgeX, midBridgeY - 4);
-          ctx.fillStyle = '#62615c';
-          ctx.font = '500 7.5px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText('Δ4.5%', midBridgeX, midBridgeY + 5.5);
-        } else if (bridgeW >= 30) {
-          ctx.fillStyle = '#141413';
-          ctx.font = '600 7px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText(pathCm.toFixed(1) + 'cm', midBridgeX, midBridgeY - 3.5);
-          ctx.fillStyle = '#62615c';
-          ctx.font = '500 6.8px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText('Δ4.5%', midBridgeX, midBridgeY + 5);
-        } else {
-          ctx.fillStyle = '#141413';
-          ctx.font = '600 6.8px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText(Math.round(pathCm) + 'cm', midBridgeX, midBridgeY - 3.5);
-          ctx.fillStyle = '#62615c';
-          ctx.font = '500 6.5px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText('4.5%', midBridgeX, midBridgeY + 5);
-        }
+        placeLabel(els.lblChord, bridgeX + bridgeW * 0.5, midBridgeY);
+        setLabelText(els.lblChordCm, pathCm.toFixed(1) + 'cm');
       }
 
       // --- 4. Vertical Vernier Detent Carriage (-10..+10) & Direction Lock Badge ---
+      var res = state.lastResult;
       if (!compact && vernierW >= 54) {
-        ctx.strokeStyle = '#d4d3cd';
+        ctx.strokeStyle = PAL.line;
         ctx.lineWidth = 1;
         var railX = vernierX + 8;
         var railTop = innerY + 12;
@@ -3005,10 +3150,7 @@
         }
 
         var carY = railTop + ((10 - clamp(state.vernierPos, -10, 10)) / 20) * railH;
-        var res = state.lastResult;
-        var accent = !res ? '#141413' : (res.dir === 'UP' ? '#0052cc' : '#c93700');
-
-        ctx.fillStyle = accent;
+        ctx.fillStyle = !res ? PAL.ink : (res.dir === 'UP' ? PAL.up : PAL.down);
         ctx.beginPath();
         ctx.moveTo(railX + 5, carY);
         ctx.lineTo(railX + 11, carY - 4);
@@ -3016,41 +3158,47 @@
         ctx.closePath();
         ctx.fill();
 
-        var cardX = railX + 14;
-        var cardW = Math.max(38, vernierW - 22);
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillStyle = '#141413';
-        ctx.font = '700 12px ui-monospace, "SF Mono", Menlo, monospace';
-        var vPre = state.vernierTarget >= 0 ? '+' : '';
-        ctx.fillText(vPre + state.vernierTarget.toFixed(1), cardX, innerY + 16);
+        var colR = w - padX;
+        placeLabel(els.vernierMini, colR, innerY + 9);
 
+        var resTxt, resTip;
         if (res) {
-          ctx.fillStyle = '#ffffff';
-          roundRect(ctx, cardX - 2, innerY + 28, cardW, 20, 3.5);
-          ctx.fill();
-          ctx.fillStyle = res.dir === 'UP' ? 'rgba(0, 82, 204, 0.07)' : 'rgba(201, 55, 0, 0.06)';
-          ctx.strokeStyle = res.dir === 'UP' ? 'rgba(0, 82, 204, 0.38)' : 'rgba(201, 55, 0, 0.38)';
-          ctx.lineWidth = 1;
-          roundRect(ctx, cardX - 2, innerY + 28, cardW, 20, 3.5);
-          ctx.fill();
-          ctx.stroke();
-          ctx.fillStyle = accent;
-          ctx.font = '700 9px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText((res.dir === 'UP' ? '↑ ' : '↓ ') + Math.round(res.confidence * 100) + '%', cardX + 2, innerY + 38.5);
+          resTxt = (res.dir === 'UP' ? '↑ ' : '↓ ') + Math.round(res.confidence * 100) + '%';
+          resTip = (state.lastSynthetic ? 'Simulated Demo swipe' : 'Last swipe') + ': detected direction and the classifier\'s confidence.';
+        } else if (state.armed) {
+          resTxt = 'Swipe';
+          resTip = 'Listening: swipe a finger up or down along the ' + state.grille + ' speaker grille.';
         } else {
-          ctx.fillStyle = '#62615c';
-          ctx.font = '500 8px ui-monospace, "SF Mono", Menlo, monospace';
-          ctx.fillText(state.armed ? 'SWIPE' : 'SCRUB', cardX, innerY + 37);
+          resTxt = 'Scrub';
+          resTip = 'Drag up or down on the diagram, or scroll, to move the scrubber.';
+        }
+        placeLabel(els.lblResult, colR, innerY + 31, resTxt, resTip);
+        if (els.lblResult && els.lblResult.dataset) {
+          var dirAttr = res ? res.dir : '';
+          if (els.lblResult.dataset.dir !== dirAttr) els.lblResult.dataset.dir = dirAttr;
+        }
+        if (els.lblDemo) {
+          var showDemo = !!(res && state.lastSynthetic);
+          if (els.lblDemo.hidden === showDemo) els.lblDemo.hidden = !showDemo;
+          placeLabel(els.lblDemo, colR, innerY + 50);
         }
 
-        // Bottom empirical d' / prior status tag
-        ctx.fillStyle = state.ldaModel ? '#047857' : '#62615c';
-        ctx.font = '600 8px ui-monospace, "SF Mono", Menlo, monospace';
-        var tagTxt = state.ldaModel
-          ? ("d' " + state.ldaModel.dPrimeOof.toFixed(1))
-          : (sonarVis ? '19kHz' : 'PRIOR');
-        ctx.fillText(tagTxt, cardX, innerY + innerH - 7);
+        // Bottom tag: calibrated d' or which built-in weights the classifier uses
+        var tagTxt, tagTip;
+        if (state.ldaModel) {
+          tagTxt = 'd′ ' + state.ldaModel.dPrimeOof.toFixed(1);
+          tagTip = 'Calibrated: d′ says how well up and down practice swipes separate; higher is better.';
+        } else if (isSonarEffective()) { // armed but uncoupled falls back to passive weights
+          tagTxt = '19 kHz';
+          tagTip = 'No calibration yet: the classifier uses its built-in 19 kHz sonar weights.';
+        } else {
+          tagTxt = 'Prior';
+          tagTip = 'No calibration yet: the classifier uses its built-in passive weights.';
+        }
+        placeLabel(els.lblTag, colR, innerY + innerH - 9, tagTxt, tagTip);
+      } else if (compact) {
+        // Simplified diagram: the scrub readout moves to the top of the bridge.
+        placeLabel(els.vernierMini, bridgeX + bridgeW * 0.5, padY + 8);
       }
     }
 
@@ -3067,7 +3215,7 @@
         var midH = Math.floor(sSz.h * 0.48);
 
         // Divider & baseline axes
-        sCtx.strokeStyle = '#deddd7';
+        sCtx.strokeStyle = PAL.hairline;
         sCtx.lineWidth = 1;
         sCtx.beginPath();
         sCtx.moveTo(0, midH);
@@ -3084,7 +3232,7 @@
             if (fc[i] > maxF) maxF = fc[i];
           }
           var spanF = Math.max(6, maxF - minF);
-          sCtx.strokeStyle = '#141413';
+          sCtx.strokeStyle = PAL.ink;
           sCtx.lineWidth = 1.6;
           sCtx.beginPath();
           for (var j = 0; j < 64; j++) {
@@ -3099,7 +3247,7 @@
           var dc = state.lastFeat.dopCurve64;
           var botZero = midH + (sSz.h - midH) * 0.5;
           var botAmp = (sSz.h - midH) * 0.42;
-          sCtx.strokeStyle = state.lastResult && state.lastResult.dir === 'UP' ? '#0052cc' : '#c93700';
+          sCtx.strokeStyle = state.lastResult && state.lastResult.dir === 'UP' ? PAL.up : PAL.down;
           sCtx.lineWidth = 1.6;
           sCtx.beginPath();
           for (var m = 0; m < 64; m++) {
@@ -3112,7 +3260,7 @@
 
           if (state.lastFeat.dipDb > 0.8) {
             var dipX = 4 + state.lastFeat.tauDip * (sSz.w - 8);
-            sCtx.strokeStyle = 'rgba(201, 55, 0, 0.65)';
+            sCtx.strokeStyle = withAlpha(PAL.down, 0.65);
             sCtx.setLineDash([2, 2]);
             sCtx.beginPath();
             sCtx.moveTo(dipX, midH + 2);
@@ -3121,9 +3269,11 @@
             sCtx.setLineDash([]);
           }
         } else {
-          sCtx.fillStyle = '#62615c';
-          sCtx.font = '500 9px ui-monospace, "SF Mono", Menlo, monospace';
-          sCtx.fillText('Swipe grille or click Demo ↑↓ to freeze stroke profile', 6, midH * 0.55);
+          sCtx.fillStyle = PAL.ink3;
+          sCtx.font = '400 10px ui-monospace, "SF Mono", Menlo, monospace';
+          sCtx.textAlign = 'left';
+          sCtx.textBaseline = 'middle';
+          sCtx.fillText('No swipe yet: swipe the grille or press Demo ↑ ↓.', 6, midH * 0.5);
         }
       }
 
@@ -3136,7 +3286,7 @@
         wCtx.clearRect(0, 0, wSz.w, wSz.h);
 
         // Shaded +-15 Hz clutter notch band around center
-        wCtx.fillStyle = '#ecebe6';
+        wCtx.fillStyle = PAL.hairline;
         wCtx.fillRect(0, wSz.h * 0.42, wSz.w, wSz.h * 0.16);
 
         var cols = state.waterfallCols;
@@ -3153,8 +3303,8 @@
             if (norm < 0.06) continue;
             var cy = (32 - b2) * binH; // top = +100 Hz blueshift, bottom = -100 Hz redshift
             wCtx.fillStyle = b2 >= 16
-              ? 'rgba(0, 82, 204, ' + (0.15 + 0.8 * norm).toFixed(2) + ')'
-              : 'rgba(201, 55, 0, ' + (0.15 + 0.8 * norm).toFixed(2) + ')';
+              ? withAlpha(PAL.up, (0.15 + 0.8 * norm).toFixed(2))
+              : withAlpha(PAL.down, (0.15 + 0.8 * norm).toFixed(2));
             wCtx.fillRect(cx, cy, Math.ceil(colW), Math.ceil(binH));
           }
         }
@@ -3168,12 +3318,12 @@
         lCtx.setTransform(dprL, 0, 0, dprL, 0, 0);
         lCtx.clearRect(0, 0, lSz.w, lSz.h);
 
-        var labelW = 74;
+        var labelW = 88;
         var plotW = Math.max(20, lSz.w - labelW - 8);
         var zeroX = labelW + plotW * 0.5;
         var rowH = lSz.h / 6;
 
-        lCtx.strokeStyle = '#cfcec8';
+        lCtx.strokeStyle = PAL.line;
         lCtx.lineWidth = 1;
         lCtx.beginPath();
         lCtx.moveTo(zeroX, 2);
@@ -3181,19 +3331,19 @@
         lCtx.stroke();
 
         var contribs = state.lastResult ? state.lastResult.contribs : null;
-        lCtx.font = '500 8.5px ui-monospace, "SF Mono", Menlo, monospace';
+        lCtx.font = '400 10px ui-monospace, "SF Mono", Menlo, monospace';
         lCtx.textBaseline = 'middle';
 
         for (var f = 0; f < 6; f++) {
           var ry = (f + 0.5) * rowH;
-          lCtx.fillStyle = '#52514d';
+          lCtx.fillStyle = PAL.ink2;
           lCtx.textAlign = 'left';
           lCtx.fillText(FEATURE_NAMES[f], 2, ry);
 
           var val = contribs ? clamp(contribs[f] / 1.6, -1, 1) : 0;
           var barLen = Math.abs(val) * (plotW * 0.46);
           if (barLen >= 1) {
-            lCtx.fillStyle = val >= 0 ? '#0052cc' : '#c93700';
+            lCtx.fillStyle = val >= 0 ? PAL.up : PAL.down;
             lCtx.fillRect(val >= 0 ? zeroX : zeroX - barLen, ry - Math.max(2.5, rowH * 0.30), barLen, Math.max(5, rowH * 0.60));
           }
         }

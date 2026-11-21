@@ -1,298 +1,135 @@
 /* ==========================================================================
-   Cell 06 — 16" MacBook Pro (Mac16,5) Acoustic Grille Swipe & 19 kHz Sonar Lab
-   Swiss-Braun token palette scoped strictly to .cell-acoustic so sibling cells
-   and the host #fafafa / #ffffff / #e5e5e5 bento grid stay untouched.
+   Cell 06 — Right Grille (cells/grille-swipe). The shared ui- classes draw the
+   tile, header, footer, buttons, segments, pill and slider (ui/base.css). This
+   file keeps only the hero (stage, diagram labels, toast), the in-place
+   workbench layout and the hero palette. Everything is scoped to .cell-acoustic
+   (or ag- classes) so nothing leaks into sibling cells.
    ========================================================================== */
 
 .cell-acoustic {
-  --ag-surface: #ffffff;
-  --ag-border: #e5e5e5;
-  --ag-well: #f6f6f4;
-  --ag-well-border: #e6e5e1;
-  --ag-deck: #ecebe7;
-  --ag-control: #f1f0ec;
-  --ag-thumb: #ffffff;
-  --ag-rule: #d5d4ce;
-  --ag-ink: #141413;
-  --ag-ink-sec: #52514d;
-  --ag-ink-muted: #62615c;
-  --ag-up: #0052cc;
-  --ag-up-soft: rgba(0, 82, 204, 0.11);
-  --ag-down: #c93700;
-  --ag-down-soft: rgba(201, 55, 0, 0.11);
-  --ag-ok: #047857;
-  --ag-ok-soft: rgba(4, 120, 87, 0.11);
-  --ag-warn: #9a4700;
-  --ag-warn-bg: #fff8eb;
-  --ag-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
-  --ag-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-
-  position: relative;
-  overflow: hidden;
-  padding: 0;
-  container-type: inline-size;
-  container-name: cell;
-  font-family: var(--ag-sans);
-  color: var(--ag-ink);
-  -webkit-font-smoothing: antialiased;
+  /* Hero palette. The canvas reads these through readPalette() in grille-swipe.js. */
+  --ag-up: #0052cc;          /* up swipe / positive Doppler; 6.0:1 on --ag-up-tint */
+  --ag-up-tint: #ebf1fb;
+  --ag-down: #c93700;        /* down swipe / negative Doppler; 4.6:1 on --ag-down-tint */
+  --ag-down-tint: #fcefe9;
+  --ag-grille: #ecebe7;      /* speaker grille plates */
+  --ag-blade: #c2c1bb;       /* resting louver blade */
+  --ag-perf: #c5c4be;        /* left grille perforation dots */
+  --ag-rule: #9e9d97;        /* mic-to-finger dashed chord */
 }
 
-/* Zero-reflow Workbench Overlay Expansion:
-   Keeps a 1x1 .ag-grid-placeholder in the grid so sibling cells never shift
-   regardless of column (1, 2, or 3), while elevating the Workbench cleanly. */
-.cell-acoustic.is-expanded {
-  position: fixed;
-  inset: clamp(12px, 4vw, 44px);
-  max-width: 1120px;
-  max-height: 760px;
-  margin: auto;
-  aspect-ratio: auto;
-  z-index: 60;
-  border-color: #c9c8c2;
-  box-shadow: 0 20px 56px rgba(20, 20, 19, 0.18), 0 0 0 100vmax rgba(20, 20, 19, 0.28);
-}
-
-.ag-grid-placeholder {
-  background: #f5f5f3;
-  border-style: dashed;
-}
-
-.cell-acoustic *,
-.cell-acoustic *::before,
-.cell-acoustic *::after {
-  box-sizing: border-box;
-}
-
-.ag-shell {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  grid-template-rows: 20px minmax(0, 1fr) 24px;
-  row-gap: 4px;
-  padding: 6px 8px;
-  min-width: 0;
-  min-height: 0;
-  user-select: none;
-  -webkit-user-select: none;
-}
-
-.ag-shell > * {
-  min-width: 0;
-  min-height: 0;
-}
-
-/* Numeric tabular discipline everywhere */
-.ag-num {
-  font-family: var(--ag-mono);
-  font-variant-numeric: tabular-nums lining-nums;
-}
-
-/* Header bar */
-.ag-header {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.ag-led {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #b5b4ae;
-  transition: background-color 140ms ease, box-shadow 140ms ease;
-}
-
-.ag-led[data-state="live"] {
-  background: var(--ag-ok);
-  box-shadow: 0 0 0 2px var(--ag-ok-soft);
-}
-
-.ag-led[data-state="sonar"] {
-  background: var(--ag-up);
-  box-shadow: 0 0 0 2px var(--ag-up-soft);
-}
-
-.ag-led[data-state="warn"] {
-  background: var(--ag-warn);
-  box-shadow: 0 0 0 2px rgba(154, 71, 0, 0.16);
-}
+/* ---------- Header ---------- */
 
 .ag-title {
-  font-family: var(--ag-mono);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: var(--ag-ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
+  flex-shrink: 0;            /* the mic select shrinks first */
 }
 
-.ag-title-long {
+@container ui-tile (max-width: 239px) {
+  .ag-title {
+    flex-shrink: 1;
+  }
+}
+
+.ag-title-wb {
   display: none;
 }
 
-.ag-spacer {
-  flex: 1 1 auto;
-  min-width: 2px;
+.cell-acoustic .ag-actions {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-/* Interactive buttons & pills (WCAG >= 24x24px hit area) */
-.ag-btn,
-.ag-seg-btn,
-.ag-icon-btn,
-.ag-mic-select {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid var(--ag-rule);
-  background: var(--ag-thumb);
-  color: var(--ag-ink);
-  font-family: var(--ag-mono);
-  font-size: 9.5px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums lining-nums;
-  line-height: 1;
-  border-radius: 5px;
-  cursor: pointer;
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  white-space: nowrap;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease;
-}
-
-.ag-btn:hover,
-.ag-seg-btn:hover,
-.ag-icon-btn:hover,
-.ag-mic-select:hover {
-  border-color: #aba9a2;
-  background: #fafaf8;
-}
-
-.ag-btn:active,
-.ag-seg-btn:active,
-.ag-icon-btn:active {
-  transform: translateY(0.5px);
-}
-
-.ag-btn:focus-visible,
-.ag-seg-btn:focus-visible,
-.ag-icon-btn:focus-visible,
-.ag-mic-select:focus-visible,
-.ag-stage-well:focus-visible {
-  outline: 2px solid var(--ag-up);
-  outline-offset: 1px;
-}
-
-/* Non-overlapping WCAG 24x24px hit-area slop only where visual box < 24px */
-.ag-icon-btn::after {
-  content: "";
-  position: absolute;
-  inset: -2px 0 -2px -4px;
-}
-
-.ag-demo-pair .ag-btn::after,
-.ag-toast-close::after {
-  content: "";
-  position: absolute;
-  inset: -2px -1px;
-}
-
-.ag-icon-btn {
-  flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  font-size: 11px;
-  color: var(--ag-ink-sec);
+/* Status pill: reserve the widest label (Listening, Self-test, Uncoupled) so a state change
+   never moves the pill's left edge. At tiny size base.css collapses it to the dot. */
+@container ui-tile (min-width: 240px) {
+  .ag-led .ui-pill-label {
+    min-width: calc(9ch + 4px);
+  }
 }
 
 .ag-mic-wrap {
-  display: none;
-  align-items: center;
-  min-width: 0;
-  max-width: 118px;
-  position: relative;
+  display: inline-flex;
+  flex: 0 1 150px;
+  min-width: 72px;
 }
 
 .ag-mic-select {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
-  height: 22px;
-  padding: 0 16px 0 6px;
-  font-size: 9.5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background-image: linear-gradient(45deg, transparent 50%, var(--ag-ink-sec) 50%),
-    linear-gradient(135deg, var(--ag-ink-sec) 50%, transparent 50%);
-  background-position: calc(100% - 9px) 9px, calc(100% - 5px) 9px;
+  height: var(--ui-ctl-h-sm);
+  padding: 0 20px 0 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background-color: var(--ui-surface);
+  background-image: linear-gradient(45deg, transparent 50%, var(--ui-ink-2) 50%),
+    linear-gradient(135deg, var(--ui-ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 11px) 50%, calc(100% - 7px) 50%;
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
+  color: var(--ui-ink);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
+}
+
+.ag-mic-select:hover {
+  border-color: var(--ui-ink-3);
+}
+
+.ag-mic-select:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .ag-mic-wrap[data-warn="true"] .ag-mic-select {
-  background-color: var(--ag-warn-bg);
-  border-color: rgba(154, 71, 0, 0.45);
-  color: var(--ag-warn);
+  border-color: var(--ui-accent);
+  background-color: var(--ui-accent-tint);
+  color: var(--ui-accent);
 }
 
-.ag-demo-pair {
-  display: none;
-  align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
+/* ---------- Hero: the deck diagram, full bleed in a sunken well ---------- */
+
+.cell-acoustic:not(.is-expanded) .ag-workbench {
+  padding: 0;                          /* stays full bleed at the compact step too */
 }
 
-.ag-demo-pair .ag-btn {
-  height: 22px;
-  padding: 0 6px;
-  font-size: 9px;
-  color: var(--ag-ink-sec);
-}
-
-/* Primary stage well (1x1 and left column of 2x2) */
-.ag-workbench {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-  min-width: 0;
-  min-height: 0;
-  gap: 8px;
-}
-
-.ag-primary-col {
+.ag-workbench > .ag-primary-col {
+  flex: 1 1 auto;
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  gap: 8px;
 }
 
 .ag-stage-well {
   position: relative;
-  background: var(--ag-well);
-  border: 1px solid var(--ag-well-border);
-  border-radius: 6px;
-  box-shadow: inset 0 1px 1.5px rgba(20, 20, 19, 0.03);
-  overflow: hidden;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  background: var(--ui-well);
   cursor: ns-resize;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ag-stage-well:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: -2px;
 }
 
 .ag-canvas-wrap {
   position: relative;
-  width: 100%;
-  height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.ag-stage-wrap {
+  position: absolute;
+  inset: 0;
 }
 
 .ag-canvas-wrap canvas {
@@ -303,27 +140,143 @@
   display: block;
 }
 
-/* Status banner floating subtly at bottom of stage only when needed */
+/* Diagram labels: HTML over the canvas so they take tooltips. drawStage sets left/top. */
+.ag-stage-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.ag-lbl {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(0, -50%);
+  padding: 1px 3px;
+  border-radius: 3px;
+  background: var(--ui-well);          /* masks the datum and dashed chord under the text */
+  color: var(--ui-ink-3);
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ui-caps-track);
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: auto;                /* hover tips; drag and wheel still bubble to the stage */
+  cursor: inherit;
+}
+
+.ag-lbl:not([data-placed]),
+.ag-lbl[hidden] {
+  display: none;
+}
+
+.ag-lbl--c { transform: translate(-50%, -50%); }
+.ag-lbl--r { transform: translate(-100%, -50%); }
+
+.ag-lbl-strong {
+  color: var(--ui-ink);
+  font-weight: 600;
+}
+
+.ag-lbl-notch {
+  border: 1px dashed var(--ui-line);
+}
+
+.ag-lbl-key {
+  padding: 0;
+  background: transparent;
+  color: var(--ui-ink-2);
+  letter-spacing: 0;
+  text-transform: none;
+  pointer-events: none;
+}
+
+.ag-lbl-right,
+.ag-lbl-palm {
+  background: var(--ag-grille);
+}
+
+.ag-lbl-mems,
+.ag-lbl-chord {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ag-lbl-chord {
+  align-items: center;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ag-lbl-value {
+  padding: 0;
+  color: var(--ui-ink);
+  font: 600 var(--ui-fs-3) / 1.2 var(--ui-mono);
+  letter-spacing: 0;
+}
+
+.ag-lbl-tag {
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ui-ink-2);
+}
+
+.ag-lbl-result[data-dir="UP"],
+.ag-lbl-result[data-dir="DOWN"] {
+  padding: 2px 5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.ag-lbl-result[data-dir="UP"] {
+  color: var(--ag-up);
+  background: var(--ag-up-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ag-up) 35%, transparent);
+}
+
+.ag-lbl-result[data-dir="DOWN"] {
+  color: var(--ag-down);
+  background: var(--ag-down-tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ag-down) 35%, transparent);
+}
+
+.ag-lbl-demo {
+  color: var(--ui-ink-2);
+  box-shadow: inset 0 0 0 1px var(--ui-line);
+}
+
+/* Simplified diagram (stage under ~316 x 150): only the scrub readout stays. */
+.ag-stage-labels[data-compact="true"] .ag-lbl:not(.ag-vernier-mini) {
+  display: none;
+}
+
+.ag-stage-labels[data-compact="true"] .ag-vernier-mini {
+  transform: translate(-50%, -50%);
+  padding: 1px 3px;
+  background: var(--ui-well);
+  font-size: var(--ui-fs-1);
+  font-weight: 500;
+}
+
+/* Stage toast (arm errors, vetoes, calibration prompts) */
 .ag-toast {
   position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: 6px;
-  padding: 4px 7px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid var(--ag-rule);
-  font-family: var(--ag-mono);
-  font-size: 9.5px;
-  line-height: 1.3;
-  color: var(--ag-ink);
+  left: var(--ui-2);
+  right: var(--ui-2);
+  bottom: var(--ui-2);
+  z-index: 3;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  pointer-events: auto;
-  z-index: 3;
-  box-shadow: 0 2px 6px rgba(20, 20, 19, 0.06);
+  gap: var(--ui-2);
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-pop);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-2) / 1.35 var(--ui-sans);
+  cursor: default;
 }
 
 .ag-toast[hidden] {
@@ -331,343 +284,59 @@
 }
 
 .ag-toast[data-tone="warn"] {
-  background: var(--ag-warn-bg);
-  border-color: rgba(154, 71, 0, 0.42);
-  color: var(--ag-warn);
+  border-color: color-mix(in srgb, var(--ui-accent) 40%, transparent);
+  background: var(--ui-accent-tint);
+  color: var(--ui-accent);
 }
 
 .ag-toast-text {
+  flex: 1 1 auto;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-/* Footer controls */
-.ag-footer {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-/* Tier 0 (<280px) compact action pill */
-.ag-micro-cta {
-  width: 100%;
-  height: 24px;
-  padding: 0 8px;
-  justify-content: space-between;
-  font-size: 9.5px;
-  min-width: 0;
-}
-
-.ag-micro-cta > span:first-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ag-micro-cta > span:last-child {
+.ag-toast-close {
   flex: 0 0 auto;
+}
+
+/* ---------- Footer: Arm, sensing mode, demo swipes ---------- */
+
+.ag-micro-cta {                       /* superseded by the header ⤢ at every size */
+  display: none;
 }
 
 .ag-controls-bar {
-  display: none;
-  width: 100%;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-}
-
-.ag-arm-btn {
-  height: 26px;
-  padding: 0 8px;
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-
-.ag-arm-btn[data-armed="true"] {
-  background: var(--ag-ink);
-  border-color: var(--ag-ink);
-  color: #ffffff;
-}
-
-.ag-seg {
-  display: inline-flex;
-  align-items: center;
-  background: var(--ag-control);
-  border: 1px solid var(--ag-well-border);
-  border-radius: 5px;
-  padding: 1px;
-  height: 26px;
-  flex: 0 0 auto;
-}
-
-.ag-seg-btn {
-  border: 1px solid transparent;
-  background: transparent;
-  height: 22px;
-  padding: 0 6px;
-  border-radius: 3.5px;
-  color: var(--ag-ink-sec);
-  font-size: 9px;
-}
-
-.ag-seg-btn:hover {
-  background: rgba(255, 255, 255, 0.55);
-  border-color: transparent;
-}
-
-.ag-seg-btn[aria-pressed="true"] {
-  background: var(--ag-thumb);
-  border-color: var(--ag-rule);
-  color: var(--ag-ink);
-  font-weight: 600;
-  box-shadow: 0 1px 1px rgba(20, 20, 19, 0.04);
-}
-
-.ag-seg-grille {
-  display: none;
-}
-
-.ag-cal-btn {
-  height: 26px;
-  padding: 0 7px;
-  margin-left: auto;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ag-cal-btn[data-active="true"] {
-  border-color: var(--ag-up);
-  background: var(--ag-up-soft);
-  color: var(--ag-up);
-  font-weight: 600;
-}
-
-.ag-cal-btn[data-calibrated="true"] {
-  border-color: rgba(4, 120, 87, 0.45);
-  background: var(--ag-ok-soft);
-  color: var(--ag-ok);
-}
-
-/* Lab-only panels hidden unless .is-expanded Workbench is active */
-.ag-lab-col,
-.ag-cal-studio,
-.ag-lab-strip {
-  display: none;
-}
-
-.ag-vernier-mini {
-  font-family: var(--ag-mono);
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--ag-ink-sec);
-  flex: 0 0 auto;
-}
-
-/* ==========================================================================
-   Tier 1: @container cell (width >= 280px)
-   Covers 616..767px 2-col 1x1, 320..414px mobile expanded, 926..1254px 3-col
-   ========================================================================== */
-@container cell (width >= 280px) {
-  .ag-shell {
-    padding: 8px 10px;
-    grid-template-rows: 24px minmax(0, 1fr) 26px;
-    row-gap: 6px;
-  }
-
-  .ag-icon-btn {
-    width: 22px;
-    height: 22px;
-  }
-
-  .ag-icon-btn::after {
-    inset: -1px 0 -1px -2px;
-  }
-
-  .ag-mic-wrap {
-    display: inline-flex;
-    max-width: 108px;
-  }
-
-  .ag-vernier-mini {
-    display: none;
-  }
-
-  .ag-micro-cta {
-    display: none;
-  }
-
-  .ag-controls-bar {
-    display: flex;
-  }
-}
-
-/* ==========================================================================
-   Tier 2: @container cell (width >= 380px)
-   Covers 1280px (388x290), 1440px (437x327) — keeps .ag-seg-grille deferred
-   until >= 445px so .ag-cal-btn always retains >= 75px breathing room.
-   ========================================================================== */
-@container cell (width >= 380px) {
-  .ag-shell {
-    padding: 10px 12px;
-    grid-template-rows: 26px minmax(0, 1fr) 28px;
-    row-gap: 7px;
-  }
-
-  .ag-title {
-    font-size: 10px;
-  }
-
-  .ag-mic-wrap {
-    max-width: 146px;
-  }
-
-  .ag-mic-select {
-    height: 24px;
-    font-size: 10px;
-  }
-
-  .ag-icon-btn {
-    width: 24px;
-    height: 24px;
-  }
-
-  .ag-icon-btn::after {
-    content: none;
-  }
-
-  .ag-arm-btn,
-  .ag-seg,
-  .ag-cal-btn {
-    height: 28px;
-  }
-
-  .ag-seg-btn {
-    height: 24px;
-    padding: 0 7px;
-    font-size: 9.5px;
-  }
-}
-
-/* ==========================================================================
-   Tier 2b: @container cell (width >= 445px)
-   Covers 1512px 14" MBP (459x344) and wider 1x1 tiles
-   ========================================================================== */
-@container cell (width >= 445px) {
-  .ag-seg-grille {
-    display: inline-flex;
-  }
-}
-
-/* ==========================================================================
-   Tier 3: @container cell (width >= 500px)
-   Covers 1728px 16" MBP 1x1 (525x393) and wide expanded tiles
-   ========================================================================== */
-@container cell (width >= 500px) {
-  .ag-shell {
-    padding: 12px 14px;
-    grid-template-rows: 26px minmax(0, 1fr) 30px;
-    row-gap: 8px;
-  }
-
-  .ag-title-short {
-    display: none;
-  }
-
-  .ag-title-long {
-    display: inline;
-  }
-
-  .ag-mic-wrap {
-    max-width: 185px;
-  }
-
-  .ag-demo-pair {
-    display: inline-flex;
-  }
-
-  .ag-arm-btn,
-  .ag-seg,
-  .ag-cal-btn {
-    height: 30px;
-  }
-
-  .ag-seg-btn {
-    height: 26px;
-    padding: 0 8px;
-    font-size: 10px;
-  }
-}
-
-/* ==========================================================================
-   Expanded Empirical Acoustic Workbench (.cell-acoustic.is-expanded)
-   - Narrow / Mobile (< 560px): Fitted/scrollable 1-column Workbench exposing
-     Demo ↑/↓, R Grille / L Ctrl, 4-Stroke LDA, and all 3 diagnostic panels.
-   - Desktop / Tablet (@container cell (width >= 560px)): Side-by-side 2-column
-     Empirical Workbench.
-   ========================================================================== */
-.cell-acoustic.is-expanded .ag-shell {
-  padding: 8px 10px;
-  grid-template-rows: auto 24px minmax(0, 1fr) auto;
-  row-gap: 6px;
-}
-
-.cell-acoustic.is-expanded .ag-micro-cta,
-.cell-acoustic.is-expanded .ag-vernier-mini {
-  display: none;
-}
-
-.cell-acoustic.is-expanded .ag-demo-pair,
-.cell-acoustic.is-expanded .ag-seg-grille {
-  display: inline-flex;
-}
-
-.cell-acoustic.is-expanded .ag-mic-wrap {
-  display: none;
-}
-
-.cell-acoustic.is-expanded .ag-controls-bar {
-  display: flex;
-  flex-wrap: wrap;
-  row-gap: 4px;
-}
-
-.cell-acoustic.is-expanded .ag-hw-status {
-  display: none;
-}
-
-.cell-acoustic.is-expanded .ag-lab-strip {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 7px;
-  background: var(--ag-well);
-  border: 1px solid var(--ag-well-border);
-  border-radius: 5px;
-  font-family: var(--ag-mono);
-  font-size: 9px;
-  color: var(--ag-ink-sec);
-  min-width: 0;
-  overflow: hidden;
-}
-
-.cell-acoustic.is-expanded .ag-lab-badge {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  width: 100%;
   min-width: 0;
 }
 
-.cell-acoustic.is-expanded .ag-lab-badge strong {
-  color: var(--ag-ink);
-  font-weight: 600;
+/* A 24 px segment so it sits in the 30 px foot; hit area stays 28 px. */
+.ag-footer .ui-seg {
+  height: var(--ui-ctl-h-sm);
+  padding: 1px;
 }
 
-.cell-acoustic.is-expanded .ag-gain-wrap {
+.ag-footer .ui-seg > button::after {
+  inset: -4px -1px;
+}
+
+.ag-arm-btn {
+  min-width: 6.8em;                    /* "● Arm Mic" width, so "■ Live" never moves the segment */
+}
+
+.ag-cal-btn[data-active="true"] {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-tint);
+  color: var(--ui-accent);
+}
+
+.ag-demo-pair {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -675,208 +344,296 @@
   flex: 0 0 auto;
 }
 
-.cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
-  width: 50px;
-  accent-color: var(--ag-up);
-  cursor: pointer;
+.ag-demo-pair .ui-label {
+  margin-right: 2px;
 }
 
-.cell-acoustic.is-expanded .ag-export-btn {
-  height: 20px;
-  padding: 0 5px;
-  font-size: 8.5px;
+@container ui-tile (max-width: 379px) {
+  .cell-acoustic:not(.is-expanded) .ag-demo-pair {
+    display: none;
+  }
+}
+
+/* Lab-only parts: shown only in the workbench */
+.cell-acoustic:not(.is-expanded) :is(.ag-lab-strip, .ag-cal-studio, .ag-lab-col, .ag-wb-only) {
+  display: none;
+}
+
+/* ---------- Workbench: the same tile, lifted in place over a scrim ----------
+   A dashed .ag-grid-placeholder holds the grid slot so no sibling tile moves; it reads as
+   "tile 06 is open" under the scrim. */
+
+.cell.ag-grid-placeholder {
+  background: transparent;
+  border: 1px dashed var(--ui-line);
+}
+
+.cell-acoustic.is-expanded {
+  position: fixed;
+  inset: clamp(12px, 4vw, 44px);
+  z-index: 60;
+  max-width: 1120px;
+  max-height: 760px;
+  margin: auto;
+  aspect-ratio: auto;
+  border-color: var(--ui-line);
+  box-shadow: var(--ui-shadow-pop), 0 0 0 100vmax rgba(22, 22, 21, 0.28);
+}
+
+.cell-acoustic.is-expanded .ag-title {
+  flex-shrink: 1;                      /* "Right Grille Workbench" truncates before Close moves */
+}
+
+.cell-acoustic.is-expanded .ag-title-wb {
+  display: inline;
+}
+
+.ag-close-btn[aria-expanded="true"] {  /* Close is an action, not a pressed toggle */
+  background: var(--ui-surface);
+  border-color: var(--ui-line);
+}
+
+.ag-close-btn[aria-expanded="true"]:hover {
+  background: var(--ui-well);
+  border-color: var(--ui-ink-3);
+}
+
+.cell-acoustic.is-expanded .ag-actions {
   flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
+.cell-acoustic.is-expanded .ag-mic-wrap {
+  flex: 0 0 200px;
+}
+
+/* Status line under the studio bar */
+.cell-acoustic.is-expanded .ag-lab-strip {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--ui-4);
+  row-gap: var(--ui-1);
+  min-height: 36px;
+  padding: var(--ui-1) var(--ui-4);
+  border-bottom: 1px solid var(--ui-hairline);
+}
+
+.ag-lab-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ui-2);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ag-strip-val {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 400 var(--ui-fs-2) / 1.2 var(--ui-mono);
+  color: var(--ui-ink-2);
+}
+
+.ag-gain-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-2);
+  margin-left: auto;
+}
+
+.ag-gain-slider {
+  width: 96px;
+}
+
+.ag-gain-val {
+  min-width: 5ch;
+  text-align: right;
+}
+
+/* Body: one column that scrolls on a phone, two columns from 560 px */
 .cell-acoustic.is-expanded .ag-workbench {
+  display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(170px, 1.04fr) minmax(208px, 1.24fr);
-  gap: 6px;
+  grid-auto-rows: max-content;         /* auto rows would shrink below content in a fixed-height box */
+  align-content: start;
+  gap: var(--ui-3);
+  padding: var(--ui-3);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
 .cell-acoustic.is-expanded .ag-primary-col {
-  grid-template-rows: minmax(128px, 1fr) auto;
-  gap: 6px;
+  grid-template-rows: 240px auto;
+  gap: var(--ui-2);
+}
+
+.cell-acoustic.is-expanded .ag-stage-well {
+  border-radius: var(--ui-radius-sm);
 }
 
 .cell-acoustic.is-expanded .ag-cal-studio {
-  display: grid;
-  grid-template-rows: auto;
-  gap: 4px;
-  padding: 5px 7px;
-  background: var(--ag-well);
-  border: 1px solid var(--ag-well-border);
-  border-radius: 6px;
-  font-family: var(--ag-mono);
-  font-size: 9px;
+  display: block;
+  padding: var(--ui-2) var(--ui-3);
+  background: var(--ui-well);
+  border-radius: var(--ui-radius-sm);
 }
 
-.cell-acoustic.is-expanded .ag-cal-row {
+.ag-cal-row {
   display: flex;
-  align-items: center;
-  gap: 4px;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
-.cell-acoustic.is-expanded .ag-oof-verdict {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.ag-cal-label {
+  margin-right: var(--ui-1);
 }
 
-.cell-acoustic.is-expanded .ag-slot-btn,
-.cell-acoustic.is-expanded .ag-cal-reset {
-  height: 22px;
-  padding: 0 5px;
-  font-size: 8.5px;
+.ag-slot-btn {
+  min-width: 32px;
+  font-family: var(--ui-mono);
 }
 
-.cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="UP"] {
-  border-color: rgba(0, 82, 204, 0.45);
-  background: var(--ag-up-soft);
+.ag-slot-btn[data-filled="true"][data-dir="UP"] {
+  border-color: color-mix(in srgb, var(--ag-up) 45%, transparent);
+  background: var(--ag-up-tint);
   color: var(--ag-up);
 }
 
-.cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="DOWN"] {
-  border-color: rgba(201, 55, 0, 0.45);
-  background: var(--ag-down-soft);
+.ag-slot-btn[data-filled="true"][data-dir="DOWN"] {
+  border-color: color-mix(in srgb, var(--ag-down) 45%, transparent);
+  background: var(--ag-down-tint);
   color: var(--ag-down);
 }
 
-.cell-acoustic.is-expanded .ag-slot-btn[data-recording="true"] {
-  border-color: var(--ag-ink);
-  background: var(--ag-ink);
-  color: #ffffff;
+.ag-slot-btn[data-recording="true"] {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-tint);
+  color: var(--ui-accent);
+}
+
+.ag-oof-verdict {
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-acoustic.is-expanded .ag-lab-col {
   display: grid;
-  grid-template-rows: minmax(68px, 1.22fr) minmax(52px, 0.75fr) minmax(72px, 0.98fr);
-  gap: 6px;
+  grid-template-rows: 150px 104px 144px;
+  gap: var(--ui-2);
   min-width: 0;
-  min-height: 0;
 }
 
-.cell-acoustic.is-expanded .ag-panel {
+.ag-panel {
   display: grid;
   grid-template-rows: 16px minmax(0, 1fr);
-  gap: 2px;
-  padding: 5px 7px;
-  background: var(--ag-well);
-  border: 1px solid var(--ag-well-border);
-  border-radius: 6px;
+  gap: var(--ui-1);
+  padding: var(--ui-2) var(--ui-3);
+  background: var(--ui-well);
+  border-radius: var(--ui-radius-sm);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.cell-acoustic.is-expanded .ag-panel-head {
+.ag-panel-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  font-family: var(--ag-mono);
-  font-size: 8.5px;
-  color: var(--ag-ink-sec);
+  gap: var(--ui-2);
   min-width: 0;
-}
-
-.cell-acoustic.is-expanded .ag-panel-head span {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@container cell (width >= 445px) {
-  .cell-acoustic.is-expanded .ag-mic-wrap {
-    display: inline-flex;
-  }
+.ag-panel-head .ui-label {
+  flex: 0 0 auto;
+  color: var(--ui-ink-2);
+}
 
-  .cell-acoustic.is-expanded .ag-controls-bar {
-    flex-wrap: nowrap;
+.ag-panel-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font: 400 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  color: var(--ui-ink-3);
+}
+
+.ag-term {
+  text-decoration: underline dotted var(--ui-ink-3);
+  text-underline-offset: 2px;
+  cursor: help;
+}
+
+.ag-panel-head > .ui-readout {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.ag-panel .ag-canvas-wrap {
+  min-height: 0;
+}
+
+/* Footer becomes the full control bar */
+.cell-acoustic.is-expanded .ag-footer {
+  height: auto;
+  min-height: 48px;
+  padding: var(--ui-2) var(--ui-4);
+}
+
+.cell-acoustic.is-expanded .ag-controls-bar {
+  flex-wrap: wrap;
+  gap: var(--ui-2);
+}
+
+.cell-acoustic.is-expanded .ag-footer .ui-seg {
+  height: var(--ui-ctl-h);
+  padding: 2px;
+}
+
+.cell-acoustic.is-expanded .ag-footer .ui-seg > button::after {
+  inset: -3px -1px;
+}
+
+.cell-acoustic.is-expanded .ag-footer .ui-btn--sm {
+  height: var(--ui-ctl-h);
+}
+
+.cell-acoustic.is-expanded .ag-footer .ui-btn--sm.ui-btn--icon {
+  width: var(--ui-ctl-h);
+}
+
+@container ui-tile (max-width: 444px) {
+  .cell-acoustic.is-expanded :is(.ag-mic-wrap, .ag-title-wb) {
+    display: none;
   }
 }
 
-@container cell (width >= 560px) {
-  .cell-acoustic.is-expanded .ag-shell {
-    padding: 12px 14px;
-    grid-template-rows: 28px 26px minmax(0, 1fr) 30px;
-    row-gap: 8px;
-  }
-
-  .cell-acoustic.is-expanded .ag-hw-status {
-    display: inline;
-  }
-
-  .cell-acoustic.is-expanded .ag-lab-strip {
-    gap: 8px;
-    padding: 0 8px;
-    font-size: 9.5px;
-  }
-
-  .cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
-    width: 68px;
-  }
-
-  .cell-acoustic.is-expanded .ag-export-btn {
-    height: 22px;
-    padding: 0 6px;
-    font-size: 9px;
-  }
-
+@container ui-tile (min-width: 560px) {
   .cell-acoustic.is-expanded .ag-workbench {
     grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.08fr);
     grid-template-rows: minmax(0, 1fr);
-    gap: 10px;
+    gap: var(--ui-3);
+    padding: var(--ui-3) var(--ui-4);
     overflow: hidden;
   }
 
   .cell-acoustic.is-expanded .ag-primary-col {
     grid-template-rows: minmax(0, 1fr) auto;
-    gap: 8px;
-  }
-
-  .cell-acoustic.is-expanded .ag-cal-studio {
-    padding: 7px 9px;
-    font-size: 9.5px;
-  }
-
-  .cell-acoustic.is-expanded .ag-cal-row {
-    gap: 5px;
-    flex-wrap: nowrap;
-  }
-
-  .cell-acoustic.is-expanded .ag-slot-btn,
-  .cell-acoustic.is-expanded .ag-cal-reset {
-    height: 24px;
-    padding: 0 6px;
-    font-size: 9px;
   }
 
   .cell-acoustic.is-expanded .ag-lab-col {
     grid-template-rows: minmax(0, 1.25fr) minmax(0, 0.72fr) minmax(0, 0.95fr);
-    gap: 8px;
-  }
-
-  .cell-acoustic.is-expanded .ag-panel {
-    grid-template-rows: 18px minmax(0, 1fr);
-    gap: 3px;
-    padding: 6px 8px;
-  }
-
-  .cell-acoustic.is-expanded .ag-panel-head {
-    font-size: 9px;
+    min-height: 0;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ag-led,
-  .ag-btn,
-  .ag-seg-btn,
-  .ag-icon-btn {
-    transition: none !important;
+  .ag-mic-select {
+    transition: none;
   }
 }
