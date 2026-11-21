@@ -19,6 +19,19 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const CIRC_R16 = 2 * Math.PI * 16;
+  const CIRC_MINI_R = 2 * Math.PI * 4.5;
+  const MINI_TRAIL_LEN = 18;
+  const GESTURE_HOLD_MS = 950;
+
+  function fmtDot(v) {
+    const s = Number.isFinite(v) ? v.toFixed(2) : '0.00';
+    return s.indexOf('0.') === 0 ? s.slice(1) : s;
+  }
+
+  function fmtSignedDot(v) {
+    const num = Number.isFinite(v) ? v : 0;
+    return (num >= 0 ? '+' : '-') + fmtDot(Math.abs(num));
+  }
 
   const TAPE_SPEC_ITEMS = [
     ['01 ANCHOR_METACARPAL', '0.50·L5 + 0.30·L9 + 0.20·L0'],
@@ -99,9 +112,13 @@
     if (attrs) {
       Object.keys(attrs).forEach(function (k) {
         if (attrs[k] !== undefined && attrs[k] !== null) {
-          // SVG elements have no `className` attribute; it must be written as `class` or the
-          // `.hg-mini-svg` / `.hg-spatial-chord` rules never match.
-          node.setAttribute(k === 'className' ? 'class' : k, String(attrs[k]));
+          if (k === 'textContent') {
+            node.textContent = String(attrs[k]);
+          } else {
+            // SVG elements have no `className` attribute; it must be written as `class` or the
+            // `.hg-mini-svg` / `.hg-spatial-chord` rules never match.
+            node.setAttribute(k === 'className' ? 'class' : k, String(attrs[k]));
+          }
         }
       });
     }
@@ -193,6 +210,130 @@
       fontBold: '600 10px ' + MONO,
     };
 
+    // Zero-GC gesture classifier with a short hold latch so discrete taps remain legible.
+    let gestureHoldCode = '';
+    let gestureHoldUntilMs = 0;
+    const gestureOut = { badge: 'STANDBY', short: 'STANDBY', active: false };
+
+    function clearGestureHold() {
+      gestureHoldCode = '';
+      gestureHoldUntilMs = 0;
+      gestureOut.badge = 'STANDBY';
+      gestureOut.short = 'STANDBY';
+      gestureOut.active = false;
+    }
+
+    function classifyGesture(s0, events, nowMs, mode) {
+      if (events && events.clickFired) {
+        gestureHoldCode = 'PINCH TAP';
+        gestureHoldUntilMs = nowMs + GESTURE_HOLD_MS;
+      }
+      if (mode === TRACKER_MODE.IDLE) {
+        gestureOut.badge = 'STANDBY';
+        gestureOut.short = 'STANDBY';
+        gestureOut.active = false;
+        return gestureOut;
+      }
+      if (mode === TRACKER_MODE.POINTER) {
+        gestureOut.badge = 'POINTER';
+        gestureOut.short = 'POINTER';
+        gestureOut.active = false;
+        return gestureOut;
+      }
+      if (events && events.twoHandActive) {
+        if (Math.abs(events.twoHandTotalDeg) >= 4) {
+          const tDeg = Math.round(events.twoHandTotalDeg);
+          const sDeg = (tDeg >= 0 ? '+' : '') + tDeg + '°';
+          gestureOut.badge = '2H STEER ' + sDeg;
+          gestureOut.short = '2H ' + sDeg;
+        } else {
+          const sc = events.twoHandScaleRatio.toFixed(2) + '×';
+          gestureOut.badge = '2-HAND ' + sc;
+          gestureOut.short = '2H ' + sc;
+        }
+        gestureOut.active = true;
+        return gestureOut;
+      }
+      if (s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING) {
+        if (s0.pinched) {
+          if (s0.twistBrokenOut) {
+            const rVal = Math.round(s0.twistTotalDeg);
+            const sVal = (rVal >= 0 ? '+' : '') + rVal + '°';
+            gestureOut.badge = (rVal >= 0 ? 'TWIST CW ' : 'TWIST CCW ') + sVal;
+            gestureOut.short = 'TWIST ' + sVal;
+          } else if (s0.pinchMode === PINCH_MODE.DRAG) {
+            gestureOut.badge = 'PINCH DRAG';
+            gestureOut.short = 'PINCH DRAG';
+          } else {
+            gestureOut.badge = 'PINCH LOCK';
+            gestureOut.short = 'PINCH LOCK';
+          }
+          gestureOut.active = true;
+          return gestureOut;
+        }
+        if (s0.vScrollActive) {
+          const down = (events ? events.scrollVelocityPx : 0) >= 0;
+          gestureOut.badge = down ? 'SCROLL DOWN' : 'SCROLL UP';
+          gestureOut.short = down ? 'SCROLL ↓' : 'SCROLL ↑';
+          gestureOut.active = true;
+          return gestureOut;
+        }
+        if (s0.clutchReleased) {
+          gestureOut.badge = 'FIST CLUTCH';
+          gestureOut.short = 'FIST CLUTCH';
+          gestureOut.active = true;
+          return gestureOut;
+        }
+        if (nowMs < gestureHoldUntilMs && gestureHoldCode) {
+          gestureOut.badge = gestureHoldCode;
+          gestureOut.short = gestureHoldCode;
+          gestureOut.active = true;
+          return gestureOut;
+        }
+        if (s0.state === HAND_STATE.COASTING) {
+          const coast = 'COAST ' + s0.coastFrames + '/4';
+          gestureOut.badge = coast;
+          gestureOut.short = coast;
+          gestureOut.active = true;
+          return gestureOut;
+        }
+        gestureOut.badge = 'OPEN PALM';
+        gestureOut.short = 'OPEN PALM';
+        gestureOut.active = false;
+        return gestureOut;
+      }
+      if (s0.state === HAND_STATE.ARMING) {
+        gestureOut.badge = 'ARMING ' + Math.round(s0.armProgress * 200) + 'ms';
+        gestureOut.short = 'ARMING ' + Math.round(s0.armProgress * 100) + '%';
+        gestureOut.active = true;
+        return gestureOut;
+      }
+      if (s0.visible) {
+        if (!s0.gateSpanOk) {
+          gestureOut.badge = 'TOO FAR <.055';
+          gestureOut.short = 'TOO FAR';
+          gestureOut.active = true;
+        } else if (!s0.gateFacingOk) {
+          gestureOut.badge = 'BACK OF HAND';
+          gestureOut.short = 'BACK HAND';
+          gestureOut.active = true;
+        } else if (!s0.gateKeyboardOk) {
+          gestureOut.badge = 'KBD ZONE ≥.86';
+          gestureOut.short = 'KBD ZONE';
+          gestureOut.active = true;
+        } else {
+          gestureOut.badge = 'RAISE PALM';
+          gestureOut.short = 'RAISE PALM';
+          gestureOut.active = false;
+        }
+        return gestureOut;
+      }
+      gestureOut.badge = 'NO HAND';
+      gestureOut.short = 'NO HAND';
+      gestureOut.active = false;
+      return gestureOut;
+    }
+
     // -----------------------------------------------------------------------
     // 1. Primary 1x1 Grid Cell (`#cell-hand-gesture`)
     // -----------------------------------------------------------------------
@@ -200,50 +341,202 @@
     const miniBoneLines = [];
     for (let i = 0; i < HAND_BONES.length; i += 2) {
       miniBoneLines.push(
-        svgEl('line', { x1: 60, y1: 60, x2: 60, y2: 60, stroke: PAL.ink2, 'stroke-width': '1.5', 'stroke-linecap': 'round' })
+        svgEl('line', { x1: 80, y1: 60, x2: 80, y2: 60, stroke: PAL.ink2, 'stroke-width': '1.5', 'stroke-linecap': 'round' })
       );
     }
     const miniPinchLine = svgEl('line', {
-      x1: 60, y1: 40, x2: 72, y2: 42,
+      x1: 80, y1: 52, x2: 96, y2: 56,
       stroke: PAL.ink3, 'stroke-width': '1.25', 'stroke-dasharray': '3 3',
     });
-    const miniAnchorDot = svgEl('circle', { cx: 60, cy: 52, r: '1.3', fill: PAL.accent });
+    const miniAnchorDot = svgEl('circle', { cx: 80, cy: 68, r: '1.6', fill: PAL.accent });
     const miniAnchorRing = svgEl('circle', {
-      cx: 60, cy: 52, r: '3.6', fill: 'none', stroke: PAL.accent, 'stroke-width': '1.5',
+      cx: 80, cy: 68, r: '4.5', fill: 'none', stroke: PAL.accent, 'stroke-width': '1.5',
+      'stroke-dasharray': CIRC_MINI_R.toFixed(2), 'stroke-dashoffset': '0',
+    });
+    const miniKbdZone = svgEl('rect', {
+      x: 0, y: 103.2, width: 160, height: 16.8, fill: CAN.accentA05,
+    });
+    const miniKbdLine = svgEl('line', {
+      x1: 0, y1: 103.2, x2: 160, y2: 103.2,
+      stroke: CAN.accentA45, 'stroke-width': '1', 'stroke-dasharray': '3 3',
     });
     const miniRoiRect = svgEl('rect', {
-      x: 26, y: 20, width: 68, height: 50, rx: '3',
+      x: 35.2, y: 26.4, width: 89.6, height: 67.2, rx: '3',
       fill: 'none', stroke: PAL.line, 'stroke-width': '1', 'stroke-dasharray': '4 3',
     });
-    const miniSvg = svgEl('svg', { className: 'hg-mini-svg', viewBox: '0 0 120 90', 'aria-hidden': 'true' }, [
+    const miniRoiText = svgEl('text', {
+      className: 'hg-mini-roi-label', x: 38.5, y: 33.8,
+      fill: PAL.ink3, 'font-family': MONO, 'font-size': '5', 'letter-spacing': '0.03em',
+      textContent: 'ROI .22–.78',
+    });
+    const miniKbdText = svgEl('text', {
+      className: 'hg-mini-kbd-label', x: 5, y: 114.5,
+      fill: PAL.ink3, 'font-family': MONO, 'font-size': '5', 'letter-spacing': '0.03em',
+      textContent: 'KBD <.86',
+    });
+    const miniGatesText = svgEl('text', {
+      className: 'hg-mini-gates-label', x: 155, y: 114.5, 'text-anchor': 'end',
+      fill: PAL.ink3, 'font-family': MONO, 'font-size': '5', 'letter-spacing': '0.02em',
+      textContent: 'SPAN ≥.055 · FACE ≥+.22',
+    });
+
+    // Top-left detected gesture HUD badge inside the 160 × 120 camera field.
+    const miniGestureBg = svgEl('rect', {
+      x: 5, y: 5, width: 38, height: 12, rx: '2.5',
+      fill: withAlpha(PAL.surface, 0.9), stroke: PAL.line, 'stroke-width': '1',
+    });
+    const miniGestureText = svgEl('text', {
+      className: 'hg-mini-gesture', x: 9, y: 12.8,
+      fill: PAL.ink2, 'font-family': MONO, 'font-size': '5.5', 'font-weight': '600', 'letter-spacing': '0.04em',
+      textContent: 'STANDBY',
+    });
+    let miniGestureKey = '';
+    function setMiniGesture(label, active) {
+      const key = label + '|' + (active ? '1' : '0');
+      if (key === miniGestureKey) return;
+      miniGestureKey = key;
+      miniGestureText.textContent = label;
+      const w = Math.min(102, Math.max(36, label.length * 3.55 + 8));
+      setAttr(miniGestureBg, 'width', w.toFixed(1));
+      setAttr(miniGestureBg, 'stroke', active ? PAL.accent : PAL.line);
+      setAttr(miniGestureText, 'fill', active ? PAL.accent : PAL.ink2);
+    }
+
+    // Top-right mini screen-cursor monitor inset showing the mapped cursor moving around.
+    const miniScreenBox = svgEl('rect', {
+      className: 'hg-mini-screen', x: 111, y: 5, width: 44, height: 30, rx: '2.5',
+      fill: withAlpha(PAL.surface, 0.92), stroke: PAL.line, 'stroke-width': '1',
+    });
+    const miniScreenAxes = svgEl('path', {
+      d: 'M133 8V32M114 20H152', stroke: PAL.hairline, 'stroke-width': '1',
+    });
+    const miniScreenLabel = svgEl('text', {
+      x: 113.5, y: 11.2, fill: PAL.ink3, 'font-family': MONO, 'font-size': '4.2', 'letter-spacing': '0.04em',
+      textContent: 'CURSOR',
+    });
+    const miniCursorTrail = svgEl('polyline', {
+      className: 'hg-mini-cursor-trail', fill: 'none', stroke: CAN.inkA25,
+      'stroke-width': '1.25', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', points: '',
+    });
+    const miniCursorLock = svgEl('circle', {
+      className: 'hg-mini-cursor-lock', cx: 133, cy: 20, r: '3.6',
+      fill: 'none', stroke: PAL.accent, 'stroke-width': '1', 'stroke-dasharray': '1.8 1.5', visibility: 'hidden',
+    });
+    const miniCursorCross = svgEl('path', {
+      className: 'hg-mini-cursor-cross', d: 'M133 16.8V23.2M129.8 20H136.2',
+      stroke: PAL.ink, 'stroke-width': '1.1', 'stroke-linecap': 'round',
+    });
+    const miniCursorDot = svgEl('circle', {
+      className: 'hg-mini-cursor-dot', cx: 133, cy: 20, r: '1.6', fill: PAL.accent,
+    });
+    const miniTrailU = new Float32Array(MINI_TRAIL_LEN);
+    const miniTrailV = new Float32Array(MINI_TRAIL_LEN);
+    let miniTrailHead = 0;
+    let miniTrailCount = 0;
+    let miniTrailLive = false;
+
+    function renderMiniTrailPoints() {
+      let pts = '';
+      for (let k = 0; k < miniTrailCount; k++) {
+        const idx = (miniTrailHead - miniTrailCount + k + MINI_TRAIL_LEN) % MINI_TRAIL_LEN;
+        const px = 114 + miniTrailU[idx] * 38;
+        const py = 8 + miniTrailV[idx] * 24;
+        pts += (k === 0 ? '' : ' ') + px.toFixed(1) + ',' + py.toFixed(1);
+      }
+      setAttr(miniCursorTrail, 'points', pts);
+    }
+
+    function setMiniCursorPoint(u, v, pinched, lockU, lockV) {
+      const cu = clamp(u, 0, 1);
+      const cv = clamp(v, 0, 1);
+      const cx = 114 + cu * 38;
+      const cy = 8 + cv * 24;
+      setAttr(miniCursorDot, 'cx', cx.toFixed(1));
+      setAttr(miniCursorDot, 'cy', cy.toFixed(1));
+      setAttr(miniCursorDot, 'fill', pinched ? PAL.accent : PAL.ink);
+      setAttr(
+        miniCursorCross,
+        'd',
+        'M' + cx.toFixed(1) + ' ' + (cy - 3.2).toFixed(1) + 'V' + (cy + 3.2).toFixed(1) +
+        'M' + (cx - 3.2).toFixed(1) + ' ' + cy.toFixed(1) + 'H' + (cx + 3.2).toFixed(1)
+      );
+      setAttr(miniCursorCross, 'stroke', pinched ? PAL.accent : PAL.ink);
+      setAttr(miniCursorTrail, 'stroke', pinched ? CAN.accentA45 : CAN.inkA25);
+      if (pinched) {
+        const lx = 114 + clamp(lockU, 0, 1) * 38;
+        const ly = 8 + clamp(lockV, 0, 1) * 24;
+        setAttr(miniCursorLock, 'cx', lx.toFixed(1));
+        setAttr(miniCursorLock, 'cy', ly.toFixed(1));
+        setAttr(miniCursorLock, 'visibility', 'visible');
+      } else {
+        setAttr(miniCursorLock, 'visibility', 'hidden');
+      }
+    }
+
+    function pushMiniCursorSample(u, v, pinched, lockU, lockV) {
+      const cu = clamp(u, 0, 1);
+      const cv = clamp(v, 0, 1);
+      if (!miniTrailLive) {
+        miniTrailLive = true;
+        miniTrailHead = 0;
+        miniTrailCount = 0;
+      }
+      const prevIdx = (miniTrailHead - 1 + MINI_TRAIL_LEN) % MINI_TRAIL_LEN;
+      if (
+        miniTrailCount === 0 ||
+        Math.hypot(cu - miniTrailU[prevIdx], cv - miniTrailV[prevIdx]) >= 0.008
+      ) {
+        miniTrailU[miniTrailHead] = cu;
+        miniTrailV[miniTrailHead] = cv;
+        miniTrailHead = (miniTrailHead + 1) % MINI_TRAIL_LEN;
+        if (miniTrailCount < MINI_TRAIL_LEN) miniTrailCount++;
+        renderMiniTrailPoints();
+      }
+      setMiniCursorPoint(cu, cv, pinched, lockU, lockV);
+    }
+
+    const miniSvg = svgEl('svg', { className: 'hg-mini-svg', viewBox: '0 0 160 120', 'aria-hidden': 'true' }, [
+      miniKbdZone,
+      miniKbdLine,
       miniRoiRect,
+      miniRoiText,
+      miniKbdText,
+      miniGatesText,
       svgEl('g', {}, miniBoneLines),
       miniPinchLine,
       miniAnchorRing,
       miniAnchorDot,
+      miniGestureBg,
+      miniGestureText,
+      miniScreenBox,
+      miniScreenAxes,
+      miniScreenLabel,
+      miniCursorTrail,
+      miniCursorLock,
+      miniCursorCross,
+      miniCursorDot,
     ]);
 
-    // One quiet row of label + value pairs under the hero (hidden at compact size).
+    // One quiet row of tracking + tolerance pairs under the hero (hidden at compact size).
     function primPair(label, value, tip) {
+      const lbl = h('span', { className: 'ui-label', textContent: label });
       const val = h('span', { className: 'ui-readout hg-prim-val', textContent: value });
-      const row = h('div', { className: 'hg-prim', 'data-tip': tip }, [
-        h('span', { className: 'ui-label', textContent: label }),
-        val,
-      ]);
-      return { row: row, val: val };
+      const row = h('div', { className: 'hg-prim', 'data-tip': tip }, [lbl, val]);
+      return { row: row, lbl: lbl, val: val };
     }
-    const primPos = primPair('Pos', '0.50, 0.50', 'Cursor position, 0 to 1 from the left and from the top.');
-    const primPinch = primPair('Pinch', 'OPEN 0.72', 'Finger gap over palm width; LOCK means a pinch is held.');
-    const primRot = primPair('Twist', '+0.0°', 'Hand twist since the gesture began, in degrees.');
-    const primUpDn = primPair('Scroll', 'V-IDLE', 'Two-finger scroll speed in pixels per second, or idle.');
+    const primPos = primPair('Cursor', '0.50, 0.50', 'Screen cursor X, Y from 0 to 1, mapped from the 0.22–0.78 box.');
+    const primPinch = primPair('Pinch <.28', '0.72 OPEN', 'Finger gap over palm width; engages below 0.28 and releases above 0.40.');
+    const primRot = primPair('Twist ±3.5°', '+0.0°', 'Wrist twist angle in degrees; ignores motion inside the ±3.5° deadzone.');
+    const primGesture = primPair('Gesture', 'STANDBY', 'Live detected gesture; press Cam or Sim to drive the cursor.');
     const primPosVal = primPos.val;
+    const primPinchLbl = primPinch.lbl;
     const primPinchVal = primPinch.val;
     const primRotVal = primRot.val;
-    const primUpDnVal = primUpDn.val;
+    const primGestureVal = primGesture.val;
     const primPosRow = primPos.row;
     const primPinchRow = primPinch.row;
     const primRotRow = primRot.row;
-    const primUpDnRow = primUpDn.row;
+    const primGestureRow = primGesture.row;
 
     const portalCamBtn = h('button', {
       type: 'button',
@@ -285,7 +578,7 @@
           primPosRow,
           primPinchRow,
           primRotRow,
-          primUpDnRow,
+          primGestureRow,
         ]),
       ]
     );
@@ -319,7 +612,7 @@
       if (tip) portalStatusText.setAttribute('data-tip', tip);
       else portalStatusText.removeAttribute('data-tip');
     }
-    const PORTAL_HINT = 'Hold an open palm still to arm, then pinch, twist or two-finger scroll';
+    const PORTAL_HINT = 'Tolerances: 200ms arm · pinch <.28 · lock 14px · twist ±3.5° · KBD <.86';
     setPortalStatus(PORTAL_HINT, '');
 
     // Cam / Sim: pressed state, running tone (rust) and a tip that says what the next click does.
@@ -348,7 +641,7 @@
     }
     syncPortalToggles(TRACKER_MODE.IDLE, false, false);
 
-    // Paint static neutral skeleton in mini SVG before RAF ever runs
+    // Paint static neutral skeleton + calm sample cursor trail in mini SVG before RAF ever runs.
     function drawStaticMiniHand() {
       synthRig.stepAndPopulate(engine, 1 / 60, 4 / 3);
       const lm = synthRig.normBuf0;
@@ -356,24 +649,40 @@
         const a = HAND_BONES[i] * 3;
         const b = HAND_BONES[i + 1] * 3;
         const line = miniBoneLines[i >> 1];
-        setAttr(line, 'x1', ((1 - lm[a]) * 120).toFixed(1));
-        setAttr(line, 'y1', (lm[a + 1] * 90).toFixed(1));
-        setAttr(line, 'x2', ((1 - lm[b]) * 120).toFixed(1));
-        setAttr(line, 'y2', (lm[b + 1] * 90).toFixed(1));
+        setAttr(line, 'x1', ((1 - lm[a]) * 160).toFixed(1));
+        setAttr(line, 'y1', (lm[a + 1] * 120).toFixed(1));
+        setAttr(line, 'x2', ((1 - lm[b]) * 160).toFixed(1));
+        setAttr(line, 'y2', (lm[b + 1] * 120).toFixed(1));
         setAttr(line, 'stroke', PAL.ink2);
       }
-      setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 120).toFixed(1));
-      setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 90).toFixed(1));
-      setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 120).toFixed(1));
-      setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 90).toFixed(1));
+      setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 160).toFixed(1));
+      setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 120).toFixed(1));
+      setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 160).toFixed(1));
+      setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 120).toFixed(1));
       setAttr(miniPinchLine, 'stroke', PAL.ink3);
       setAttr(miniPinchLine, 'stroke-dasharray', '3 3');
-      const ax = (1 - (0.5 * lm[LM.INDEX_MCP * 3] + 0.3 * lm[LM.MIDDLE_MCP * 3] + 0.2 * lm[0])) * 120;
-      const ay = (0.5 * lm[LM.INDEX_MCP * 3 + 1] + 0.3 * lm[LM.MIDDLE_MCP * 3 + 1] + 0.2 * lm[1]) * 90;
+      const ax = (1 - (0.5 * lm[LM.INDEX_MCP * 3] + 0.3 * lm[LM.MIDDLE_MCP * 3] + 0.2 * lm[0])) * 160;
+      const ay = (0.5 * lm[LM.INDEX_MCP * 3 + 1] + 0.3 * lm[LM.MIDDLE_MCP * 3 + 1] + 0.2 * lm[1]) * 120;
       setAttr(miniAnchorDot, 'cx', ax.toFixed(1));
       setAttr(miniAnchorDot, 'cy', ay.toFixed(1));
       setAttr(miniAnchorRing, 'cx', ax.toFixed(1));
       setAttr(miniAnchorRing, 'cy', ay.toFixed(1));
+      setAttr(miniAnchorRing, 'stroke', PAL.accent);
+      setAttr(miniAnchorRing, 'stroke-dashoffset', '0');
+      setAttr(miniKbdText, 'fill', PAL.ink3);
+      setAttr(miniGatesText, 'fill', PAL.ink3);
+      setMiniGesture('STANDBY', false);
+
+      miniTrailLive = false;
+      miniTrailHead = 0;
+      miniTrailCount = 12;
+      for (let k = 0; k < 12; k++) {
+        const t = k / 11;
+        miniTrailU[k] = 0.24 + t * 0.34;
+        miniTrailV[k] = 0.62 - Math.sin(t * Math.PI * 0.85) * 0.22;
+      }
+      renderMiniTrailPoints();
+      setMiniCursorPoint(miniTrailU[11], miniTrailV[11], false, 0.5, 0.5);
       engine.resetAll();
     }
     drawStaticMiniHand();
@@ -413,11 +722,11 @@
       else { g.el.removeAttribute('data-tone'); g.el.removeAttribute('data-state'); }
       if (label !== undefined && g.text.textContent !== label) g.text.textContent = label;
     }
-    const gSpan = gatePill('SPAN', 'Close enough: palm width in the frame is above the minimum.');
-    const gFacing = gatePill('FACING', 'Palm faces the camera, not edge-on or back of the hand.');
-    const gKbd = gatePill('ABOVE KBD', 'Hand is above the keyboard zone at the bottom of the camera view.');
-    const gArm = gatePill('IDLE', 'Arming: hold an open palm still for 0.2 s to take the cursor.');
-    const gGesture = gatePill('OPEN', 'Current gesture: open hand, pinch lock or drag, two hands, scroll or clutch.');
+    const gSpan = gatePill('SPAN ≥.055', 'Span tolerance: palm width in the frame must stay at or above 0.055.');
+    const gFacing = gatePill('FACE ≥+.22', 'Facing tolerance: 3D palm normal must stay at or above +0.22.');
+    const gKbd = gatePill('KBD <.86', 'Height tolerance: palm Y must stay above the 0.86 keyboard horizon.');
+    const gArm = gatePill('IDLE 200ms', 'Dwell tolerance: hold an open palm steady for 200 ms to arm.');
+    const gGesture = gatePill('OPEN PALM', 'Detected gesture: open palm, pinch tap, lock, drag, twist, scroll or zoom.');
     const gateSpan = gSpan.el;
     const gateFacing = gFacing.el;
     const gateKbd = gKbd.el;
@@ -704,13 +1013,13 @@
     function teleKv(label, tip, val) {
       return h('div', { className: 'hg-tele-kv', 'data-tip': tip }, [h('span', { className: 'ui-label', textContent: label }), val]);
     }
-    const wbCell09 = instrument('09', 'Tuning', '09 Tuning and gate readings', '', c9Metric,
+    const wbCell09 = instrument('09', 'Tolerances', '09 Tolerances and tuning', 'Gate tolerances and 1€ smoothing filter controls.', c9Metric,
       h('div', { className: 'ui-tile-body' }, [
         h('div', { className: 'hg-tuner-list' }, tunerRows),
         h('div', { className: 'hg-telemetry-strip' }, [
-          teleKv('Span', 'Palm width as a share of the frame; the span gate needs 0.055.', teleSpan),
-          teleKv('Facing', 'How squarely the palm faces the camera, -1 to 1; needs 0.22.', teleNz),
-          teleKv('Height', 'Palm height in the frame, 0 top to 1 bottom; under 0.86 passes.', teleY),
+          teleKv('Span ≥.055', 'Live palm width in the frame; must reach 0.055 to pass.', teleSpan),
+          teleKv('Face ≥+.22', 'Live 3D palm normal toward the camera; needs +0.22 to pass.', teleNz),
+          teleKv('Height <.86', 'Live palm Y from top (0) to bottom (1); under 0.86 passes.', teleY),
         ]),
       ]),
       foot([c9ChiralBtn, c9DefaultsBtn]));
@@ -723,6 +1032,9 @@
       setAttr(mapModeBtn, 'data-tip', isClutch
         ? 'Clutch: moves like a trackpad, close your fist to lift. Click for ROI.'
         : 'ROI: the middle of the camera view maps to the whole screen. Click for Clutch.');
+      miniRoiText.textContent = isClutch
+        ? 'CLUTCH MODE'
+        : ('ROI ' + fmtDot(engine.config.roiMinX) + '–' + fmtDot(engine.config.roiMaxX));
       const inv = Boolean(engine.config.invertChirality);
       setAttr(c9ChiralBtn, 'aria-pressed', String(inv));
       c9ChiralBtn.textContent = inv ? 'Chiral: Inv' : 'Chiral: Auto';
@@ -1011,15 +1323,16 @@
     });
 
     function resetPortalPreview() {
+      clearGestureHold();
       drawStaticMiniHand();
       primPosVal.textContent = '0.50, 0.50';
-      primPinchVal.textContent = 'OPEN 0.72';
+      primPinchVal.textContent = '0.72 OPEN';
       primRotVal.textContent = '+0.0°';
-      primUpDnVal.textContent = 'V-IDLE';
+      primGestureVal.textContent = 'STANDBY';
       primPosRow.classList.remove('is-lit');
       primPinchRow.classList.remove('is-lit');
       primRotRow.classList.remove('is-lit');
-      primUpDnRow.classList.remove('is-lit');
+      primGestureRow.classList.remove('is-lit');
       setPortalPill('STANDBY', 'idle', PILL_TIP_STANDBY);
     }
 
@@ -1742,10 +2055,18 @@
     function syncSchmittMarks() {
       const eng = engine.config.pinchEngage;
       const rel = engine.config.pinchRelease;
+      const engShort = fmtDot(eng);
+      const relShort = fmtDot(rel);
       c3MarkEngage.style.left = ((eng / 0.80) * 100).toFixed(2) + '%';
       c3MarkRelease.style.left = ((rel / 0.80) * 100).toFixed(2) + '%';
-      c3LabelEngage.textContent = 'ENG <' + eng.toFixed(2).replace(/^0/, '');
-      c3LabelRelease.textContent = 'REL >' + rel.toFixed(2).replace(/^0/, '');
+      c3LabelEngage.textContent = 'ENG <' + engShort;
+      c3LabelRelease.textContent = 'REL >' + relShort;
+      primPinchLbl.textContent = 'Pinch <' + engShort;
+      setAttr(
+        primPinchRow,
+        'data-tip',
+        'Finger gap over palm width; engages below ' + eng.toFixed(2) + ' and releases above ' + rel.toFixed(2) + '.'
+      );
     }
 
     function syncRotationSourceUi() {
@@ -1807,6 +2128,8 @@
       const events = tracker.tick(safeNowMs, global.innerWidth, global.innerHeight);
       const s0 = engine.slots[0];
       const s1 = engine.slots[1];
+      const gesture = classifyGesture(s0, events, safeNowMs, tracker.mode);
+      uiFrameCounter = (uiFrameCounter + 1) & 1;
 
       if (isSecondaryOpen) {
         if (c6.peakHoldFrames > 0) c6.peakHoldFrames--;
@@ -1815,20 +2138,18 @@
           c6Peak.style.bottom = (c6.peak * 100).toFixed(1) + '%';
         }
         dispatchSecondaryGestures(s0, s1, events, uiDtSec);
-        drawCell01Rig(s0, s1);
+        drawCell01Rig(s0, s1, gesture);
         drawCell02Scope(s0);
         drawCell04Dial(s0);
+        if (uiFrameCounter === 0) {
+          updateSecondaryReadouts(s0, events, gesture);
+        }
       } else {
         dispatchMainGridGestures(s0, events);
-        updatePortalPreview(s0, events);
+        updatePortalPreview(s0, events, gesture, uiFrameCounter === 0);
       }
 
-      updateSpatialReticle(s0, s1, events);
-
-      uiFrameCounter = (uiFrameCounter + 1) & 1;
-      if (uiFrameCounter === 0 && isSecondaryOpen) {
-        updateSecondaryReadouts(s0, events);
-      }
+      updateSpatialReticle(s0, s1, events, gesture);
 
       if (shouldRunLoop() && !rafId) {
         rafId = requestAnimationFrame(onFrame);
@@ -1862,40 +2183,75 @@
       }
     }
 
-    function updatePortalPreview(s0, events) {
+    function updatePortalPreview(s0, events, gesture, updateFoot) {
+      const vw = Math.max(1, global.innerWidth || 1);
+      const vh = Math.max(1, global.innerHeight || 1);
+      const armed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
+      const curU = armed ? clamp(s0.interactiveX / vw, 0, 1) : s0.cursorU;
+      const curV = armed ? clamp(s0.interactiveY / vh, 0, 1) : s0.cursorV;
+      const lockU = clamp(s0.lockOriginX / vw, 0, 1);
+      const lockV = clamp(s0.lockOriginY / vh, 0, 1);
+
       if (s0.visible) {
         const lm = s0.normLm;
         for (let i = 0; i < HAND_BONES.length; i += 2) {
           const a = HAND_BONES[i] * 3;
           const b = HAND_BONES[i + 1] * 3;
           const line = miniBoneLines[i >> 1];
-          setAttr(line, 'x1', ((1 - lm[a]) * 120).toFixed(1));
-          setAttr(line, 'y1', (lm[a + 1] * 90).toFixed(1));
-          setAttr(line, 'x2', ((1 - lm[b]) * 120).toFixed(1));
-          setAttr(line, 'y2', (lm[b + 1] * 90).toFixed(1));
+          setAttr(line, 'x1', ((1 - lm[a]) * 160).toFixed(1));
+          setAttr(line, 'y1', (lm[a + 1] * 120).toFixed(1));
+          setAttr(line, 'x2', ((1 - lm[b]) * 160).toFixed(1));
+          setAttr(line, 'y2', (lm[b + 1] * 120).toFixed(1));
           setAttr(line, 'stroke', s0.gateFacingOk ? PAL.ink2 : PAL.accent);
         }
-        setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 120).toFixed(1));
-        setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 90).toFixed(1));
-        setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 120).toFixed(1));
-        setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 90).toFixed(1));
+        setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 160).toFixed(1));
+        setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 120).toFixed(1));
+        setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 160).toFixed(1));
+        setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 120).toFixed(1));
         setAttr(miniPinchLine, 'stroke', s0.pinched ? PAL.accent : PAL.ink3);
         setAttr(miniPinchLine, 'stroke-dasharray', s0.pinched ? 'none' : '3 3');
-        setAttr(miniAnchorDot, 'cx', ((1 - s0.anchorCamX) * 120).toFixed(1));
-        setAttr(miniAnchorDot, 'cy', (s0.anchorCamY * 90).toFixed(1));
-        setAttr(miniAnchorRing, 'cx', ((1 - s0.anchorCamX) * 120).toFixed(1));
-        setAttr(miniAnchorRing, 'cy', (s0.anchorCamY * 90).toFixed(1));
+        const ax = (1 - s0.anchorCamX) * 160;
+        const ay = s0.anchorCamY * 120;
+        setAttr(miniAnchorDot, 'cx', ax.toFixed(1));
+        setAttr(miniAnchorDot, 'cy', ay.toFixed(1));
+        setAttr(miniAnchorRing, 'cx', ax.toFixed(1));
+        setAttr(miniAnchorRing, 'cy', ay.toFixed(1));
+        setAttr(miniAnchorRing, 'stroke', s0.pinched ? PAL.accent : (armed ? PAL.ink : PAL.accent));
+        setAttr(miniAnchorRing, 'stroke-dashoffset', (CIRC_MINI_R * (1 - s0.armProgress)).toFixed(2));
       }
 
-      primPosVal.textContent = s0.cursorU.toFixed(2) + ', ' + s0.cursorV.toFixed(2);
-      primPinchVal.textContent = (s0.pinched ? 'LOCK ' : 'OPEN ') + s0.pinchRatio.toFixed(2);
-      primRotVal.textContent = (s0.twistTotalDeg >= 0 ? '+' : '') + s0.twistTotalDeg.toFixed(1) + '°';
-      primUpDnVal.textContent = s0.vScrollActive ? ('V ' + Math.round(events.scrollVelocityPx)) : 'V-IDLE';
+      setAttr(miniKbdText, 'fill', s0.visible && !s0.gateKeyboardOk ? PAL.accent : PAL.ink3);
+      setAttr(miniGatesText, 'fill', s0.visible && (!s0.gateSpanOk || !s0.gateFacingOk) ? PAL.accent : PAL.ink3);
+      setMiniGesture(gesture.badge, gesture.active);
+      if (s0.visible || armed) {
+        pushMiniCursorSample(curU, curV, s0.pinched, lockU, lockV);
+      }
 
-      primPosRow.classList.toggle('is-lit', s0.state === HAND_STATE.ARMED);
+      primPosVal.textContent = curU.toFixed(2) + ', ' + curV.toFixed(2);
+      const pinchState = s0.pinched ? ' LOCK' : (s0.velocityDamped ? ' DAMP' : ' OPEN');
+      primPinchVal.textContent = s0.pinchRatio.toFixed(2) + pinchState;
+      primRotVal.textContent = (s0.twistTotalDeg >= 0 ? '+' : '') + s0.twistTotalDeg.toFixed(1) + '°';
+      primGestureVal.textContent = gesture.short;
+
+      primPosRow.classList.toggle('is-lit', armed);
       primPinchRow.classList.toggle('is-lit', s0.pinched);
       primRotRow.classList.toggle('is-lit', s0.twistBrokenOut);
-      primUpDnRow.classList.toggle('is-lit', s0.vScrollActive);
+      primGestureRow.classList.toggle('is-lit', gesture.active);
+
+      if (updateFoot && !tracker.cameraError && !tracker.isWebcamStarting) {
+        if (s0.visible) {
+          setPortalStatus(
+            'Gates: span ' + fmtDot(s0.palmSpan) + '≥.055 · face ' + fmtSignedDot(s0.palmFacingCos) +
+            '≥.22 · y ' + fmtDot(s0.palmY) + '<.86 · scroll ' + Math.round(events.scrollVelocityPx) + 'px/s',
+            'Live hand-gate tolerances and two-finger vertical scroll speed.'
+          );
+        } else if (tracker.mode === TRACKER_MODE.WEBCAM) {
+          setPortalStatus(
+            'Live webcam (' + tracker.delegateUsed + '): raise an open palm into the .22–.78 box',
+            ''
+          );
+        }
+      }
 
       const sim = tracker.mode !== TRACKER_MODE.WEBCAM;
       if (s0.state === HAND_STATE.ARMED) {
@@ -2136,7 +2492,7 @@
       if (row) pinTapeRow(Number(row.dataset.row));
     }
 
-    function updateSpatialReticle(s0, s1, events) {
+    function updateSpatialReticle(s0, s1, events, gesture) {
       const mainObscured =
         !isSecondaryOpen &&
         (mainGrid.hidden || Boolean(document.querySelector('dialog[open]')));
@@ -2170,14 +2526,21 @@
       else if (s0.state === HAND_STATE.COASTING) { tag = 'COAST ' + s0.coastFrames + '/4'; color = PAL.ink3; }
       else if (s0.state === HAND_STATE.ARMED) {
         if (events.twoHandActive) { tag = '2H ' + events.twoHandScaleRatio.toFixed(2) + '×'; color = PAL.accent; }
-        else if (s0.clutchReleased) { tag = 'CLUTCH FREE'; color = PAL.ink3; }
+        else if (s0.clutchReleased) { tag = 'FIST CLUTCH'; color = PAL.ink3; }
+        else if (s0.pinched && s0.twistBrokenOut) {
+          const rVal = Math.round(s0.twistTotalDeg);
+          tag = 'TWIST ' + (rVal >= 0 ? '+' : '') + rVal + '°';
+          color = PAL.accent;
+        }
         else if (s0.pinchMode === PINCH_MODE.CLICK_LOCK) { tag = 'LOCK ' + s0.pinchSlipPx.toFixed(0) + '/14px'; color = PAL.accent; }
-        else if (s0.pinchMode === PINCH_MODE.DRAG) { tag = s0.twistBrokenOut ? ('DRAG ' + s0.twistTotalDeg.toFixed(0) + '°') : 'DRAG'; color = PAL.accent; }
-        else if (s0.vScrollActive) { tag = 'SCROLL'; color = PAL.accent; }
+        else if (s0.pinchMode === PINCH_MODE.DRAG) { tag = 'PINCH DRAG'; color = PAL.accent; }
+        else if (s0.vScrollActive) { tag = events.scrollVelocityPx >= 0 ? 'SCROLL ↓' : 'SCROLL ↑'; color = PAL.accent; }
+        else if (gesture && gesture.badge === 'PINCH TAP') { tag = 'PINCH TAP'; color = PAL.accent; }
         else if (s0.velocityDamped) { tag = 'DAMP 0.08×'; color = PAL.ink; }
-        else { tag = 'ARMED'; color = PAL.ink; }
-      } else if (!s0.gateFacingOk) { tag = 'BACK OF HAND'; color = PAL.accent; }
-      else if (!s0.gateKeyboardOk) { tag = 'KBD ZONE'; color = PAL.accent; }
+        else { tag = 'OPEN PALM'; color = PAL.ink; }
+      } else if (!s0.gateSpanOk) { tag = 'TOO FAR <.055'; color = PAL.accent; }
+      else if (!s0.gateFacingOk) { tag = 'BACK OF HAND'; color = PAL.accent; }
+      else if (!s0.gateKeyboardOk) { tag = 'KBD ZONE ≥.86'; color = PAL.accent; }
 
       setAttr(cursorDwellRing, 'stroke', color);
       setAttr(cursorCore, 'fill', color);
@@ -2226,7 +2589,7 @@
       }
     }
 
-    function drawCell01Rig(s0, s1) {
+    function drawCell01Rig(s0, s1, gesture) {
       const ctx = rigCtx;
       const w = canvasSizes.rigW;
       const hPx = canvasSizes.rigH;
@@ -2253,7 +2616,17 @@
       ctx.setLineDash([]);
       ctx.fillStyle = PAL.accent;
       ctx.font = CAN.font;
-      ctx.fillText('KEYBOARD ZONE', 6, hPx - 5);
+      ctx.fillText('KEYBOARD ZONE ≥' + fmtDot(cfg.keyboardExclusionY), 6, hPx - 5);
+      if (s0.visible && w >= 240) {
+        ctx.fillStyle = (!s0.gateSpanOk || !s0.gateFacingOk || !s0.gateKeyboardOk) ? PAL.accent : PAL.ink3;
+        ctx.textAlign = 'end';
+        ctx.fillText(
+          'span ' + fmtDot(s0.palmSpan) + ' · face ' + fmtSignedDot(s0.palmFacingCos) + ' · y ' + fmtDot(s0.palmY),
+          w - 6,
+          hPx - 5
+        );
+        ctx.textAlign = 'start';
+      }
 
       const rx = cfg.roiMinX * w;
       const ry = cfg.roiMinY * hPx;
@@ -2272,7 +2645,19 @@
       ctx.stroke();
       ctx.fillStyle = PAL.ink3;
       ctx.font = CAN.font;
-      ctx.fillText(cfg.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH: FIST LIFTS' : 'CURSOR AREA', rx + 4, ry + 12);
+      ctx.fillText(
+        cfg.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH
+          ? 'CLUTCH: FIST LIFTS'
+          : ('CURSOR AREA ' + fmtDot(cfg.roiMinX) + '–' + fmtDot(cfg.roiMaxX)),
+        rx + 4,
+        ry + 12
+      );
+
+      if (gesture) {
+        ctx.font = CAN.fontBold;
+        ctx.fillStyle = gesture.active ? PAL.accent : PAL.ink2;
+        ctx.fillText(gesture.badge, 6, 13);
+      }
 
       if (s1.visible) drawSingleHandSkeleton(ctx, s1, w, hPx, false);
       if (s0.visible) drawSingleHandSkeleton(ctx, s0, w, hPx, true);
@@ -2575,24 +2960,35 @@
       ctx.textBaseline = 'alphabetic';
     }
 
-    function updateSecondaryReadouts(s0, events) {
+    function updateSecondaryReadouts(s0, events, gesture) {
       const st = tracker.stats;
       if (tracker.mode === TRACKER_MODE.TOUR) syncRigButtons();
       fpsReadout.textContent = Math.round(st.fps) + ' FPS · ' + st.frameMs.toFixed(1) + 'ms';
-      setGate(gSpan, s0.visible && s0.gateSpanOk ? 'pass' : 'idle');
-      setGate(gFacing, s0.visible ? (s0.gateFacingOk ? 'pass' : 'attention') : 'idle');
-      setGate(gKbd, s0.visible ? (s0.gateKeyboardOk ? 'pass' : 'attention') : 'idle');
+      setGate(
+        gSpan,
+        s0.visible ? (s0.gateSpanOk ? 'pass' : 'attention') : 'idle',
+        s0.visible ? ('SPAN ' + fmtDot(s0.palmSpan) + '≥.055') : 'SPAN ≥.055'
+      );
+      setGate(
+        gFacing,
+        s0.visible ? (s0.gateFacingOk ? 'pass' : 'attention') : 'idle',
+        s0.visible ? ('FACE ' + fmtSignedDot(s0.palmFacingCos) + '≥.22') : 'FACE ≥+.22'
+      );
+      setGate(
+        gKbd,
+        s0.visible ? (s0.gateKeyboardOk ? 'pass' : 'attention') : 'idle',
+        s0.visible ? ('KBD ' + fmtDot(s0.palmY) + '<.86') : 'KBD <.86'
+      );
 
       if (s0.state === HAND_STATE.ARMED) setGate(gArm, 'pass', 'ARMED');
       else if (s0.state === HAND_STATE.COASTING) setGate(gArm, 'attention', 'COAST ' + s0.coastFrames + '/4');
       else if (s0.state === HAND_STATE.ARMING) setGate(gArm, 'attention', 'DWELL ' + String(Math.round(s0.armProgress * 100)).padStart(2, '0') + '%');
-      else setGate(gArm, 'idle', 'IDLE');
+      else setGate(gArm, 'idle', 'IDLE 200ms');
 
-      if (events.twoHandActive) setGate(gGesture, 'attention', '2H ' + events.twoHandScaleRatio.toFixed(2) + '×');
-      else if (s0.pinched) setGate(gGesture, 'attention', s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'PINCH LOCK' : 'PINCH DRAG');
-      else if (s0.vScrollActive) setGate(gGesture, 'attention', 'SCROLL');
-      else if (s0.clutchReleased) setGate(gGesture, 'attention', 'CLUTCH FREE');
-      else setGate(gGesture, 'idle', 'OPEN');
+      if (gesture) {
+        const gTone = gesture.active ? 'attention' : (s0.state === HAND_STATE.ARMED ? 'pass' : 'idle');
+        setGate(gGesture, gTone, gesture.short);
+      }
 
       c2Metric.textContent = 'fc ' + s0.euroFilter.cutoffHz.toFixed(2) + 'Hz · ' + engine.scope.attenuationDb.toFixed(1) + 'dB';
       c2XyReadout.textContent = 'LOCUS ' + s0.cursorU.toFixed(3) + ', ' + s0.cursorV.toFixed(3);

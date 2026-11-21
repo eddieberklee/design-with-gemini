@@ -1267,4 +1267,73 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.equal(webcamSegBtn.getAttribute('aria-pressed'), 'false', 'Webcam button must clear aria-pressed after NotAllowedError');
   assert.equal(synthSegBtn.getAttribute('aria-pressed'), 'true', 'Synth button must be aria-pressed after Studio fallback');
   assert.equal(portalCamBtn.getAttribute('aria-busy'), 'false', 'Portal Cam button must clear aria-busy after NotAllowedError');
+
+  // 6. Verify Cell 09 Tolerances slider syncs Pinch threshold label & Studio gate pills show live tolerances
+  const pinchRange = findFirst(wbCells[8], '.hg-tuner-range');
+  assert.ok(pinchRange, 'Expected tuner range inputs in Cell 09 Tolerances');
+  const gateGroup = findFirst(hgPage, '.hg-gates');
+  assert.ok(gateGroup && gateGroup.children.length === 5, 'Expected 5 live tolerance/gesture gate pills');
+  for (let i = 0; i < 16; i++) {
+    simTimeMs += 16.67;
+    if (rafCallback) rafCallback(simTimeMs);
+  }
+  const spanPillText = findFirst(gateGroup.children[0], '.ui-pill-label').textContent;
+  const facePillText = findFirst(gateGroup.children[1], '.ui-pill-label').textContent;
+  const kbdPillText = findFirst(gateGroup.children[2], '.ui-pill-label').textContent;
+  assert.ok(spanPillText.includes('≥.055'), `Expected span gate tolerance ≥.055, got ${spanPillText}`);
+  assert.ok(facePillText.includes('≥.22'), `Expected face gate tolerance ≥.22, got ${facePillText}`);
+  assert.ok(kbdPillText.includes('<.86'), `Expected kbd gate tolerance <.86, got ${kbdPillText}`);
+
+  // Close Studio back to Main Grid and test Main Tile live tracking, tolerances, mini cursor trail & gestures
+  backBtn.click();
+  while (pendingCallbacks.length) pendingCallbacks.shift()();
+  await new Promise((r) => setTimeout(r, 5));
+  assert.equal(hgPage.hidden, true);
+  assert.equal(mainGrid.hidden, false);
+
+  const miniGesture = findFirst(portalCell, '.hg-mini-gesture');
+  const miniRoiLabel = findFirst(portalCell, '.hg-mini-roi-label');
+  const miniKbdLabel = findFirst(portalCell, '.hg-mini-kbd-label');
+  const miniGatesLabel = findFirst(portalCell, '.hg-mini-gates-label');
+  const miniScreen = findFirst(portalCell, '.hg-mini-screen');
+  const miniTrail = findFirst(portalCell, '.hg-mini-cursor-trail');
+  const miniDot = findFirst(portalCell, '.hg-mini-cursor-dot');
+  const portalStatus = findFirst(portalCell, '.hg-portal-status');
+  assert.equal(miniGesture.textContent, 'STANDBY');
+  assert.equal(miniRoiLabel.textContent, 'ROI .22–.78');
+  assert.equal(miniKbdLabel.textContent, 'KBD <.86');
+  assert.equal(miniGatesLabel.textContent, 'SPAN ≥.055 · FACE ≥+.22');
+  assert.ok(miniScreen, 'Expected mini screen-cursor monitor inset');
+  assert.ok(miniTrail.getAttribute('points').length > 10, 'Expected static standby cursor trail points');
+
+  const portalSimBtn = findByText(portalCell, 'Sim');
+  const dotStartCx = miniDot.getAttribute('cx');
+  portalSimBtn.click();
+  let sawArming = false;
+  let sawOpenPalm = false;
+  let dotMoved = false;
+  for (let i = 0; i < 30; i++) {
+    simTimeMs += 16.67;
+    sandbox.performance.now = () => simTimeMs;
+    if (rafCallback) rafCallback(simTimeMs);
+    if (miniGesture.textContent.startsWith('ARMING')) sawArming = true;
+    if (miniGesture.textContent === 'OPEN PALM') sawOpenPalm = true;
+    if (miniDot.getAttribute('cx') !== dotStartCx) dotMoved = true;
+  }
+  assert.ok(sawArming, 'Expected mini gesture badge to pass through ARMING dwell');
+  assert.ok(sawOpenPalm, `Expected mini gesture badge to reach OPEN PALM, got ${miniGesture.textContent}`);
+  assert.ok(dotMoved, 'Expected mini screen cursor dot to move as simulated hand orbits');
+  assert.ok(portalStatus.textContent.includes('span ') && portalStatus.textContent.includes('≥.055'),
+    `Expected live gate tolerances in tile footer, got: ${portalStatus.textContent}`);
+
+  // Turn Sim off and verify clean STANDBY reset + zero [title] attributes across the entire tree
+  portalSimBtn.click();
+  assert.equal(miniGesture.textContent, 'STANDBY');
+  function countTitleAttrs(node) {
+    if (!node) return 0;
+    let n = node.getAttribute && node.getAttribute('title') !== null ? 1 : 0;
+    (node.children || []).forEach((c) => { n += countTitleAttrs(c); });
+    return n;
+  }
+  assert.equal(countTitleAttrs(body), 0, 'Zero [title] attributes allowed anywhere in Cell 08');
 });
