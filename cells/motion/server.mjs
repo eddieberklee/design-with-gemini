@@ -60,14 +60,15 @@ function getLanIp() {
 }
 
 function generateSelfSignedCert(lanIp) {
-  const dir = path.join(os.tmpdir(), 'dwg-motion-tls');
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  try { fs.chmodSync(dir, 0o700); } catch (_e) {}
-  const keyPath = path.join(dir, 'key.pem');
-  const certPath = path.join(dir, 'cert.pem');
-  const san = `IP:${lanIp},IP:127.0.0.1,DNS:localhost`;
-
+  let dir = '';
   try {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dwg-motion-tls-'));
+    try { fs.chmodSync(dir, 0o700); } catch (_e) {}
+    const keyPath = path.join(dir, 'key.pem');
+    const certPath = path.join(dir, 'cert.pem');
+    try { fs.closeSync(fs.openSync(keyPath, 'w', 0o600)); } catch (_e) {}
+    const san = `IP:${lanIp},IP:127.0.0.1,DNS:localhost`;
+
     execFileSync(
       'openssl',
       [
@@ -81,12 +82,17 @@ function generateSelfSignedCert(lanIp) {
       { stdio: 'ignore' }
     );
     try { fs.chmodSync(keyPath, 0o600); } catch (_e) {}
+    try { fs.chmodSync(certPath, 0o600); } catch (_e) {}
     return {
       key: fs.readFileSync(keyPath),
       cert: fs.readFileSync(certPath)
     };
   } catch (_err) {
     return null;
+  } finally {
+    if (dir) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_e) {}
+    }
   }
 }
 
@@ -122,6 +128,9 @@ function parseWsFrames(buffer, maxPayload = MAX_WS_PAYLOAD) {
     const b1 = buffer[offset + 1];
     const opcode = b0 & 0x0f;
     const masked = (b1 & 0x80) !== 0;
+    if (!masked) {
+      return { frames, remainder: Buffer.alloc(0), error: 'unmasked_client_frame' };
+    }
     let payloadLen = b1 & 0x7f;
     let pos = offset + 2;
 
@@ -191,6 +200,7 @@ export function createBridgeServer(options = {}) {
   };
 
   const rooms = new Map();
+  const wsSockets = new Set();
 
   function getRoom(sid) {
     let room = rooms.get(sid);
@@ -228,6 +238,7 @@ export function createBridgeServer(options = {}) {
   function isAllowedOrigin(origin) {
     if (!origin || origin === 'null') return true; // file:// or direct same-origin request
     if (origin === state.publicHttpsOrigin || origin === state.lanHttpsOrigin) return true;
+    if (state.lanIp && origin === `http://${state.lanIp}:${state.httpPort}`) return true;
     return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
   }
 
@@ -400,16 +411,44 @@ export function createBridgeServer(options = {}) {
           res.end('Not found');
           return;
         }
+        const stream = fs.createReadStream(realPath);
+        stream.on('error', () => {
+          if (!res.headersSent) {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('Internal Server Error');
+          } else {
+            res.destroy();
+          }
+        });
+        res.on('close', () => {
+          stream.destroy();
+        });
         res.writeHead(200, {
           'Content-Type': mime,
           'Cache-Control': 'no-cache'
         });
-        fs.createReadStream(realPath).pipe(res);
+        stream.pipe(res);
       });
     });
   }
 
   function handleUpgrade(req, socket) {
+    const origin = req.headers.origin;
+    if (origin && !isAllowedOrigin(origin)) {
+      try {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n', () => {
+          socket.destroy();
+        });
+        const t = setTimeout(() => {
+          if (!socket.destroyed) socket.destroy();
+        }, 50);
+        if (typeof t.unref === 'function') t.unref();
+      } catch (_e) {
+        socket.destroy();
+      }
+      return;
+    }
+
     const parsedReq = safeParseRequestUrl(req);
     if (!parsedReq || parsedReq.decodedPath !== '/ws') {
       socket.destroy();
@@ -435,6 +474,7 @@ export function createBridgeServer(options = {}) {
       `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
     );
 
+    wsSockets.add(socket);
     const room = getRoom(sid);
     const client = {
       send: (txt) => {
@@ -446,14 +486,21 @@ export function createBridgeServer(options = {}) {
     let rxBuf = Buffer.alloc(0);
     socket.on('data', (chunk) => {
       if (rxBuf.length + chunk.length > MAX_WS_RXBUF) {
-        socket.end(encodeWsFrame(Buffer.from([0x03, 0xf1]), 0x8)); // 1009 Message Too Big
+        if (!socket.destroyed) {
+          socket.end(encodeWsFrame(Buffer.from([0x03, 0xf1]), 0x8)); // 1009 Message Too Big
+        }
         socket.destroy();
         return;
       }
       rxBuf = rxBuf.length ? Buffer.concat([rxBuf, chunk]) : chunk;
       const parsed = parseWsFrames(rxBuf, MAX_WS_PAYLOAD);
       if (parsed.error) {
-        socket.end(encodeWsFrame(Buffer.from([0x03, 0xf1]), 0x8));
+        const closeCode = parsed.error === 'frame_too_large'
+          ? Buffer.from([0x03, 0xf1]) // 1009 Message Too Big
+          : Buffer.from([0x03, 0xea]); // 1002 Protocol Error
+        if (!socket.destroyed) {
+          socket.end(encodeWsFrame(closeCode, 0x8));
+        }
         socket.destroy();
         return;
       }
@@ -462,14 +509,17 @@ export function createBridgeServer(options = {}) {
         if (frame.opcode === 0x1) {
           relayMessage(sid, role, frame.payload.toString('utf8'));
         } else if (frame.opcode === 0x8) {
-          socket.end();
+          if (!socket.destroyed) socket.end();
         } else if (frame.opcode === 0x9) {
-          socket.write(encodeWsFrame(frame.payload, 0xA)); // Preserve binary ping payload verbatim
+          if (!socket.destroyed) {
+            socket.write(encodeWsFrame(frame.payload, 0xA)); // Preserve binary ping payload verbatim
+          }
         }
       }
     });
 
     const cleanup = () => {
+      wsSockets.delete(socket);
       room[role].delete(client);
       if (room.desktop.size === 0 && room.phone.size === 0) rooms.delete(sid);
     };
@@ -505,6 +555,10 @@ export function createBridgeServer(options = {}) {
       return state;
     },
     close: async () => {
+      for (const sock of wsSockets) {
+        try { sock.destroy(); } catch (_e) {}
+      }
+      wsSockets.clear();
       if (typeof httpServer.closeAllConnections === 'function') httpServer.closeAllConnections();
       await new Promise((r) => httpServer.close(() => r()));
       if (httpsServer) {

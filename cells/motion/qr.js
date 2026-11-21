@@ -10,7 +10,7 @@
   'use strict';
 
   // ISO/IEC 18004 Byte-mode QR Encoder (Versions 1-10, Error Correction Level M)
-  // Zero external dependencies; renders crisp SVG or Canvas with 4-module quiet zone.
+  // Zero external dependencies; renders crisp inline SVG with a 4-module quiet zone.
 
   const GF_EXP = new Uint8Array(512);
   const GF_LOG = new Uint8Array(256);

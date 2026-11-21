@@ -1,10 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { createBridgeServer } from './server.mjs';
 
 const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const QR = require('./qr.js');
 const Physics = require('./physics.js');
 const Transport = require('./transport.js');
@@ -185,11 +191,28 @@ test('MotionProcessor clutch mode freezes scale when released and ratchets when 
   assert.equal(proc.scale, lockedScale);
 });
 
-test('SpringDamper converges cleanly to target without oscillation blowup', () => {
+test('SpringDamper converges cleanly to target without oscillation blowup and guards NaN inputs', () => {
   const spring = new Physics.SpringDamper(1.0, 190, 26);
   spring.setTarget(1.75);
   for (let i = 0; i < 180; i++) spring.step(1 / 60);
   assert.ok(Math.abs(spring.value - 1.75) < 0.002);
+
+  const nanSpring = new Physics.SpringDamper(NaN, NaN, NaN);
+  nanSpring.setTarget(1.4);
+  nanSpring.step(1 / 60);
+  assert.ok(Number.isFinite(nanSpring.value), `Expected finite SpringDamper value, got ${nanSpring.value}`);
+
+  const nanFilter = new Physics.GravityFilter(NaN);
+  const g = nanFilter.update(0, 0, 9.81, NaN);
+  assert.ok(Number.isFinite(g.z) && Math.abs(g.z - 1) < 1e-3);
+
+  // Pre-motion calibrate() must defer zero-pose capture until first real accelerometer sample
+  const preCalProc = new Physics.MotionProcessor({ mode: 'tilt', sensitivity: NaN });
+  preCalProc.calibrate();
+  assert.equal(preCalProc.calibrated, false);
+  preCalProc.ingestMotion({ ax: 0, ay: 0, az: 0, gx: 0, gy: 6.93, gz: 6.93, ts: 1000, isIOS: false });
+  assert.ok(Math.abs(preCalProc.zeroPitch - 45) < 0.5, `Expected pre-calibrated zeroPitch ~45°, got ${preCalProc.zeroPitch}`);
+  assert.equal(preCalProc.scale, 1.0);
 });
 
 // ---------- 3. Transport & MQTT Codec Verification ----------
@@ -302,4 +325,338 @@ test('Hardened bridge server blocks traversal/dotfiles/malformed URIs/oversized 
   } finally {
     await bridge.close();
   }
+});
+
+function rawWsUpgrade(port, rawPath, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1', () => {
+      const hdrLines = [
+        `GET ${rawPath} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version: 13'
+      ];
+      for (const [k, v] of Object.entries(headers)) {
+        hdrLines.push(`${k}: ${v}`);
+      }
+      sock.write(hdrLines.join('\r\n') + '\r\n\r\n');
+    });
+    const chunks = [];
+    let closed = false;
+    sock.on('data', (c) => chunks.push(c));
+    sock.on('close', () => {
+      closed = true;
+      const raw = Buffer.concat(chunks).toString('utf8');
+      const m = raw.match(/^HTTP\/1\.1 (\d+)/);
+      resolve({ status: m ? Number(m[1]) : 0, raw, closed });
+    });
+    sock.on('error', (err) => {
+      if (chunks.length > 0) {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const m = raw.match(/^HTTP\/1\.1 (\d+)/);
+        resolve({ status: m ? Number(m[1]) : 0, raw, closed: true });
+      } else {
+        reject(err);
+      }
+    });
+  });
+}
+
+test('Bridge handleUpgrade rejects disallowed Origin (CSWSH 403), rejects unmasked client frames, and cleans up TLS temp dir', async () => {
+  const beforeDirs = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('dwg-motion-tls-')));
+  const bridge = createBridgeServer({ port: 0, httpsPort: 0, enableHttps: true });
+  const st = await bridge.start();
+  try {
+    const afterDirs = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('dwg-motion-tls-') && !beforeDirs.has(n));
+    assert.equal(afterDirs.length, 0, `Expected ephemeral TLS temp dir cleanup, found: ${afterDirs.join(', ')}`);
+
+    // Disallowed cross-site Origin must be rejected with 403 Forbidden + destroyed socket
+    const evilUpgrade = await rawWsUpgrade(st.httpPort, '/ws?s=ABCD1234&role=desktop', {
+      Origin: 'https://evil.example'
+    });
+    assert.equal(evilUpgrade.status, 403);
+    assert.equal(evilUpgrade.closed, true);
+
+    // Allowed localhost Origin upgrades cleanly (101), then unmasked client frame is rejected with 1002 close
+    const unmaskedResult = await new Promise((resolve, reject) => {
+      const sock = net.connect(st.httpPort, '127.0.0.1', () => {
+        sock.write(
+          'GET /ws?s=ABCD1234&role=desktop HTTP/1.1\r\n' +
+          `Host: 127.0.0.1:${st.httpPort}\r\n` +
+          `Origin: http://localhost:${st.httpPort}\r\n` +
+          'Upgrade: websocket\r\n' +
+          'Connection: Upgrade\r\n' +
+          'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n' +
+          'Sec-WebSocket-Version: 13\r\n\r\n'
+        );
+      });
+      let upgraded = false;
+      const rx = [];
+      sock.on('data', (chunk) => {
+        rx.push(chunk);
+        const all = Buffer.concat(rx);
+        if (!upgraded && all.toString('utf8').includes('101 Switching Protocols')) {
+          upgraded = true;
+          // Send an unmasked text frame ("hi" -> [0x81, 0x02, 0x68, 0x69])
+          sock.write(Buffer.from([0x81, 0x02, 0x68, 0x69]));
+        }
+      });
+      sock.on('close', () => resolve({ upgraded, rx: Buffer.concat(rx) }));
+      sock.on('error', reject);
+    });
+    assert.equal(unmaskedResult.upgraded, true);
+
+    // Keep an SSE stream + WS open and verify bridge.close() resolves promptly without hanging
+    const sseAbort = new AbortController();
+    const sseRes = await fetch(`http://127.0.0.1:${st.httpPort}/api/motion/stream?s=ABCD1234&role=desktop`, {
+      signal: sseAbort.signal
+    });
+    assert.equal(sseRes.status, 200);
+    const liveWs = new WebSocket(`ws://127.0.0.1:${st.httpPort}/ws?s=ABCD1234&role=phone`);
+    await new Promise((r) => { liveWs.onopen = r; });
+
+    const closeStart = Date.now();
+    await bridge.close();
+    assert.ok(Date.now() - closeStart < 1500, 'bridge.close() should terminate active SSE and WS connections promptly');
+    sseAbort.abort();
+  } finally {
+    await bridge.close();
+  }
+});
+
+test('Transport cleans up openGuard timer and handles malformed MQTT frames & subscribe errors', () => {
+  let pendingTimers = 0;
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+
+  // Test LocalBridgeTransport openGuard cleanup on close()
+  let wsClosed = false;
+  function FakeSlowWs() {}
+  FakeSlowWs.prototype.close = function () { wsClosed = true; };
+
+  const localTx = new Transport.LocalBridgeTransport({
+    sessionId: 'ABCD1234',
+    role: 'desktop',
+    wsUrl: 'ws://127.0.0.1:9999/ws'
+  });
+  const prevWs = globalThis.WebSocket;
+  globalThis.WebSocket = FakeSlowWs;
+  globalThis.setTimeout = (fn, ms) => {
+    pendingTimers++;
+    return realSetTimeout(fn, ms);
+  };
+  globalThis.clearTimeout = (id) => {
+    if (id) pendingTimers--;
+    return realClearTimeout(id);
+  };
+  try {
+    localTx.start();
+    assert.equal(pendingTimers, 1);
+    localTx.close();
+    assert.equal(pendingTimers, 0, 'LocalBridgeTransport.close() must clear openGuard timer');
+    assert.equal(wsClosed, true);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    globalThis.clearTimeout = realClearTimeout;
+    globalThis.WebSocket = prevWs;
+  }
+
+  // Test MqttRelayTransport closes WS on malformed remaining length and on subscribe send error
+  let activeMockWs = null;
+  let throwOnSub = false;
+  function FakeMqttWs() {
+    this.readyState = 1;
+    this.closed = false;
+    activeMockWs = this;
+  }
+  FakeMqttWs.prototype.send = function (pkt) {
+    if (throwOnSub && pkt[0] === 0x82) {
+      throw new Error('WS closed before subscribe');
+    }
+  };
+  FakeMqttWs.prototype.close = function () {
+    this.closed = true;
+  };
+
+  globalThis.WebSocket = FakeMqttWs;
+  try {
+    const mqtt1 = new Transport.MqttRelayTransport({
+      sessionId: 'ABCD1234',
+      role: 'desktop',
+      brokers: ['wss://example.invalid/mqtt']
+    });
+    mqtt1.start();
+    // Malformed MQTT remaining length (5 continuation bytes)
+    activeMockWs.onmessage({ data: new Uint8Array([0x30, 0x80, 0x80, 0x80, 0x80, 0x01]).buffer });
+    assert.equal(activeMockWs.closed, true, 'MqttRelayTransport must close WS on parsed.error');
+    mqtt1.close();
+
+    throwOnSub = true;
+    const mqtt2 = new Transport.MqttRelayTransport({
+      sessionId: 'ABCD1234',
+      role: 'desktop',
+      brokers: ['wss://example.invalid/mqtt']
+    });
+    mqtt2.start();
+    // CONNACK returnCode = 0 -> triggers subscribe -> throws -> caught cleanly & closes WS
+    assert.doesNotThrow(() => {
+      activeMockWs.onmessage({ data: new Uint8Array([0x20, 0x02, 0x00, 0x00]).buffer });
+    });
+    assert.equal(activeMockWs.closed, true, 'MqttRelayTransport must catch subscribe send error and close WS');
+    mqtt2.close();
+  } finally {
+    globalThis.WebSocket = prevWs;
+  }
+});
+
+test('mountMotionCell survives throwing storage getters and unmounts cleanly without leaking DOM or timers', () => {
+  const uiSource = fs.readFileSync(path.join(__dirname, 'ui.js'), 'utf8');
+
+  function makeNode(tag) {
+    const listeners = {};
+    return {
+      tagName: String(tag).toUpperCase(),
+      className: '',
+      id: '',
+      title: '',
+      value: '',
+      textContent: '',
+      hidden: false,
+      open: false,
+      isConnected: true,
+      dataset: {},
+      style: {
+        setProperty(k, v) { this[k] = v; },
+        removeProperty(k) { delete this[k]; }
+      },
+      classList: {
+        _set: new Set(),
+        add(c) { this._set.add(c); },
+        remove(c) { this._set.delete(c); },
+        toggle(c, f) {
+          const on = f === undefined ? !this._set.has(c) : Boolean(f);
+          if (on) this._set.add(c); else this._set.delete(c);
+        },
+        contains(c) { return this._set.has(c); }
+      },
+      children: [],
+      parentNode: null,
+      get firstChild() { return this.children[0] || null; },
+      appendChild(child) {
+        if (child && typeof child === 'object') {
+          if (child.parentNode) child.parentNode.removeChild(child);
+          child.parentNode = this;
+        }
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) {
+          this.children.splice(idx, 1);
+          child.parentNode = null;
+        }
+        return child;
+      },
+      setAttribute(k, v) { this[k] = String(v); },
+      removeAttribute(k) { delete this[k]; },
+      hasAttribute(k) { return Object.prototype.hasOwnProperty.call(this, k); },
+      addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
+      removeEventListener(type, fn) {
+        if (listeners[type]) listeners[type] = listeners[type].filter((f) => f !== fn);
+      },
+      dispatchEvent(ev) {
+        (listeners[ev.type] || []).slice().forEach((fn) => fn(ev));
+      },
+      showModal() { this.open = true; },
+      close() {
+        this.open = false;
+        this.dispatchEvent({ type: 'close' });
+      },
+      focus() { doc.activeElement = this; },
+      closest(sel) { return sel === '.grid' ? gridEl : null; }
+    };
+  }
+
+  const body = makeNode('body');
+  const gridEl = makeNode('main');
+  gridEl.className = 'grid';
+  const cellEl = makeNode('section');
+  gridEl.appendChild(cellEl);
+  body.appendChild(gridEl);
+
+  const doc = {
+    readyState: 'loading',
+    body,
+    documentElement: { clientWidth: 1280 },
+    activeElement: body,
+    createElement: (t) => makeNode(t),
+    createElementNS: (_ns, t) => makeNode(t),
+    createTextNode: (txt) => ({ nodeType: 3, textContent: String(txt) }),
+    getElementById: () => null,
+    querySelector: (sel) => (sel === '.grid' || sel === 'main.grid' ? gridEl : null),
+    addEventListener: () => {}
+  };
+
+  let activeIntervals = 0;
+  const winListeners = {};
+  const win = {
+    MotionGrid: {
+      QR,
+      Physics,
+      Transport: {
+        ...Transport,
+        createLink: () => ({ start() {}, send() { return true; }, close() {} })
+      }
+    },
+    document: doc,
+    navigator: { clipboard: null },
+    location: { protocol: 'https:', hostname: 'example.com', origin: 'https://example.com', pathname: '/' },
+    innerWidth: 1280,
+    performance: { now: () => 1000 },
+    getComputedStyle: () => ({ paddingLeft: '24px', paddingRight: '24px' }),
+    matchMedia: () => ({ matches: true }),
+    fetch: () => Promise.reject(new Error('offline')),
+    requestAnimationFrame: () => 1,
+    cancelAnimationFrame: () => {},
+    setInterval: () => { activeIntervals++; return activeIntervals + 100; },
+    clearInterval: (id) => { if (id) activeIntervals--; },
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+    addEventListener: (t, fn) => { (winListeners[t] = winListeners[t] || []).push(fn); },
+    removeEventListener: (t, fn) => {
+      if (winListeners[t]) winListeners[t] = winListeners[t].filter((f) => f !== fn);
+    }
+  };
+  Object.defineProperty(win, 'sessionStorage', {
+    get() { throw new Error('SecurityError: sessionStorage blocked'); }
+  });
+  Object.defineProperty(win, 'localStorage', {
+    get() { throw new Error('SecurityError: localStorage blocked'); }
+  });
+  win.window = win;
+  win.globalThis = win;
+
+  vm.runInNewContext(uiSource, win);
+
+  const unmount1 = win.MotionGrid.UI.mountMotionCell(cellEl);
+  assert.equal(typeof unmount1, 'function');
+  assert.equal(activeIntervals, 2);
+  // body has [gridEl, hud, dialog]
+  assert.equal(body.children.length, 3);
+
+  // Mounting a second time without manual unmount must auto-clean prior HUD, dialog, and intervals
+  const unmount2 = win.MotionGrid.UI.mountMotionCell(cellEl);
+  assert.equal(activeIntervals, 2);
+  assert.equal(body.children.length, 3);
+
+  // Explicit unmount removes HUD, dialog, intervals, and window listeners
+  unmount2();
+  assert.equal(activeIntervals, 0);
+  assert.equal(body.children.length, 1);
+  assert.equal((winListeners.keydown || []).length, 0);
+  assert.equal((winListeners.resize || []).length, 0);
+  assert.equal((winListeners.beforeunload || []).length, 0);
 });

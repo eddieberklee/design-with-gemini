@@ -24,10 +24,11 @@
    * Shortest signed angular difference (a - b) wrapped into [-180, +180] degrees.
    */
   function wrapAngleDiffDeg(a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
     let d = (a - b) % 360;
     if (d > 180) d -= 360;
     if (d < -180) d += 360;
-    return d;
+    return d === 0 ? 0 : d;
   }
 
   /**
@@ -36,7 +37,7 @@
    * to device orientation and iOS/Android sign conventions.
    */
   function GravityFilter(alpha) {
-    this.alpha = typeof alpha === 'number' ? alpha : 0.86;
+    this.alpha = Number.isFinite(alpha) ? clamp(alpha, 0, 1) : 0.86;
     this.initialized = false;
     this.gx = 0;
     this.gy = 0;
@@ -64,7 +65,7 @@
       this.gz = z;
       this.initialized = true;
     } else {
-      const a = typeof overrideAlpha === 'number' ? overrideAlpha : this.alpha;
+      const a = Number.isFinite(overrideAlpha) ? clamp(overrideAlpha, 0, 1) : this.alpha;
       this.gx = a * this.gx + (1 - a) * x;
       this.gy = a * this.gy + (1 - a) * y;
       this.gz = a * this.gz + (1 - a) * z;
@@ -111,8 +112,9 @@
    */
   function MotionProcessor(opts) {
     const cfg = opts || {};
-    this.mode = cfg.mode || 'all';
-    this.sensitivity = typeof cfg.sensitivity === 'number' ? cfg.sensitivity : 1.0;
+    const allowedModes = ['all', 'tilt', 'lift', 'pull'];
+    this.mode = allowedModes.indexOf(cfg.mode) >= 0 ? cfg.mode : 'all';
+    this.sensitivity = Number.isFinite(cfg.sensitivity) && cfg.sensitivity >= 0 ? cfg.sensitivity : 1.0;
     this.clutchRequired = Boolean(cfg.clutchRequired);
     this.clutchActive = false;
 
@@ -183,17 +185,22 @@
   };
 
   MotionProcessor.prototype.calibrate = function () {
-    this.zeroRoll = this.telemetry.roll;
-    this.zeroPitch = this.telemetry.pitch;
     this.baseScale = this.scale;
     this.impulseOffset = 0;
     this.velLift = 0;
     this.velPull = 0;
-    this.calibrated = true;
+    if (this.gravity.initialized) {
+      this.zeroRoll = this.telemetry.roll;
+      this.zeroPitch = this.telemetry.pitch;
+      this.calibrated = true;
+    } else {
+      // Defer neutral pose capture until first real accelerometer sample arrives
+      this.calibrated = false;
+    }
   };
 
   MotionProcessor.prototype.resetScale = function (targetScale) {
-    const s = clamp(typeof targetScale === 'number' ? targetScale : DEFAULT_SCALE, MIN_SCALE, MAX_SCALE);
+    const s = clamp(Number.isFinite(targetScale) ? targetScale : DEFAULT_SCALE, MIN_SCALE, MAX_SCALE);
     this.baseScale = s;
     this.scale = s;
     this.impulseOffset = 0;
@@ -369,8 +376,8 @@
     this.value = Number.isFinite(initial) ? initial : DEFAULT_SCALE;
     this.target = this.value;
     this.velocity = 0;
-    this.stiffness = typeof stiffness === 'number' ? stiffness : 180;
-    this.damping = typeof damping === 'number' ? damping : 26;
+    this.stiffness = Number.isFinite(stiffness) && stiffness > 0 ? stiffness : 180;
+    this.damping = Number.isFinite(damping) && damping >= 0 ? damping : 26;
   }
 
   SpringDamper.prototype.setTarget = function (t) {
@@ -400,10 +407,11 @@
   };
 
   function scaleToCellWidth(scale, baseCellWidth, maxContainerWidth) {
-    const base = clamp(baseCellWidth || 420, 180, 600);
-    const maxW = Math.max(MIN_CELL_W, Math.min(MAX_CELL_W, maxContainerWidth || MAX_CELL_W));
-    const raw = base * clamp(scale, MIN_SCALE, MAX_SCALE);
-    return Math.round(clamp(raw, MIN_CELL_W, maxW));
+    const base = clamp(Number.isFinite(baseCellWidth) && baseCellWidth > 0 ? baseCellWidth : 420, 180, 600);
+    const maxIn = Number.isFinite(maxContainerWidth) && maxContainerWidth > 0 ? maxContainerWidth : MAX_CELL_W;
+    const maxW = Math.max(MIN_CELL_W, Math.min(MAX_CELL_W, maxIn));
+    const s = Number.isFinite(scale) ? clamp(scale, MIN_SCALE, MAX_SCALE) : DEFAULT_SCALE;
+    return Math.round(clamp(base * s, MIN_CELL_W, maxW));
   }
 
   return {

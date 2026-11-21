@@ -318,10 +318,12 @@
     });
   });
 
+  let zeroBtnTimer = 0;
   refs.zeroBtn.addEventListener('click', function () {
     processor.calibrate();
     refs.zeroBtn.textContent = 'Zeroed ✓';
-    setTimeout(function () { refs.zeroBtn.textContent = 'Zero Pose'; }, 900);
+    clearTimeout(zeroBtnTimer);
+    zeroBtnTimer = setTimeout(function () { refs.zeroBtn.textContent = 'Zero Pose'; }, 900);
   });
 
   refs.clutchBtn.addEventListener('click', function () {
@@ -351,6 +353,7 @@
   refs.dialPad.addEventListener('pointerdown', onClutchDown);
   window.addEventListener('pointerup', onClutchUp);
   window.addEventListener('pointercancel', onClutchUp);
+  window.addEventListener('blur', onClutchUp);
 
   refs.layoutBtn.addEventListener('click', function () {
     const next = desktopState.layout === 'reflow' ? 'fixed3' : 'reflow';
@@ -369,12 +372,20 @@
   });
 
   // Manual touch slider fallback (also dismisses permission gate so dial readout is visible)
+  function clearManualScrubbing() {
+    manualScrubbing = false;
+  }
   refs.slider.addEventListener('pointerdown', function () {
     manualScrubbing = true;
     refs.gate.hidden = true;
   });
-  refs.slider.addEventListener('pointerup', function () { manualScrubbing = false; });
-  refs.slider.addEventListener('change', function () { manualScrubbing = false; });
+  refs.slider.addEventListener('pointerup', clearManualScrubbing);
+  refs.slider.addEventListener('pointercancel', clearManualScrubbing);
+  refs.slider.addEventListener('change', clearManualScrubbing);
+  refs.slider.addEventListener('blur', clearManualScrubbing);
+  window.addEventListener('pointerup', clearManualScrubbing);
+  window.addEventListener('pointercancel', clearManualScrubbing);
+  window.addEventListener('blur', clearManualScrubbing);
   refs.slider.addEventListener('input', function (ev) {
     refs.gate.hidden = true;
     const nextScale = Number(ev.target.value) / 100;

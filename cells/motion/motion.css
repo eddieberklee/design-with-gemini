@@ -8,7 +8,7 @@
 
 /* Opt-in grid sizing override (inactive at default 1.00x so initial page is pixel-identical) */
 .grid.is-motion-controlled {
-  max-width: min(96vw, 1800px);
+  max-width: min(92vw, 1600px);
   justify-content: center;
   transition: gap 180ms ease;
 }
@@ -40,7 +40,7 @@
 
   --mg-ink: #141413;
   --mg-ink-2: #525250;
-  --mg-ink-3: #8a8a86;
+  --mg-ink-3: #666661;
 
   --mg-accent: #d94f1e;
   --mg-accent-soft: #fff1eb;
@@ -71,18 +71,6 @@
 .mg-mono {
   font-family: var(--mg-mono);
   font-variant-numeric: tabular-nums;
-}
-
-.mg-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 /* ==========================================================================
@@ -244,6 +232,8 @@
   position: relative;
   width: 100%;
   max-width: 168px;
+  min-height: 0;
+  max-height: calc(100% - 16px);
   aspect-ratio: 1 / 1;
   background: #ffffff;
   border: 1px solid var(--mg-border-strong);
@@ -252,6 +242,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
   cursor: pointer;
   transition: border-color var(--mg-ease), transform var(--mg-ease);
 }
@@ -611,6 +602,10 @@
   .mg-size-big { font-size: 14px; }
   .mg-ctrl-col { gap: 5px; }
   .mg-readout-card { padding: 5px 6px; gap: 2px; }
+}
+
+@container mg-card (max-width: 320px) {
+  .mg-qr-setup-sub { display: none; }
 }
 
 @container mg-card (max-width: 300px) {

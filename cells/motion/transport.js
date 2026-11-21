@@ -21,6 +21,7 @@
 
   const TOPIC_PREFIX = 'dwg-motion-v1/';
   const SESSION_ID_RE = /^[A-Z0-9]{6,12}$/;
+  const MAX_MQTT_RXBUF = 65536;
 
   function isValidSessionId(sid) {
     return typeof sid === 'string' && SESSION_ID_RE.test(sid);
@@ -152,6 +153,9 @@
       if (rem.error) {
         return { packets: packets, remainder: new Uint8Array(0), error: rem.error };
       }
+      if (rem.length > MAX_MQTT_RXBUF) {
+        return { packets: packets, remainder: new Uint8Array(0), error: 'packet_too_large' };
+      }
       const pktEnd = rem.nextOffset + rem.length;
       if (pktEnd > buffer.length) break;
 
@@ -244,7 +248,7 @@
       try {
         ws.send(buildConnectPacket(cid, 25));
       } catch (_e) {
-        ws.close();
+        try { ws.close(); } catch (_e2) {}
       }
     };
 
@@ -252,26 +256,47 @@
       if (self.ws !== ws || self.closed) return;
       const chunk = ev.data instanceof ArrayBuffer
         ? new Uint8Array(ev.data)
-        : new Uint8Array(0);
+        : ArrayBuffer.isView(ev.data)
+          ? new Uint8Array(ev.data.buffer, ev.data.byteOffset, ev.data.byteLength)
+          : new Uint8Array(0);
       if (chunk.length === 0) return;
+
+      if (self.rxBuf.length + chunk.length > MAX_MQTT_RXBUF) {
+        self.rxBuf = new Uint8Array(0);
+        try { ws.close(); } catch (_e) {}
+        return;
+      }
 
       self.rxBuf = self.rxBuf.length ? concatBytes([self.rxBuf, chunk]) : chunk;
       const parsed = parseMqttPackets(self.rxBuf);
+      if (parsed.error) {
+        self.rxBuf = new Uint8Array(0);
+        try { ws.close(); } catch (_e) {}
+        return;
+      }
       self.rxBuf = parsed.remainder;
 
       for (let i = 0; i < parsed.packets.length; i++) {
         const pkt = parsed.packets[i];
         if (pkt.type === 'connack') {
           if (pkt.returnCode === 0) {
-            ws.send(buildSubscribePacket(1, self.subTopic));
+            try {
+              ws.send(buildSubscribePacket(1, self.subTopic));
+            } catch (_e) {
+              try { ws.close(); } catch (_e2) {}
+              return;
+            }
           } else {
-            ws.close();
+            try { ws.close(); } catch (_e) {}
+            return;
           }
         } else if (pkt.type === 'suback') {
           clearTimeout(self.connectTimer);
+          self.connectTimer = null;
           self.ready = true;
           self.retryDelay = 800;
           self.onStatus('ready', { transport: 'mqtt', broker: url });
+          if (self.pingTimer) clearInterval(self.pingTimer);
           self.pingTimer = setInterval(function () {
             if (self.ws === ws && ws.readyState === 1) {
               try { ws.send(buildPingReqPacket()); } catch (_e) {}
@@ -356,6 +381,7 @@
     this.useHttpFallback = false;
     this.wsFailures = 0;
     this.httpFailures = 0;
+    this.openGuard = null;
     this.reconnectTimer = null;
   }
 
@@ -370,6 +396,7 @@
 
   LocalBridgeTransport.prototype._connectWs = function () {
     if (this.closed) return;
+    if (this.openGuard) { clearTimeout(this.openGuard); this.openGuard = null; }
     this.onStatus('connecting', { transport: 'local-ws', url: this.wsUrl });
     let ws;
     try {
@@ -380,14 +407,16 @@
     }
     this.ws = ws;
     const self = this;
-    const openGuard = setTimeout(function () {
+    const guard = setTimeout(function () {
+      if (self.openGuard === guard) self.openGuard = null;
       if (!self.ready && self.ws === ws) {
         try { ws.close(); } catch (_e) {}
       }
     }, 3500);
+    this.openGuard = guard;
 
     ws.onopen = function () {
-      clearTimeout(openGuard);
+      if (self.openGuard === guard) { clearTimeout(guard); self.openGuard = null; }
       if (self.ws !== ws || self.closed) return;
       self.ready = true;
       self.wsFailures = 0;
@@ -407,7 +436,7 @@
     ws.onerror = function () {};
 
     ws.onclose = function () {
-      clearTimeout(openGuard);
+      if (self.openGuard === guard) { clearTimeout(guard); self.openGuard = null; }
       if (self.ws !== ws) return;
       self.ready = false;
       if (!self.closed) self._onWsFail();
@@ -505,6 +534,7 @@
   LocalBridgeTransport.prototype.close = function () {
     this.closed = true;
     this.ready = false;
+    if (this.openGuard) { clearTimeout(this.openGuard); this.openGuard = null; }
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.ws) { try { this.ws.close(); } catch (_e) {} this.ws = null; }
     if (this.es) { try { this.es.close(); } catch (_e) {} this.es = null; }

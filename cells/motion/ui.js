@@ -52,34 +52,77 @@
     while (node.firstChild) node.removeChild(node.firstChild);
   }
 
-  function safeStorageGet(store, key) {
-    try { return store.getItem(key) || ''; } catch (_e) { return ''; }
+  function safeStorageGet(storeName, key) {
+    try {
+      const store = root[storeName];
+      return (store && store.getItem(key)) || '';
+    } catch (_e) {
+      return '';
+    }
   }
 
-  function safeStorageSet(store, key, val) {
+  function safeStorageSet(storeName, key, val) {
     try {
+      const store = root[storeName];
+      if (!store) return;
       if (!val) store.removeItem(key);
       else store.setItem(key, val);
     } catch (_e) {}
   }
 
-  function copyText(text) {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      return navigator.clipboard.writeText(text);
-    }
-    return new Promise(function (resolve) {
+  function copyTextFallback(text, containerEl) {
+    return new Promise(function (resolve, reject) {
+      let ta = null;
       try {
-        const ta = document.createElement('textarea');
+        const host = (containerEl && containerEl.open ? containerEl : null) ||
+          (typeof document.querySelector === 'function' ? document.querySelector('dialog[open]') : null) ||
+          document.body;
+        if (!host) {
+          reject(new Error('No DOM container for clipboard fallback'));
+          return;
+        }
+        ta = document.createElement('textarea');
         ta.value = text;
+        ta.setAttribute('readonly', '');
         ta.style.position = 'fixed';
         ta.style.opacity = '0';
-        document.body.appendChild(ta);
+        ta.style.pointerEvents = 'none';
+        host.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch (_e) {}
-      resolve();
+        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+        if (!ok) {
+          reject(new Error('Clipboard copy command declined'));
+          return;
+        }
+        resolve();
+      } catch (err) {
+        reject(err);
+      } finally {
+        if (ta && ta.parentNode) {
+          try { ta.parentNode.removeChild(ta); } catch (_e) {}
+        }
+      }
     });
+  }
+
+  function copyText(text, containerEl) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return navigator.clipboard.writeText(text).catch(function () {
+        return copyTextFallback(text, containerEl);
+      });
+    }
+    return copyTextFallback(text, containerEl);
+  }
+
+  function prefersReducedMotion() {
+    try {
+      return Boolean(
+        typeof root.matchMedia === 'function' &&
+        root.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
+    } catch (_e) {
+      return false;
+    }
   }
 
   function isLocalhostHost(hostname) {
@@ -123,15 +166,19 @@
   }
 
   function mountMotionCell(rootEl) {
-    if (!rootEl || !QR || !Physics || !Transport) return;
+    if (!rootEl || !QR || !Physics || !Transport) return undefined;
 
-    const gridEl = rootEl.closest('.grid') || document.querySelector('.grid');
-    if (!gridEl) return;
+    if (typeof rootEl._mgUnmount === 'function') {
+      rootEl._mgUnmount();
+    }
 
-    let sessionId = safeStorageGet(window.sessionStorage, STORAGE_SESSION_KEY);
+    const gridEl = (typeof rootEl.closest === 'function' && rootEl.closest('.grid')) || document.querySelector('.grid');
+    if (!gridEl) return undefined;
+
+    let sessionId = safeStorageGet('sessionStorage', STORAGE_SESSION_KEY);
     if (!Transport.isValidSessionId(sessionId)) {
       sessionId = Transport.generateSessionId(8);
-      safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, sessionId);
+      safeStorageSet('sessionStorage', STORAGE_SESSION_KEY, sessionId);
     }
 
     const state = {
@@ -166,7 +213,7 @@
       phoneUrlIsHttps: false,
       qrUrl: '',
       qrError: '',
-      customUrlInput: safeStorageGet(window.localStorage, STORAGE_BASE_URL_KEY),
+      customUrlInput: safeStorageGet('localStorage', STORAGE_BASE_URL_KEY),
       bridgeConfig: null
     };
 
@@ -178,6 +225,12 @@
     let feedbackTimer = 0;
     let bridgePollTimer = 0;
     let bridgePollAttempts = 0;
+    let probeSeq = 0;
+    let activeProbeController = null;
+    let activeProbeTimer = 0;
+    let copyFeedbackTimer = 0;
+    let lastDialogTrigger = null;
+    let unmounted = false;
 
     // Measure baseline 3-column cell width from original index.html geometry (never inflated by .is-motion-controlled)
     function measureBaseCellWidth() {
@@ -200,7 +253,7 @@
       const bodyStyle = window.getComputedStyle(document.body);
       const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
       const docW = document.documentElement.clientWidth || window.innerWidth;
-      const avail = Math.max(240, Math.min(docW - padX, docW * 0.96, 1800));
+      const avail = Math.max(240, Math.min(docW - padX, docW * 0.92, 1600));
       if (state.layout === 'fixed3') {
         const fixedCols = docW >= 768 ? 3 : 2;
         const gap = 4;
@@ -243,17 +296,21 @@
     }
 
     function ensureSpringRunning() {
-      if (rafId) return;
+      if (unmounted || rafId) return;
       lastRafTs = performance.now();
       rafId = requestAnimationFrame(tickSpring);
     }
 
     function tickSpring(now) {
+      if (unmounted) {
+        rafId = 0;
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - lastRafTs) / 1000));
       lastRafTs = now;
       const moving = spring.step(dt);
       applyGridSize(spring.value, state.phoneConnected || Math.abs(spring.target - 1.0) >= 0.008);
-      if (moving) {
+      if (moving && !unmounted) {
         rafId = requestAnimationFrame(tickSpring);
       } else {
         rafId = 0;
@@ -262,7 +319,11 @@
 
     function setTargetScale(target, immediate) {
       const clamped = Physics.clamp(target, Physics.MIN_SCALE, Physics.MAX_SCALE);
-      if (immediate) {
+      if (immediate || prefersReducedMotion()) {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
         spring.snap(clamped);
         applyGridSize(clamped, Math.abs(clamped - 1.0) >= 0.008 || state.phoneConnected);
       } else {
@@ -276,8 +337,7 @@
       state.pitch = 0;
       state.liftA = 0;
       state.pullA = 0;
-      spring.setTarget(Physics.DEFAULT_SCALE);
-      ensureSpringRunning();
+      setTargetScale(Physics.DEFAULT_SCALE, false);
       sendToPhone({ t: 'cmd', cmd: 'reset' });
     }
 
@@ -351,6 +411,19 @@
     }
 
     function probeLocalBridge() {
+      if (unmounted) return;
+      const mySeq = ++probeSeq;
+      clearTimeout(bridgePollTimer);
+      bridgePollTimer = 0;
+      if (activeProbeTimer) {
+        clearTimeout(activeProbeTimer);
+        activeProbeTimer = 0;
+      }
+      if (activeProbeController) {
+        try { activeProbeController.abort(); } catch (_e) {}
+        activeProbeController = null;
+      }
+
       const candidates = [];
       if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
         candidates.push(window.location.origin + '/api/motion-config');
@@ -361,10 +434,18 @@
 
       let idx = 0;
       function tryNext() {
-        if (idx >= candidates.length) return;
+        if (unmounted || mySeq !== probeSeq || idx >= candidates.length) return;
         const url = candidates[idx++];
         const controller = typeof AbortController === 'function' ? new AbortController() : null;
-        const timer = setTimeout(function () { if (controller) controller.abort(); }, 1800);
+        activeProbeController = controller;
+        const timer = setTimeout(function () {
+          if (activeProbeTimer === timer) activeProbeTimer = 0;
+          if (controller) {
+            try { controller.abort(); } catch (_e) {}
+          }
+        }, 1800);
+        activeProbeTimer = timer;
+
         fetch(url, {
           method: 'GET',
           signal: controller ? controller.signal : undefined,
@@ -372,11 +453,15 @@
         })
           .then(function (res) {
             clearTimeout(timer);
+            if (activeProbeTimer === timer) activeProbeTimer = 0;
+            if (activeProbeController === controller) activeProbeController = null;
+            if (unmounted || mySeq !== probeSeq) return null;
             if (!res.ok) throw new Error('HTTP ' + res.status);
             return res.json();
           })
           .then(function (cfg) {
-            if (cfg && cfg.ok) {
+            if (unmounted || mySeq !== probeSeq || !cfg) return;
+            if (cfg.ok) {
               const prevUrl = state.bridgeConfig && state.bridgeConfig.phoneBaseUrl;
               const prevWs = state.bridgeConfig && state.bridgeConfig.desktopWsUrl;
               state.bridgeConfig = cfg;
@@ -387,7 +472,7 @@
                 connectTransport();
               }
               // If ngrok tunnel is still starting up, re-probe briefly to upgrade QR from LAN self-signed to ngrok
-              if (cfg.tunnelPending && bridgePollAttempts < 6) {
+              if (cfg.tunnelPending && bridgePollAttempts < 6 && !unmounted) {
                 bridgePollAttempts++;
                 clearTimeout(bridgePollTimer);
                 bridgePollTimer = setTimeout(probeLocalBridge, 1200);
@@ -398,6 +483,9 @@
           })
           .catch(function () {
             clearTimeout(timer);
+            if (activeProbeTimer === timer) activeProbeTimer = 0;
+            if (activeProbeController === controller) activeProbeController = null;
+            if (unmounted || mySeq !== probeSeq) return;
             tryNext();
           });
       }
@@ -440,9 +528,7 @@
       state.lastPhoneMs = now;
       if (!state.phoneConnected) {
         state.phoneConnected = true;
-        if (refs.dialog && refs.dialog.open) {
-          refs.dialog.close();
-        }
+        closeStudio();
         sendFeedbackToPhone();
       }
 
@@ -649,7 +735,7 @@
       type: 'button',
       className: 'mg-pill',
       title: 'Open Pairing Studio & QR code',
-      onClick: function () { openStudio(); }
+      onClick: function (ev) { openStudio(ev.currentTarget); }
     }, [
       el('span', { className: 'mg-dot', 'aria-hidden': 'true' }),
       refs.statusText
@@ -665,8 +751,9 @@
         el('button', {
           type: 'button',
           className: 'mg-icon-btn',
+          'aria-label': 'Open large QR & setup studio',
           title: 'Open large QR & setup studio',
-          onClick: function () { openStudio(); }
+          onClick: function (ev) { openStudio(ev.currentTarget); }
         }, [
           el('span', { className: 'mg-expand-label', textContent: 'QR ' }),
           '↗'
@@ -677,7 +764,8 @@
     refs.cardQrFrame = el('button', {
       type: 'button',
       className: 'mg-qr-frame',
-      onClick: function () { openStudio(); }
+      'aria-label': 'Open iPhone QR Pairing Studio',
+      onClick: function (ev) { openStudio(ev.currentTarget); }
     });
     refs.cardQrCaption = el('div', { className: 'mg-qr-caption', textContent: 'Loading QR…' });
 
@@ -843,24 +931,67 @@
     ]);
     document.body.appendChild(refs.hud);
 
+    function applyCustomUrl() {
+      const val = refs.dlgUrlInput.value.trim();
+      if (!val) {
+        state.customUrlInput = '';
+        safeStorageSet('localStorage', STORAGE_BASE_URL_KEY, '');
+        recomputeQrUrl();
+        return;
+      }
+      const norm = normalizePhoneBaseUrl(val);
+      if (!norm) {
+        refs.dlgErr.textContent = 'Enter a valid https:// URL.';
+        return;
+      }
+      const testQr = buildQrTargetUrl(norm, state.sessionId, 'mqtt');
+      if (utf8ByteLength(testQr) > MAX_QR_URL_BYTES) {
+        refs.dlgErr.textContent = 'URL too long for QR (max 213 bytes).';
+        return;
+      }
+      state.customUrlInput = val;
+      safeStorageSet('localStorage', STORAGE_BASE_URL_KEY, val);
+      recomputeQrUrl();
+    }
+
     refs.dlgQrBox = el('div', { className: 'mg-dlg-qr-box' });
     refs.dlgUrlText = el('div', { className: 'mg-dlg-url', textContent: '' });
     refs.dlgErr = el('div', { className: 'mg-dlg-err', textContent: '' });
     refs.dlgUrlInput = el('input', {
       type: 'url',
       className: 'mg-input',
+      'aria-label': 'Custom HTTPS phone controller URL',
       placeholder: 'https://your-host.example/cells/motion/phone.html',
-      value: state.customUrlInput
+      value: state.customUrlInput,
+      onKeydown: function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          applyCustomUrl();
+        }
+      }
     });
     refs.dlgCopyBtn = el('button', {
       type: 'button',
       className: 'mg-btn mg-btn--sm',
       textContent: 'Copy',
       onClick: function () {
-        copyText('node cells/motion/server.mjs').then(function () {
-          refs.dlgCopyBtn.textContent = 'Copied!';
-          setTimeout(function () { refs.dlgCopyBtn.textContent = 'Copy'; }, 1500);
-        });
+        copyText('node cells/motion/server.mjs', refs.dialog)
+          .then(function () {
+            if (unmounted) return;
+            refs.dlgCopyBtn.textContent = 'Copied!';
+            clearTimeout(copyFeedbackTimer);
+            copyFeedbackTimer = setTimeout(function () {
+              if (!unmounted) refs.dlgCopyBtn.textContent = 'Copy';
+            }, 1500);
+          })
+          .catch(function () {
+            if (unmounted) return;
+            refs.dlgCopyBtn.textContent = 'Copy failed';
+            clearTimeout(copyFeedbackTimer);
+            copyFeedbackTimer = setTimeout(function () {
+              if (!unmounted) refs.dlgCopyBtn.textContent = 'Copy';
+            }, 1500);
+          });
       }
     });
 
@@ -871,7 +1002,7 @@
           type: 'button',
           className: 'mg-btn mg-btn--sm',
           textContent: 'Close',
-          onClick: function () { refs.dialog.close(); }
+          onClick: function () { closeStudio(); }
         })
       ]),
       el('div', { className: 'mg-dlg-body' }, [
@@ -886,7 +1017,7 @@
               textContent: 'New Session',
               onClick: function () {
                 state.sessionId = Transport.generateSessionId(8);
-                safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, state.sessionId);
+                safeStorageSet('sessionStorage', STORAGE_SESSION_KEY, state.sessionId);
                 state.phoneConnected = false;
                 applyGridSize(state.scale, false);
                 recomputeQrUrl();
@@ -929,28 +1060,7 @@
                 type: 'button',
                 className: 'mg-btn mg-btn--dark',
                 textContent: 'Set URL',
-                onClick: function () {
-                  const val = refs.dlgUrlInput.value.trim();
-                  if (!val) {
-                    state.customUrlInput = '';
-                    safeStorageSet(window.localStorage, STORAGE_BASE_URL_KEY, '');
-                    recomputeQrUrl();
-                    return;
-                  }
-                  const norm = normalizePhoneBaseUrl(val);
-                  if (!norm) {
-                    refs.dlgErr.textContent = 'Enter a valid https:// URL.';
-                    return;
-                  }
-                  const testQr = buildQrTargetUrl(norm, state.sessionId, 'mqtt');
-                  if (utf8ByteLength(testQr) > MAX_QR_URL_BYTES) {
-                    refs.dlgErr.textContent = 'URL too long for QR (max 213 bytes).';
-                    return;
-                  }
-                  state.customUrlInput = val;
-                  safeStorageSet(window.localStorage, STORAGE_BASE_URL_KEY, val);
-                  recomputeQrUrl();
-                }
+                onClick: applyCustomUrl
               })
             ]),
             refs.dlgErr
@@ -965,12 +1075,26 @@
         ])
       ])
     ]);
+
+    function restoreDialogFocus() {
+      const target = lastDialogTrigger;
+      lastDialogTrigger = null;
+      if (!unmounted && target && target.isConnected !== false && typeof target.focus === 'function') {
+        try { target.focus(); } catch (_e) {}
+      }
+    }
+
+    refs.dialog.addEventListener('close', restoreDialogFocus);
     refs.dialog.addEventListener('click', function (ev) {
-      if (ev.target === refs.dialog) refs.dialog.close();
+      if (ev.target === refs.dialog) closeStudio();
     });
     document.body.appendChild(refs.dialog);
 
-    function openStudio() {
+    function openStudio(triggerEl) {
+      const candidate = triggerEl || document.activeElement;
+      if (candidate && candidate !== document.body && typeof candidate.focus === 'function') {
+        lastDialogTrigger = candidate;
+      }
       bridgePollAttempts = 0;
       probeLocalBridge();
       if (typeof refs.dialog.showModal === 'function') {
@@ -980,32 +1104,111 @@
       }
     }
 
-    window.addEventListener('keydown', function (ev) {
+    function closeStudio() {
+      if (!refs.dialog) return;
+      if (typeof refs.dialog.close === 'function') {
+        if (refs.dialog.open) refs.dialog.close();
+      } else if (refs.dialog.hasAttribute('open')) {
+        refs.dialog.removeAttribute('open');
+        restoreDialogFocus();
+      }
+    }
+
+    function onWindowKeydown(ev) {
+      if (unmounted || ev.defaultPrevented) return;
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
-      const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
+      const target = ev.target;
+      if (target && (target.isContentEditable || (typeof target.closest === 'function' && target.closest('[contenteditable=""], [contenteditable="true"]')))) {
+        return;
+      }
+      const tag = target && target.tagName ? target.tagName.toLowerCase() : '';
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (gridEl.hidden || (typeof gridEl.closest === 'function' && gridEl.closest('[hidden], [inert]'))) return;
+      const mainGrid = typeof document.querySelector === 'function' ? document.querySelector('main.grid') : null;
+      if (mainGrid && mainGrid.hidden) return;
+      if (typeof document.querySelector === 'function' &&
+          document.querySelector('dialog[open], [data-expanded="true"], .cell-acoustic.is-expanded, .lg-is-expanded')) {
+        return;
+      }
       if (ev.key === 'r' || ev.key === 'R') {
         resetToDefault();
       }
-    });
+    }
 
-    window.addEventListener('resize', function () {
+    function onWindowResize() {
+      if (unmounted) return;
       measureBaseCellWidth();
       if (state.controlled) applyGridSize(state.scale, true);
       else updateLiveDom();
-    });
+    }
 
-    window.addEventListener('beforeunload', function () {
+    function stopRuntime() {
+      probeSeq++;
       clearInterval(hzTimer);
+      hzTimer = 0;
       clearInterval(feedbackTimer);
+      feedbackTimer = 0;
       clearTimeout(bridgePollTimer);
-      if (link) link.close();
-    });
+      bridgePollTimer = 0;
+      clearTimeout(activeProbeTimer);
+      activeProbeTimer = 0;
+      clearTimeout(copyFeedbackTimer);
+      copyFeedbackTimer = 0;
+      if (activeProbeController) {
+        try { activeProbeController.abort(); } catch (_e) {}
+        activeProbeController = null;
+      }
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      if (link) {
+        link.close();
+        link = null;
+      }
+    }
+
+    function onBeforeUnload() {
+      stopRuntime();
+    }
+
+    window.addEventListener('keydown', onWindowKeydown);
+    window.addEventListener('resize', onWindowResize);
+    window.addEventListener('beforeunload', onBeforeUnload);
+
+    function unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      stopRuntime();
+      window.removeEventListener('keydown', onWindowKeydown);
+      window.removeEventListener('resize', onWindowResize);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      if (refs.dialog) {
+        try {
+          if (refs.dialog.open && typeof refs.dialog.close === 'function') refs.dialog.close();
+        } catch (_e) {}
+        if (refs.dialog.parentNode) refs.dialog.parentNode.removeChild(refs.dialog);
+      }
+      if (refs.hud && refs.hud.parentNode) {
+        refs.hud.parentNode.removeChild(refs.hud);
+      }
+      gridEl.classList.remove('is-motion-controlled');
+      gridEl.style.removeProperty('--mg-cell-w');
+      gridEl.removeAttribute('data-motion-layout');
+      clearNode(rootEl);
+      if (rootEl._mgUnmount === unmount) {
+        delete rootEl._mgUnmount;
+      }
+    }
+    unmount.unmount = unmount;
+    rootEl._mgUnmount = unmount;
 
     measureBaseCellWidth();
     recomputeQrUrl();
     connectTransport();
     probeLocalBridge();
+
+    return unmount;
   }
 
   NS.UI = {
