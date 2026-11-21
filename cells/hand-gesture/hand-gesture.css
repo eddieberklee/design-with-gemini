@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: MIT-0 */
 /* Cell 08 — Webcam Hand & Spatial Gesture Cursor (`cells/hand-gesture/hand-gesture.css`)
- * Strictly scoped to `.cell--hand-gesture`, `.hg-secondary-page`, and `.hg-spatial-overlay`
- * so zero declarations leak into `<main class="grid">` or sibling cells.
+ * Scoped to `.cell--hand-gesture`, `.hg-secondary-page`, and `.hg-spatial-overlay`. The one rule
+ * that touches `<main class="grid">` only hides it while it carries `[hidden]` and this Studio is
+ * open (see section 2).
  */
 
 .cell--hand-gesture,
@@ -177,6 +178,9 @@
 }
 
 .hg-mini-svg {
+  /* Absolute so the SVG's intrinsic 4:3 height can never exceed a short box (it clipped the ROI at 2 columns). */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
@@ -280,6 +284,13 @@
  * 2. Secondary 9-Cell `.grid` Studio (`#hand-gesture-page`)
  * ========================================================================= */
 .hg-secondary-page[hidden] {
+  display: none !important;
+}
+
+/* `index.html` gives `.grid` an author `display: grid`, which beats the UA `[hidden]` rule, so the
+ * Studio must hide the main grid itself instead of relying on another cell's stylesheet. Scoped to
+ * "while this Studio is open". */
+body:has(> .hg-secondary-page:not([hidden])) > main.grid[hidden] {
   display: none !important;
 }
 
@@ -650,7 +661,9 @@
 }
 .hg-tape-row:hover, .hg-tape-row.is-spatial-target { background: var(--hg-subtle); border-color: var(--hg-border); }
 .hg-tape-row.is-pinned { background: #eff6ff; border-color: #bfdbfe; color: var(--hg-cobalt); }
-.hg-tape-row-key { font-weight: 600; color: var(--hg-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hg-tape-row-key { flex: 0 1 auto; min-width: 0; font-weight: 600; color: var(--hg-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Rows stay one line (25px pitch) so the V-scroll row detent in ui.js lines up at every width. */
+.hg-tape-row > span:last-child:not(.hg-tape-row-key) { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .hg-tape-row.is-pinned .hg-tape-row-key { color: var(--hg-cobalt); }
 .hg-tape-vel-rail { width: 6px; background: var(--hg-subtle); border-left: 1px solid var(--hg-border); position: relative; flex-shrink: 0; }
 .hg-tape-vel-bar { position: absolute; left: 0; right: 0; top: 50%; height: 0%; background: var(--hg-amber); }
@@ -676,7 +689,7 @@
 .hg-puck-slot-num { font: 9px var(--hg-mono); color: var(--hg-ink-muted); }
 .hg-puck-state-dot { font: 600 8.5px var(--hg-mono); padding: 1px 4px; border-radius: 3px; background: #dcfce7; color: var(--hg-emerald); }
 .hg-puck-card.is-bypassed .hg-puck-state-dot { background: #f4f4f5; color: var(--hg-ink-muted); }
-.hg-puck-name { font-size: 11px; font-weight: 650; letter-spacing: -0.01em; }
+.hg-puck-name { font-size: 11px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hg-puck-sub { font: 9px var(--hg-mono); color: var(--hg-ink-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Cell 09: Kinematic Tuner & Telemetry */
@@ -713,6 +726,11 @@
 @container (max-height: 185px) {
   .hg-schmitt-labels, .hg-telemetry-strip { display: none; }
   .hg-tuner-list { gap: 2px; }
+  /* 2-column phone grid: each puck is ~37px tall; keep slot row + name inside the card. */
+  .hg-puck-bay { gap: 4px; }
+  .hg-puck-card { padding: 3px 5px; justify-content: center; gap: 1px; }
+  .hg-puck-name { font-size: 9.5px; line-height: 1.15; }
+  .hg-puck-slot-num, .hg-puck-state-dot { font-size: 8px; line-height: 1.1; }
 }
 
 /* =========================================================================

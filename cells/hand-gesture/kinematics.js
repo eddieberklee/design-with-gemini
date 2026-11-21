@@ -455,8 +455,41 @@
       this.slots[1].reset();
       this.scope.clear();
       this._twoHandWasActive = false;
+      this._twoHandTotalDeg = 0;
       this._scrollVelPx = 0;
       this._clearFrameEvents();
+      this.events.twoHandActive = false;
+      this.events.twoHandScaleRatio = 1.0;
+      this.events.twoHandTotalDeg = 0;
+      this.events.scrollVelocityPx = 0;
+      this.resetClock();
+    }
+
+    /**
+     * Forget the previous step timestamp so the next `step()` uses a nominal 1/60 s dt.
+     * Without this, the first step after a standby gap gets dt = 0.25 s, which alone fills the
+     * 200 ms arming dwell (armProgress += 0.25 / 0.2) and arms the hand on its first frame.
+     */
+    resetClock() {
+      this._lastStepSec = 0;
+    }
+
+    /** Promote slot 1 to primary when the primary hand is gone but the second hand is still tracked. */
+    _promoteSecondaryIfPrimaryLost() {
+      const s0 = this.slots[0];
+      const s1 = this.slots[1];
+      if (s0.state !== HAND_STATE.IDLE || s0.visible) return;
+      const s1Live = s1.state === HAND_STATE.ARMED || s1.state === HAND_STATE.COASTING || s1.visible;
+      if (!s1Live) return;
+      this.slots[0] = s1;
+      this.slots[1] = s0;
+      s1.slotIndex = 0;
+      s0.slotIndex = 1;
+      if (s1.pinched && s1.pinchMode !== PINCH_MODE.TWO_HAND && !this._twoHandWasActive) {
+        // Single-hand pinch carried over: re-base drag deltas on the new primary.
+        this._prevInteractiveX = s1.interactiveX;
+        this._prevInteractiveY = s1.interactiveY;
+      }
     }
 
     _clearFrameEvents() {
@@ -545,6 +578,7 @@
 
         this._updateSlotFromSample(this.slots[0], i0 >= 0 ? this.candidates[i0] : null, nowSec, dt, vw, vh, aspect, true);
         this._updateSlotFromSample(this.slots[1], i1 >= 0 ? this.candidates[i1] : null, nowSec, dt, vw, vh, aspect, false);
+        this._promoteSecondaryIfPrimaryLost();
       }
 
       const s0 = this.slots[0];
@@ -709,7 +743,10 @@
       slot.pinchVel = Number.isFinite(rawPinchVel) ? (0.45 * slot.pinchVel + 0.55 * rawPinchVel) : 0;
       slot.prevPinchRatio = pinchRatio;
       slot.pinchRatio = pinchRatio;
-      slot.gateOpenOk = pinchRatio > cfg.pinchRelease && !isClosedFist;
+      // Schmitt band must stay open even if a caller sets engage >= release; otherwise the pinch
+      // would engage and release on alternate frames and fire a click every other frame.
+      const pinchReleaseT = Math.max(cfg.pinchRelease, cfg.pinchEngage + 0.04);
+      slot.gateOpenOk = pinchRatio > pinchReleaseT && !isClosedFist;
 
       if (slot.state === HAND_STATE.COASTING) {
         if (allGatesPass || slot.pinched) {
@@ -881,7 +918,7 @@
           slot.interactiveX = slot.screenX;
           slot.interactiveY = slot.screenY;
         }
-      } else if (pinchRatio > cfg.pinchRelease) {
+      } else if (pinchRatio > pinchReleaseT) {
         const dwellSec = nowSec - slot.pinchStartSec;
         const wasClickLock = slot.pinchMode === PINCH_MODE.CLICK_LOCK;
         slot.pinched = false;
@@ -912,8 +949,10 @@
         if (slot.pinchMode === PINCH_MODE.CLICK_LOCK) {
           if (distO >= cfg.clickBreakoutPx) {
             slot.pinchMode = PINCH_MODE.DRAG;
-            slot.breakoutOffsetX = (dxO / distO) * cfg.clickBreakoutPx;
-            slot.breakoutOffsetY = (dyO / distO) * cfg.clickBreakoutPx;
+            // distO can be 0 when clickBreakoutPx <= 0; avoid 0/0 = NaN poisoning the drag offset.
+            const invD = distO > 1e-6 ? cfg.clickBreakoutPx / distO : 0;
+            slot.breakoutOffsetX = dxO * invD;
+            slot.breakoutOffsetY = dyO * invD;
             if (isPrimary) this.events.pinchDragStart = true;
           } else {
             slot.interactiveX = slot.lockOriginX;
@@ -990,6 +1029,29 @@
       this.worldBuf0 = new Float64Array(63);
       this.normBuf1 = new Float64Array(63);
       this.worldBuf1 = new Float64Array(63);
+    }
+
+    /**
+     * Return to a single open palm (no pinch, V-scroll, fist, dorsal flip, roll, or second hand).
+     * Auto Tour leaves whatever phase pose it was in (e.g. two hands pinched); without this a
+     * switch from Tour to Synth/Sim leaves a pinched hand that can never arm.
+     */
+    resetPosture() {
+      this.handPresent = true;
+      this.targetPinch = 0;
+      this.pinchAmount = 0;
+      this.targetVScroll = 0;
+      this.vScrollAmount = 0;
+      this.targetFist = 0;
+      this.fistAmount = 0;
+      this.targetDorsal = 0;
+      this.dorsalAmount = 0;
+      this.wristRollDeg = 0;
+      this.dualHand = false;
+      this.dualSpan = 0.28;
+      this.dualSteerDeg = 0;
+      this.autoTour = false;
+      this.tourTimeSec = 0;
     }
 
     _randNormalApprox() {

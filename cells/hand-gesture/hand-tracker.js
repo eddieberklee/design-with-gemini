@@ -32,6 +32,18 @@
     ERROR: 'error',
   });
 
+  function stopStreamTracks(stream) {
+    if (stream && typeof stream.getTracks === 'function') {
+      stream.getTracks().forEach(function (t) {
+        t.stop();
+      });
+    }
+  }
+
+  function clipText(text, max) {
+    return text.length > max ? text.slice(0, max - 1) + '…' : text;
+  }
+
   class HandTrackerController {
     constructor(engine, synthRig, videoEl) {
       this.engine = engine;
@@ -44,6 +56,7 @@
       this._sessionEpoch = 0;
       this._handLandmarker = null;
       this._mediaStream = null;
+      this._pendingStream = null;
       this._loadingPromise = null;
       this._lastVideoTime = -1;
       this._lastDetectMs = 0;
@@ -70,6 +83,38 @@
       }
     }
 
+    /** Forget frame timestamps so the first tick after a pause uses a nominal dt (see KinematicEngine.resetClock). */
+    resetClock() {
+      this._lastFrameSec = 0;
+      if (this.engine && typeof this.engine.resetClock === 'function') this.engine.resetClock();
+    }
+
+    /** True while a webcam session is being requested or is live. */
+    isCameraActive() {
+      return (
+        this.mode === TRACKER_MODE.WEBCAM ||
+        this.cameraStatus === CAMERA_STATUS.REQUESTING_CAM ||
+        this.cameraStatus === CAMERA_STATUS.LOADING_MODEL
+      );
+    }
+
+    _fallbackSuffix(fb) {
+      return fb === TRACKER_MODE.IDLE
+        ? ' Press Sim for a simulated hand.'
+        : ' Synthetic Hand Rig active.';
+    }
+
+    _enterFallback(fb, message) {
+      this.cameraStatus = CAMERA_STATUS.ERROR;
+      this.cameraError = message + this._fallbackSuffix(fb);
+      this.mode = fb;
+      this.synthRig.autoTour = fb === TRACKER_MODE.TOUR;
+      this.synthRig.handPresent = true;
+      this._lastFrameSec = 0;
+      this.engine.resetAll();
+      this._emitStatus();
+    }
+
     setVideoElement(videoEl) {
       if (this.videoEl === videoEl) return;
       const stream = this._mediaStream;
@@ -86,8 +131,13 @@
     }
 
     async setMode(nextMode) {
+      const camRequestPending =
+        this.cameraStatus === CAMERA_STATUS.REQUESTING_CAM || this.cameraStatus === CAMERA_STATUS.LOADING_MODEL;
+      // A pending camera request runs while `mode` still holds the previous mode, so "same mode"
+      // is not a no-op then: it must fall through to cancel the request and stop a parked stream.
       if (
         nextMode === this.mode &&
+        !camRequestPending &&
         (nextMode !== TRACKER_MODE.WEBCAM || this.cameraStatus === CAMERA_STATUS.STREAMING)
       ) {
         return true;
@@ -100,6 +150,7 @@
       this.mode = nextMode;
       this.cameraStatus = CAMERA_STATUS.OFF;
       this.cameraError = '';
+      this._lastFrameSec = 0;
       this.synthRig.autoTour = nextMode === TRACKER_MODE.TOUR;
       if (nextMode === TRACKER_MODE.SYNTH) {
         this.synthRig.handPresent = true;
@@ -112,10 +163,6 @@
     async _ensureLandmarkerLoaded() {
       if (this._handLandmarker) return this._handLandmarker;
       if (this._loadingPromise) return this._loadingPromise;
-
-      this.cameraStatus = CAMERA_STATUS.LOADING_MODEL;
-      this.cameraError = '';
-      this._emitStatus();
 
       this._loadingPromise = (async () => {
         const mod = await import(VISION_BUNDLE_URL);
@@ -151,14 +198,13 @@
       const fb = fallbackMode || TRACKER_MODE.SYNTH;
       const myEpoch = ++this._sessionEpoch;
 
-      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
-        this.cameraStatus = CAMERA_STATUS.ERROR;
-        this.cameraError =
-          'Webcam API unavailable (serve over http://localhost or HTTPS). Switched to Synthetic Rig.';
-        this.mode = fb;
-        this.synthRig.autoTour = fb === TRACKER_MODE.TOUR;
-        this.synthRig.handPresent = true;
-        this._emitStatus();
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices ||
+        typeof navigator.mediaDevices.getUserMedia !== 'function'
+      ) {
+        this.stopWebcamStream();
+        this._enterFallback(fb, 'Webcam API unavailable (serve over http://localhost or HTTPS).');
         return false;
       }
 
@@ -167,28 +213,47 @@
         this.cameraError = '';
         this._emitStatus();
 
-        const results = await Promise.all([
-          navigator.mediaDevices.getUserMedia({
-            audio: false,
-            video: {
-              facingMode: 'user',
-              width: { ideal: 640 },
-              height: { ideal: 480 },
-              frameRate: { ideal: 60, min: 24 },
-            },
-          }),
-          this._ensureLandmarkerLoaded(),
-        ]);
+        // The model download starts now but the camera answer is awaited alone, so a denied or
+        // missing camera is reported at once instead of after the model settles.
+        const modelPromise = this._ensureLandmarkerLoaded();
+        modelPromise.catch(function () {});
 
-        const stream = results[0];
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: 'user',
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            frameRate: { ideal: 60, min: 24 },
+          },
+        });
         if (myEpoch !== this._sessionEpoch) {
-          stream.getTracks().forEach(function (t) {
-            t.stop();
-          });
+          stopStreamTracks(stream);
           return false;
         }
-
+        // Park the granted stream where stopWebcamStream() can reach it while the model loads, so
+        // Cam-off / tab hide / Studio close turn the camera off immediately.
         this.stopWebcamStream();
+        this._pendingStream = stream;
+
+        if (!this._handLandmarker) {
+          this.cameraStatus = CAMERA_STATUS.LOADING_MODEL;
+          this._emitStatus();
+        }
+        try {
+          await modelPromise;
+        } catch (modelErr) {
+          stopStreamTracks(stream);
+          if (this._pendingStream === stream) this._pendingStream = null;
+          throw modelErr;
+        }
+        if (myEpoch !== this._sessionEpoch) {
+          stopStreamTracks(stream);
+          if (this._pendingStream === stream) this._pendingStream = null;
+          return false;
+        }
+        this._pendingStream = null;
+
         this._mediaStream = stream;
         if (this.videoEl) {
           this.videoEl.srcObject = stream;
@@ -218,24 +283,24 @@
         if (myEpoch !== this._sessionEpoch) return false;
         this.stopWebcamStream();
         const name = err && err.name ? err.name : '';
-        this.cameraError =
+        const message =
           name === 'NotAllowedError' || name === 'PermissionDeniedError'
-            ? 'Camera permission declined — Synthetic Hand Rig active.'
+            ? 'Camera permission declined.'
             : name === 'NotFoundError' || name === 'DevicesNotFoundError'
-              ? 'No webcam found — Synthetic Hand Rig active.'
+              ? 'No webcam found.'
               : 'Webcam / MediaPipe load failed (' +
-                (err && err.message ? err.message : 'offline or blocked') +
-                ') — Synthetic Hand Rig active.';
-        this.cameraStatus = CAMERA_STATUS.ERROR;
-        this.mode = fb;
-        this.synthRig.autoTour = fb === TRACKER_MODE.TOUR;
-        this.synthRig.handPresent = true;
-        this._emitStatus();
+                clipText(String(err && err.message ? err.message : 'offline or blocked'), 160) +
+                ').';
+        this._enterFallback(fb, message);
         return false;
       }
     }
 
     stopWebcamStream() {
+      if (this._pendingStream) {
+        stopStreamTracks(this._pendingStream);
+        this._pendingStream = null;
+      }
       if (this._mediaStream) {
         this._mediaStream.getTracks().forEach(function (t) {
           t.stop();

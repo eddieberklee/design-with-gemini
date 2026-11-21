@@ -221,3 +221,170 @@ test('Mirrored clockwise wrist roll (+deg), V-Scroll momentum, and Relative Fist
   }
   assert.equal(eng.slots[0].screenX, frozenX, 'Cursor must remain stationary while closed-fist clutch is released');
 });
+
+function runFrames(eng, rig, t, n, vw = 1200, vh = 800) {
+  for (let i = 0; i < n; i++) {
+    t += 1 / 60;
+    eng.step(rig.stepAndPopulate(eng, 1 / 60, 4 / 3), true, t, vw, vh, 4 / 3);
+  }
+  return t;
+}
+
+test('Re-engage after standby restarts the 200ms arming dwell and the 1-Euro filter from the new position', () => {
+  const eng = new K.KinematicEngine();
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.mirrorX = 0.30;
+  let t = runFrames(eng, rig, 0, 20);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+
+  // Standby (mode switch) for 10 s, then the hand is back somewhere else.
+  eng.resetAll();
+  t += 10;
+  rig.mirrorX = 0.70;
+  t += 1 / 60;
+  eng.step(rig.stepAndPopulate(eng, 1 / 60, 4 / 3), true, t, 1200, 800, 4 / 3);
+  const s0 = eng.slots[0];
+  assert.notEqual(s0.state, K.HAND_STATE.ARMED, 'First frame after standby must not skip the arming dwell');
+  assert.ok(s0.armProgress < 0.2, `armProgress after one frame should be ~1/12, got ${s0.armProgress}`);
+  assert.ok(Math.abs(s0.euroFilter.x - s0.rawU) < 1e-9, 'Filter must restart at the new raw position, not blend the old one');
+  t = runFrames(eng, rig, t, 14);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+});
+
+test('Two-hand gesture: when the primary hand leaves mid-pinch the remaining hand becomes primary and keeps dragging', () => {
+  const eng = new K.KinematicEngine();
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoOrbit = false;
+  rig.dualHand = true;
+  let t = runFrames(eng, rig, 0, 24);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+  assert.equal(eng.slots[1].state, K.HAND_STATE.ARMED);
+  rig.targetPinch = 1;
+  t = runFrames(eng, rig, t, 12);
+  assert.equal(eng.events.twoHandActive, true);
+  const survivor = eng.slots[1];
+
+  // Hand A (slot 0) leaves: only hand B's landmarks arrive from now on.
+  let endedCount = 0;
+  for (let i = 0; i < 12; i++) {
+    t += 1 / 60;
+    rig.stepAndPopulate(eng, 1 / 60, 4 / 3);
+    eng.setFlatCandidate(0, rig.normBuf1, rig.worldBuf1, false, 4 / 3);
+    const ev = eng.step(1, true, t, 1200, 800, 4 / 3);
+    if (ev.twoHandJustEnded) endedCount++;
+    assert.ok(Number.isFinite(ev.dragDeltaX) && Number.isFinite(ev.dragDeltaY));
+  }
+  assert.equal(endedCount, 1);
+  assert.equal(eng.events.twoHandActive, false);
+  assert.equal(eng.slots[0], survivor, 'Remaining hand must be promoted to the primary slot');
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+  assert.equal(eng.slots[0].pinched, true);
+  assert.equal(eng.slots[0].pinchMode, K.PINCH_MODE.DRAG);
+  assert.equal(eng.slots[1].state, K.HAND_STATE.IDLE);
+
+  // Releasing the pinch on the promoted hand emits a primary pinchRelease.
+  rig.targetPinch = 0;
+  let released = false;
+  for (let i = 0; i < 10; i++) {
+    t += 1 / 60;
+    rig.stepAndPopulate(eng, 1 / 60, 4 / 3);
+    eng.setFlatCandidate(0, rig.normBuf1, rig.worldBuf1, false, 4 / 3);
+    if (eng.step(1, true, t, 1200, 800, 4 / 3).pinchRelease) released = true;
+  }
+  assert.equal(released, true);
+});
+
+test('Schmitt pinch never flaps when engage >= release is configured', () => {
+  const eng = new K.KinematicEngine({ pinchEngage: 0.45, pinchRelease: 0.40 });
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoOrbit = false;
+  let t = runFrames(eng, rig, 0, 20);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+
+  // Find a held pinch amount whose ratio sits between release (0.40) and engage (0.45).
+  const probe = new K.KinematicEngine();
+  const probeRig = new K.SyntheticHandRig();
+  probeRig.noiseSigma = 0;
+  let amount = -1;
+  for (let p = 0; p <= 1; p += 0.01) {
+    probeRig.targetPinch = p;
+    probeRig.pinchAmount = p;
+    probe.step(probeRig.stepAndPopulate(probe, 1 / 60, 4 / 3), true, 1 + p, 1200, 800, 4 / 3);
+    const r = probe.slots[0].pinchRatio;
+    if (r > 0.41 && r < 0.44) { amount = p; break; }
+  }
+  assert.ok(amount > 0, 'probe must find an in-band pinch amount');
+
+  let starts = 0;
+  let clicks = 0;
+  for (let i = 0; i < 30; i++) {
+    rig.targetPinch = amount;
+    rig.pinchAmount = amount;
+    t += 1 / 60;
+    const ev = eng.step(rig.stepAndPopulate(eng, 1 / 60, 4 / 3), true, t, 1200, 800, 4 / 3);
+    if (ev.pinchStart) starts++;
+    if (ev.clickFired) clicks++;
+  }
+  assert.ok(starts <= 1, `expected at most one pinch start while held in band, got ${starts}`);
+  assert.equal(clicks, 0);
+});
+
+test('Click-lock breakout with a zero-radius lock never produces NaN drag offsets', () => {
+  const eng = new K.KinematicEngine({ clickBreakoutPx: 0 });
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoOrbit = false;
+  let t = runFrames(eng, rig, 0, 30);
+  rig.targetPinch = 1;
+  t = runFrames(eng, rig, t, 10);
+  const s0 = eng.slots[0];
+  assert.equal(s0.pinched, true);
+  assert.equal(s0.pinchMode, K.PINCH_MODE.DRAG);
+  assert.ok(Number.isFinite(s0.breakoutOffsetX) && Number.isFinite(s0.breakoutOffsetY));
+  assert.ok(Number.isFinite(s0.interactiveX) && Number.isFinite(s0.interactiveY));
+  assert.ok(Number.isFinite(eng.events.dragDeltaX));
+});
+
+test('Pinched wrist twist unwraps continuously through +-180 degrees without a 360 jump', () => {
+  const eng = new K.KinematicEngine();
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoOrbit = false;
+  let t = runFrames(eng, rig, 0, 20);
+  rig.targetPinch = 1;
+  t = runFrames(eng, rig, t, 10);
+  assert.equal(eng.slots[0].pinched, true);
+  let prev = eng.slots[0].twistTotalDeg;
+  for (let deg = 0; deg <= 300; deg += 3) {
+    rig.wristRollDeg = deg;
+    t = runFrames(eng, rig, t, 1);
+    const cur = eng.slots[0].twistTotalDeg;
+    assert.ok(Math.abs(cur - prev) < 20, `twist jumped ${cur - prev} deg at roll ${deg}`);
+    prev = cur;
+  }
+  assert.equal(eng.slots[0].pinched, true);
+  // 2.0x gain on (300 - 3.5 deadzone) deg
+  assert.ok(Math.abs(prev - 593) < 25, `expected ~593 deg total twist, got ${prev}`);
+});
+
+test('SyntheticHandRig.resetPosture clears a leftover Auto Tour pose so the hand can arm again', () => {
+  const eng = new K.KinematicEngine();
+  const rig = new K.SyntheticHandRig();
+  rig.noiseSigma = 0;
+  rig.autoTour = true;
+  let t = runFrames(eng, rig, 0, 60 * 10); // ends in the 2-hand pinch phase
+  assert.equal(rig.dualHand, true);
+  assert.ok(rig.targetPinch > 0.5);
+
+  rig.resetPosture();
+  eng.resetAll();
+  assert.equal(rig.autoTour, false);
+  assert.equal(rig.dualHand, false);
+  t = runFrames(eng, rig, t, 20);
+  assert.equal(eng.slots[0].state, K.HAND_STATE.ARMED);
+  assert.equal(eng.slots[0].pinched, false);
+  assert.equal(eng.slots[1].state, K.HAND_STATE.IDLE);
+});

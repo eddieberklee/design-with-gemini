@@ -99,7 +99,9 @@
     if (attrs) {
       Object.keys(attrs).forEach(function (k) {
         if (attrs[k] !== undefined && attrs[k] !== null) {
-          node.setAttribute(k, String(attrs[k]));
+          // SVG elements have no `className` attribute; it must be written as `class` or the
+          // `.hg-mini-svg` / `.hg-spatial-chord` rules never match.
+          node.setAttribute(k === 'className' ? 'class' : k, String(attrs[k]));
         }
       });
     }
@@ -163,9 +165,9 @@
       x1: 60, y1: 40, x2: 72, y2: 42,
       stroke: '#e11d48', 'stroke-width': '1.4', 'stroke-dasharray': '2 2',
     });
-    const miniAnchorDot = svgEl('circle', { cx: 60, cy: 52, r: '3.5', fill: '#2563eb' });
+    const miniAnchorDot = svgEl('circle', { cx: 60, cy: 52, r: '2', fill: '#2563eb' });
     const miniAnchorRing = svgEl('circle', {
-      cx: 60, cy: 52, r: '8', fill: 'none', stroke: '#2563eb', 'stroke-width': '1.8',
+      cx: 60, cy: 52, r: '4.5', fill: 'none', stroke: '#2563eb', 'stroke-width': '1.2',
     });
     const miniRoiRect = svgEl('rect', {
       x: 26, y: 20, width: 68, height: 50, rx: '3',
@@ -375,6 +377,8 @@
     const c3SchmittFill = h('div', { className: 'hg-schmitt-fill' });
     const c3MarkEngage = h('div', { className: 'hg-schmitt-mark', style: 'left: 35%' });
     const c3MarkRelease = h('div', { className: 'hg-schmitt-mark', style: 'left: 50%' });
+    const c3LabelEngage = h('span', { textContent: 'ENG <.28' });
+    const c3LabelRelease = h('span', { textContent: 'REL >.40' });
     const c3Pads = [];
     for (let i = 0; i < 9; i++) {
       const initOn = i === 1 || i === 4 || i === 8;
@@ -397,8 +401,8 @@
           h('div', { className: 'hg-schmitt-track' }, [c3SchmittFill, c3MarkEngage, c3MarkRelease]),
           h('div', { className: 'hg-schmitt-labels' }, [
             h('span', { textContent: '0.00' }),
-            h('span', { textContent: 'ENG <.28' }),
-            h('span', { textContent: 'REL >.40' }),
+            c3LabelEngage,
+            c3LabelRelease,
             h('span', { textContent: 'LOCK 14px' }),
           ]),
         ]),
@@ -682,7 +686,11 @@
     };
 
     let isSecondaryOpen = false;
+    let targetOpen = false;
+    let vtSeq = 0;
+    let savedMainScrollY = 0;
     let enteredFromMainGrid = false;
+    let cameraSuspendedByVisibility = false;
     let rafId = 0;
     let uiFrameCounter = 0;
     let rectsDirty = true;
@@ -757,6 +765,7 @@
       resizeCanvas(rigCanvas, rigCtx, 'rigW', 'rigH');
       resizeCanvas(scopeCanvas, scopeCtx, 'scopeW', 'scopeH');
       resizeCanvas(dialCanvas, dialCtx, 'dialW', 'dialH');
+      if (c2.frozen) drawCell02Scope(engine.slots[0], true);
     }
 
     function writeRect(arr, idx, el) {
@@ -813,6 +822,7 @@
     // 5. RAF Lifecycle (Zero Idle CPU/GPU When Inactive on Main Grid)
     // -----------------------------------------------------------------------
     function shouldRunLoop() {
+      if (document.hidden) return false;
       return isSecondaryOpen || tracker.mode === TRACKER_MODE.WEBCAM || tracker.mode === TRACKER_MODE.SYNTH || tracker.mode === TRACKER_MODE.TOUR;
     }
 
@@ -820,13 +830,60 @@
       const active = shouldRunLoop();
       spatialOverlay.hidden = !active;
       if (active && !rafId) {
+        tracker.resetClock();
         rafId = requestAnimationFrame(onFrame);
-      } else if (!active && rafId) {
-        cancelAnimationFrame(rafId);
-        rafId = 0;
+      } else if (!active) {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
         cursorPrimary.classList.remove('is-visible');
         cursorSecondary.classList.remove('is-visible');
       }
+    }
+
+    // Hidden tab: stop the camera (LED off) and the frame loop; resume only what this suspended.
+    function suspendCameraForHide() {
+      if (!tracker.isCameraActive()) return;
+      cameraSuspendedByVisibility = true;
+      tracker.setMode(isSecondaryOpen ? TRACKER_MODE.SYNTH : TRACKER_MODE.IDLE);
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        suspendCameraForHide();
+      } else if (cameraSuspendedByVisibility) {
+        cameraSuspendedByVisibility = false;
+        tracker.setVideoElement(isSecondaryOpen ? wbVideo : miniVideo);
+        tracker.enableWebcam(isSecondaryOpen ? TRACKER_MODE.SYNTH : TRACKER_MODE.IDLE);
+      }
+      ensureLoopState();
+    });
+
+    function resetPortalPreview() {
+      drawStaticMiniHand();
+      primPosVal.textContent = '0.50, 0.50';
+      primPinchVal.textContent = 'OPEN 0.72';
+      primRotVal.textContent = '+0.0°';
+      primUpDnVal.textContent = 'V-IDLE';
+      primPosRow.classList.remove('is-lit');
+      primPinchRow.classList.remove('is-lit');
+      primRotRow.classList.remove('is-lit');
+      primUpDnRow.classList.remove('is-lit');
+      portalStatePill.className = 'hg-portal-pill';
+      portalStatePill.textContent = 'STANDBY';
+    }
+
+    // Any manual rig control while Auto Tour (or Pointer) is driving takes over as Synth Rig, so the
+    // mode switch, metric text, and rig pose agree. Clears the tour's leftover pose first.
+    function takeManualRigControl() {
+      if (tracker.mode === TRACKER_MODE.TOUR || tracker.mode === TRACKER_MODE.POINTER) {
+        const wasTour = tracker.mode === TRACKER_MODE.TOUR;
+        if (wasTour) synthRig.resetPosture();
+        synthRig.autoOrbit = false;
+        tracker.setMode(TRACKER_MODE.SYNTH);
+      }
+      synthRig.autoTour = false;
     }
 
     // -----------------------------------------------------------------------
@@ -928,27 +985,34 @@
       setAttr(modePointerBtn, 'aria-pressed', String(mode === TRACKER_MODE.POINTER));
 
       const mapSuffix = engine.config.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH' : 'ROI [.22–.78]';
-      if (camStatus === CAMERA_STATUS.LOADING_MODEL) c1Metric.textContent = 'LOADING WASM 1.2.3…';
+      if (camStatus === CAMERA_STATUS.LOADING_MODEL) c1Metric.textContent = 'LOADING MODEL…';
       else if (camStatus === CAMERA_STATUS.REQUESTING_CAM) c1Metric.textContent = 'REQUESTING CAM…';
       else if (isLive) c1Metric.textContent = 'CAM ' + delegate + ' · ' + mapSuffix;
       else if (mode === TRACKER_MODE.TOUR) c1Metric.textContent = 'AUTO TOUR · ' + mapSuffix;
       else if (mode === TRACKER_MODE.POINTER) c1Metric.textContent = 'POINTER DIRECT MODE';
       else c1Metric.textContent = 'SYNTH · ' + mapSuffix;
 
+      const camPending = camStatus === CAMERA_STATUS.REQUESTING_CAM || camStatus === CAMERA_STATUS.LOADING_MODEL;
+      setAttr(portalCamBtn, 'aria-busy', String(camPending));
       if (camError) {
         camBannerMsg.textContent = camError;
         camBanner.hidden = false;
         portalStatusText.textContent = camError;
+      } else if (camPending) {
+        camBanner.hidden = true;
+        portalStatusText.textContent = camStatus === CAMERA_STATUS.REQUESTING_CAM ? 'Requesting camera…' : 'Loading hand model…';
       } else if (isLive) {
         camBanner.hidden = true;
         portalStatusText.textContent = 'Live webcam (' + delegate + ') · Raise open palm to control cursor';
       } else if (mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR) {
+        camBanner.hidden = true;
         portalStatusText.textContent = 'Simulated hand cursor active across grid';
       } else {
+        camBanner.hidden = true;
         portalStatusText.textContent = 'Raise open palm 200ms · Pinch · Twist · V-Scroll';
-        portalStatePill.className = 'hg-portal-pill';
-        portalStatePill.textContent = 'STANDBY';
       }
+      if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) resetPortalPreview();
+      rectsDirty = true;
       syncRigButtons();
       ensureLoopState();
     });
@@ -956,7 +1020,9 @@
     // Main-grid quick controls
     portalCamBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      if (tracker.mode === TRACKER_MODE.WEBCAM) {
+      cameraSuspendedByVisibility = false;
+      if (tracker.isCameraActive()) {
+        // Also cancels a pending permission/model request (bumps the session epoch).
         tracker.setMode(TRACKER_MODE.IDLE);
       } else {
         tracker.setVideoElement(miniVideo);
@@ -969,6 +1035,7 @@
       if (tracker.mode === TRACKER_MODE.SYNTH || tracker.mode === TRACKER_MODE.TOUR) {
         tracker.setMode(TRACKER_MODE.IDLE);
       } else {
+        synthRig.resetPosture();
         synthRig.autoOrbit = true;
         tracker.setMode(TRACKER_MODE.SYNTH);
       }
@@ -994,6 +1061,7 @@
       requestCloseSecondaryView();
     });
     modeSynthBtn.addEventListener('click', function () {
+      if (tracker.mode === TRACKER_MODE.TOUR) synthRig.resetPosture();
       synthRig.autoOrbit = false;
       tracker.setMode(TRACKER_MODE.SYNTH);
     });
@@ -1050,44 +1118,44 @@
         return;
       }
       if ((k === 'p' || k === 'P') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.targetVScroll = 0;
         synthRig.targetFist = 0;
         synthRig.targetPinch = 1;
         syncRigButtons();
       } else if ((k === 'v' || k === 'V') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.targetPinch = 0;
         synthRig.targetFist = 0;
         synthRig.targetVScroll = synthRig.targetVScroll > 0.5 ? 0 : 1;
         syncRigButtons();
       } else if ((k === 'g' || k === 'G') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.targetPinch = 0;
         synthRig.targetVScroll = 0;
         synthRig.targetFist = synthRig.targetFist > 0.5 ? 0 : 1;
       } else if ((k === 'f' || k === 'F') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.targetDorsal = synthRig.targetDorsal > 0.5 ? 0 : 1;
         syncRigButtons();
       } else if ((k === 'd' || k === 'D') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.dualHand = !synthRig.dualHand;
         if (!synthRig.dualHand) engine.slots[1].reset();
         syncRigButtons();
       } else if ((k === 'o' || k === 'O') && !e.repeat) {
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.autoOrbit = !synthRig.autoOrbit;
         syncRigButtons();
       } else if (k === '[' || k === ']') {
         e.preventDefault();
-        synthRig.autoTour = false;
+        takeManualRigControl();
         const dir = k === ']' ? 1 : -1;
         synthRig.wristRollDeg = clamp(synthRig.wristRollDeg + dir * 6, -85, 85);
         if (synthRig.dualHand) synthRig.dualSteerDeg = clamp(synthRig.dualSteerDeg + dir * 5, -75, 75);
       } else if (k === ' ' && (e.target === document.body || e.target === rigStage)) {
         e.preventDefault();
-        synthRig.autoTour = false;
+        takeManualRigControl();
         synthRig.handPresent = !synthRig.handPresent;
         syncRigButtons();
       }
@@ -1107,9 +1175,7 @@
     let rigStartX = 0;
     rigStage.addEventListener('pointerdown', function (e) {
       if (tracker.mode === TRACKER_MODE.WEBCAM) return;
-      if (tracker.mode === TRACKER_MODE.TOUR || tracker.mode === TRACKER_MODE.POINTER) {
-        tracker.setMode(TRACKER_MODE.SYNTH);
-      }
+      takeManualRigControl();
       rigDrag = true;
       rigStage.setPointerCapture(e.pointerId);
       synthRig.autoOrbit = false;
@@ -1137,6 +1203,7 @@
     rigStage.addEventListener('pointercancel', function () { rigDrag = false; });
     rigStage.addEventListener('dblclick', function () {
       if (tracker.mode === TRACKER_MODE.WEBCAM) return;
+      takeManualRigControl();
       synthRig.targetPinch = 1;
       syncRigButtons();
       setTimeout(function () {
@@ -1147,6 +1214,7 @@
     rigStage.addEventListener('wheel', function (e) {
       if (tracker.mode === TRACKER_MODE.WEBCAM) return;
       e.preventDefault();
+      takeManualRigControl();
       if (synthRig.dualHand && !e.shiftKey) {
         synthRig.dualSpan = clamp(synthRig.dualSpan - e.deltaY * 0.0008, 0.12, 0.56);
       } else {
@@ -1154,6 +1222,8 @@
       }
     }, { passive: false });
     rigStage.addEventListener('keydown', function (e) {
+      if (tracker.mode === TRACKER_MODE.WEBCAM) return;
+      if (e.key.indexOf('Arrow') === 0) takeManualRigControl();
       const s = e.shiftKey ? 0.05 : 0.02;
       if (e.key === 'ArrowLeft') { e.preventDefault(); synthRig.autoOrbit = false; synthRig.mirrorX = clamp(synthRig.mirrorX - s, 0.05, 0.95); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); synthRig.autoOrbit = false; synthRig.mirrorX = clamp(synthRig.mirrorX + s, 0.05, 0.95); }
@@ -1163,10 +1233,10 @@
       syncRigButtons();
     });
 
-    rigBtnPresent.addEventListener('click', function () { synthRig.autoTour = false; synthRig.handPresent = !synthRig.handPresent; syncRigButtons(); });
+    rigBtnPresent.addEventListener('click', function () { takeManualRigControl(); synthRig.handPresent = !synthRig.handPresent; syncRigButtons(); });
     let pinchPressTs = 0;
     rigBtnPinch.addEventListener('pointerdown', function () {
-      synthRig.autoTour = false;
+      takeManualRigControl();
       pinchPressTs = performance.now();
       synthRig.targetVScroll = 0;
       if (synthRig.targetPinch < 0.5) { synthRig.targetPinch = 1; syncRigButtons(); }
@@ -1176,17 +1246,17 @@
       if (pinchPressTs === -1 || performance.now() - pinchPressTs > 260) { synthRig.targetPinch = 0; syncRigButtons(); }
     });
     rigBtnPinch.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); synthRig.targetPinch = synthRig.targetPinch > 0.5 ? 0 : 1; syncRigButtons(); }
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); takeManualRigControl(); synthRig.targetPinch = synthRig.targetPinch > 0.5 ? 0 : 1; syncRigButtons(); }
     });
-    rigBtnVScroll.addEventListener('click', function () { synthRig.autoTour = false; synthRig.targetPinch = 0; synthRig.targetVScroll = synthRig.targetVScroll > 0.5 ? 0 : 1; syncRigButtons(); });
-    rigBtnDorsal.addEventListener('click', function () { synthRig.autoTour = false; synthRig.targetDorsal = synthRig.targetDorsal > 0.5 ? 0 : 1; syncRigButtons(); });
+    rigBtnVScroll.addEventListener('click', function () { takeManualRigControl(); synthRig.targetPinch = 0; synthRig.targetVScroll = synthRig.targetVScroll > 0.5 ? 0 : 1; syncRigButtons(); });
+    rigBtnDorsal.addEventListener('click', function () { takeManualRigControl(); synthRig.targetDorsal = synthRig.targetDorsal > 0.5 ? 0 : 1; syncRigButtons(); });
     rigBtnDual.addEventListener('click', function () {
-      synthRig.autoTour = false;
+      takeManualRigControl();
       synthRig.dualHand = !synthRig.dualHand;
       if (!synthRig.dualHand) engine.slots[1].reset();
       syncRigButtons();
     });
-    rigBtnOrbit.addEventListener('click', function () { synthRig.autoTour = false; synthRig.autoOrbit = !synthRig.autoOrbit; syncRigButtons(); });
+    rigBtnOrbit.addEventListener('click', function () { takeManualRigControl(); synthRig.autoOrbit = !synthRig.autoOrbit; syncRigButtons(); });
 
     // Cell 02 + Pointer-mode live scope feed
     let scopeDrag = false;
@@ -1275,8 +1345,7 @@
             ? ROTATION_SOURCE.WRIST_LEVER
             : ROTATION_SOURCE.FUSED;
       engine.config.rotationSource = next;
-      c4VecBtn.textContent = next === ROTATION_SOURCE.FUSED ? 'Vec: Fused' : next === ROTATION_SOURCE.KNUCKLE_BAR ? 'Vec: Bar' : 'Vec: Lever';
-      c4DzStatus.textContent = next === ROTATION_SOURCE.FUSED ? 'DZ ±3.5° · FUSED 72/28' : next === ROTATION_SOURCE.KNUCKLE_BAR ? 'DZ ±3.5° · L17–L5 BAR' : 'DZ ±3.5° · MID(4,8)–L0';
+      syncRotationSourceUi();
     });
     c4ZeroBtn.addEventListener('click', function () { setDialAngle(0); });
 
@@ -1438,13 +1507,27 @@
       engine.config.beta = v;
       valBeta.textContent = v.toFixed(2);
     });
+    function syncSchmittMarks() {
+      const eng = engine.config.pinchEngage;
+      const rel = engine.config.pinchRelease;
+      c3MarkEngage.style.left = ((eng / 0.80) * 100).toFixed(2) + '%';
+      c3MarkRelease.style.left = ((rel / 0.80) * 100).toFixed(2) + '%';
+      c3LabelEngage.textContent = 'ENG <' + eng.toFixed(2).replace(/^0/, '');
+      c3LabelRelease.textContent = 'REL >' + rel.toFixed(2).replace(/^0/, '');
+    }
+
+    function syncRotationSourceUi() {
+      const src = engine.config.rotationSource;
+      c4VecBtn.textContent = src === ROTATION_SOURCE.FUSED ? 'Vec: Fused' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'Vec: Bar' : 'Vec: Lever';
+      c4DzStatus.textContent = src === ROTATION_SOURCE.FUSED ? 'DZ ±3.5° · FUSED 72/28' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'DZ ±3.5° · L17–L5 BAR' : 'DZ ±3.5° · MID(4,8)–L0';
+    }
+
     tunePinch.addEventListener('input', function () {
       const v = Number(tunePinch.value);
       engine.config.pinchEngage = v;
       engine.config.pinchRelease = Number(Math.max(v + 0.10, 0.40).toFixed(2));
       valPinch.textContent = v.toFixed(2);
-      c3MarkEngage.style.left = ((v / 0.80) * 100) + '%';
-      c3MarkRelease.style.left = ((engine.config.pinchRelease / 0.80) * 100) + '%';
+      syncSchmittMarks();
     });
     tuneNoise.addEventListener('input', function () {
       const v = Number(tuneNoise.value);
@@ -1472,8 +1555,9 @@
       c9ChiralBtn.textContent = 'Chiral: Auto';
       setAttr(mapModeBtn, 'aria-pressed', 'false');
       mapModeBtn.textContent = 'Map: ROI';
-      c3MarkEngage.style.left = '35%';
-      c3MarkRelease.style.left = '50%';
+      syncSchmittMarks();
+      syncRotationSourceUi();
+      tracker._emitStatus();
     });
 
     // -----------------------------------------------------------------------
@@ -1634,8 +1718,16 @@
         spatial.hoveredTunerIdx = nextTuner;
       }
 
-      // V-Scroll momentum + soft row-detent snap at low velocity (< 18 px/s)
-      if (Math.abs(events.scrollDeltaPx) > 0.02) {
+      // V-Scroll momentum + soft row-detent snap at low velocity (< 18 px/s). The detent must be
+      // checked first: the scroll branch below swallows every frame down to ~1 px/s, which left the
+      // detent only a few frames before the engine zeroes velocity (< 0.8 px/s), so rows never snapped.
+      const scrollSpeed = Math.abs(events.scrollVelocityPx);
+      if (!s0.vScrollActive && hitCell !== 5 && scrollSpeed > 0 && scrollSpeed < 18) {
+        const targetTop = Math.round(c7Tape.scrollTop / 25) * 25;
+        const gap = targetTop - c7Tape.scrollTop;
+        c7Tape.scrollTop += Math.abs(gap) <= 1.5 ? gap : gap * 0.22;
+        c7.subPixelScroll = 0;
+      } else if (Math.abs(events.scrollDeltaPx) > 0.02) {
         if (hitCell === 5) {
           setFaderValue(clamp(c6.value - events.scrollDeltaPx * 0.0018, 0, 1));
         } else {
@@ -1646,9 +1738,6 @@
             c7.subPixelScroll -= whole;
           }
         }
-      } else if (!s0.vScrollActive && Math.abs(events.scrollVelocityPx) > 0 && Math.abs(events.scrollVelocityPx) < 18) {
-        const targetTop = Math.round(c7Tape.scrollTop / 25) * 25;
-        c7Tape.scrollTop += (targetTop - c7Tape.scrollTop) * 0.22;
       }
 
       if (events.pinchStart && isArmed) {
@@ -1738,7 +1827,7 @@
         }
         c3.lastPadIdx = -1;
         if (events.clickFired && Number.isFinite(events.clickX) && Number.isFinite(events.clickY)) {
-          handleSecondaryClick(events.clickX, events.clickY, events.clickDwellMs, lt, spatial.latchedSubIdx);
+          handleSecondaryClick(events.clickX, events.clickY, events.clickDwellMs, events.clickSlipPx, lt, spatial.latchedSubIdx);
         }
         spatial.latchedType = null;
         spatial.latchedCellIdx = -1;
@@ -1749,8 +1838,8 @@
       setHighlightedCell(activeCell, spatial.latchedCellIdx >= 0);
     }
 
-    function handleSecondaryClick(x, y, dwellMs, lt, subIdx) {
-      if (lt === 'c3-pad' && subIdx >= 0) { toggleMatrixPad(subIdx, dwellMs, 0.0); return; }
+    function handleSecondaryClick(x, y, dwellMs, slipPx, lt, subIdx) {
+      if (lt === 'c3-pad' && subIdx >= 0) { toggleMatrixPad(subIdx, dwellMs, Number.isFinite(slipPx) ? slipPx : 0); return; }
       if (lt === 'c8-puck' && subIdx >= 0) { togglePuckBypass(subIdx); return; }
       if (lt === 'c5-stage') {
         c5.showGuides = !c5.showGuides;
@@ -1993,8 +2082,8 @@
       ctx.fill();
     }
 
-    function drawCell02Scope(s0) {
-      if (c2.frozen) return;
+    function drawCell02Scope(s0, force) {
+      if (c2.frozen && !force) return;
       const ctx = scopeCtx;
       const w = canvasSizes.scopeW;
       const hPx = canvasSizes.scopeH;
@@ -2200,6 +2289,7 @@
 
     function updateSecondaryReadouts(s0, events) {
       const st = tracker.stats;
+      if (tracker.mode === TRACKER_MODE.TOUR) syncRigButtons();
       fpsReadout.textContent = Math.round(st.fps) + ' FPS · ' + st.frameMs.toFixed(1) + 'ms';
       gateSpan.className = 'hg-gate-pill' + (s0.visible && s0.gateSpanOk ? ' is-pass' : '');
       gateFacing.className = 'hg-gate-pill' + (s0.visible ? (s0.gateFacingOk ? ' is-pass' : ' is-warn') : '');
@@ -2242,35 +2332,133 @@
     // -----------------------------------------------------------------------
     // 8. Seamless SPA View Swap, Spatial Homothety Transition & History Sync
     // -----------------------------------------------------------------------
+    // Another cell's secondary page (e.g. `.lg-secondary-page` for `#left-grille`) can own the hidden
+    // main grid. Only unhide the grid when no other secondary page is showing, so a cross-cell hash
+    // jump never leaves both the grid and another page visible (or neither).
+    function otherSecondaryPageVisible() {
+      const kids = document.body ? document.body.children : [];
+      for (let i = 0; i < kids.length; i++) {
+        const el = kids[i];
+        if (el === secondaryPage || el === mainGrid || el.hidden) continue;
+        if (typeof el.className === 'string' && /(^|\s)[a-z0-9]+-secondary-page(\s|$)/.test(el.className)) return true;
+      }
+      return false;
+    }
+
     function swapDomToSecondary() {
+      if (isSecondaryOpen) return;
       mainGrid.hidden = true;
       secondaryPage.hidden = false;
       isSecondaryOpen = true;
+      const camPending =
+        tracker.mode !== TRACKER_MODE.WEBCAM &&
+        (tracker.cameraStatus === CAMERA_STATUS.REQUESTING_CAM || tracker.cameraStatus === CAMERA_STATUS.LOADING_MODEL);
       if (tracker.mode === TRACKER_MODE.WEBCAM) {
         tracker.setVideoElement(wbVideo);
+        tracker._emitStatus();
+      } else if (camPending) {
+        // A portal Cam request is still pending: keep the rig alive and re-issue the request so it
+        // lands on the Studio video with the Studio's SYNTH fallback (the old one targeted the
+        // hidden tile video and would fall back to IDLE, leaving a dead rig).
+        if (tracker.mode === TRACKER_MODE.IDLE) {
+          synthRig.resetPosture();
+          synthRig.autoOrbit = true;
+          tracker.setMode(TRACKER_MODE.SYNTH);
+        }
+        tracker.setVideoElement(wbVideo);
+        tracker.enableWebcam(TRACKER_MODE.SYNTH);
       } else if (tracker.mode === TRACKER_MODE.IDLE) {
+        // Also cancels a still-pending portal camera request (new session epoch).
+        synthRig.resetPosture();
         synthRig.autoOrbit = true;
         tracker.setMode(TRACKER_MODE.SYNTH);
       }
       resizeAllCanvases();
       refreshRectCache();
       ensureLoopState();
+      global.scrollTo(0, 0);
       backBtn.focus({ preventScroll: true });
     }
 
-    function swapDomToMain() {
+    function swapDomToMain(restoreFocus) {
+      if (!isSecondaryOpen) return;
       secondaryPage.hidden = true;
-      mainGrid.hidden = false;
+      if (!otherSecondaryPageVisible()) mainGrid.hidden = false;
       isSecondaryOpen = false;
+      // Release any spatial latch so reopening starts clean.
+      spatial.latchedType = null;
+      spatial.latchedCellIdx = -1;
+      spatial.latchedSubIdx = -1;
+      setHighlightedCell(-1, false);
+      c5Card.classList.remove('is-manipulating');
       // Deterministically extinguish webcam & synthetic loop when returning to main grid
+      cameraSuspendedByVisibility = false;
       tracker.setMode(TRACKER_MODE.IDLE);
-      drawStaticMiniHand();
+      resetPortalPreview();
       ensureLoopState();
-      portalStudioBtn.focus({ preventScroll: true });
+      if (restoreFocus && !mainGrid.hidden) {
+        global.scrollTo(0, savedMainScrollY);
+        portalStudioBtn.focus({ preventScroll: true });
+      }
+    }
+
+    function clearTransitionNames() {
+      portalCell.style.viewTransitionName = '';
+      secondaryGrid.style.viewTransitionName = '';
+    }
+
+    function applyDomState(open, restoreFocus) {
+      if (open) swapDomToSecondary();
+      else swapDomToMain(restoreFocus);
+    }
+
+    // Race-free open/close: the latest request (targetOpen) wins even if an earlier View Transition
+    // callback runs later. Every transition promise is handled (a skipped transition, e.g. in a
+    // hidden tab, rejects `ready`, which otherwise surfaces as an unhandled rejection).
+    function runPortalTransition(nextOpen, animate, restoreFocus) {
+      if (nextOpen && !targetOpen && !isSecondaryOpen) savedMainScrollY = global.scrollY || 0;
+      targetOpen = nextOpen;
+      const mySeq = ++vtSeq;
+      const canAnimate =
+        animate &&
+        !document.hidden &&
+        typeof document.startViewTransition === 'function' &&
+        !prefersReducedMotion();
+      if (!canAnimate) {
+        clearTransitionNames();
+        applyDomState(nextOpen, restoreFocus);
+        return;
+      }
+      clearTransitionNames();
+      if (nextOpen) portalCell.style.viewTransitionName = 'hg-stage-portal';
+      else secondaryGrid.style.viewTransitionName = 'hg-stage-portal';
+      let vt = null;
+      try {
+        vt = document.startViewTransition(function () {
+          clearTransitionNames();
+          if (mySeq === vtSeq) {
+            if (targetOpen) secondaryGrid.style.viewTransitionName = 'hg-stage-portal';
+            else portalCell.style.viewTransitionName = 'hg-stage-portal';
+          }
+          applyDomState(targetOpen, restoreFocus);
+        });
+      } catch (_) {
+        clearTransitionNames();
+        applyDomState(nextOpen, restoreFocus);
+        return;
+      }
+      const noop = function () {};
+      if (vt.ready) vt.ready.catch(noop);
+      if (vt.updateCallbackDone) vt.updateCallbackDone.catch(noop);
+      Promise.resolve(vt.finished)
+        .catch(noop)
+        .then(function () {
+          if (mySeq === vtSeq) clearTransitionNames();
+        });
     }
 
     function openSecondaryView(opts) {
-      if (isSecondaryOpen) return;
+      if (targetOpen) return;
       const fromUserTap = Boolean(opts && opts.fromUserTap);
 
       if (fromUserTap && location.hash !== '#hand-gesture') {
@@ -2281,53 +2469,11 @@
           } catch (_) {}
         }
       }
-
-      if (
-        fromUserTap &&
-        typeof document.startViewTransition === 'function' &&
-        !prefersReducedMotion()
-      ) {
-        portalCell.style.viewTransitionName = 'hg-stage-portal';
-        const vt = document.startViewTransition(function () {
-          portalCell.style.viewTransitionName = '';
-          secondaryGrid.style.viewTransitionName = 'hg-stage-portal';
-          swapDomToSecondary();
-        });
-        vt.finished
-          .catch(function () {})
-          .finally(function () {
-            secondaryGrid.style.viewTransitionName = '';
-          });
-      } else {
-        swapDomToSecondary();
-      }
-    }
-
-    function closeSecondaryViewInternal(animate) {
-      if (!isSecondaryOpen) return;
-      if (
-        animate &&
-        typeof document.startViewTransition === 'function' &&
-        !prefersReducedMotion()
-      ) {
-        secondaryGrid.style.viewTransitionName = 'hg-stage-portal';
-        const vt = document.startViewTransition(function () {
-          secondaryGrid.style.viewTransitionName = '';
-          portalCell.style.viewTransitionName = 'hg-stage-portal';
-          swapDomToMain();
-        });
-        vt.finished
-          .catch(function () {})
-          .finally(function () {
-            portalCell.style.viewTransitionName = '';
-          });
-      } else {
-        swapDomToMain();
-      }
+      runPortalTransition(true, fromUserTap, false);
     }
 
     function requestCloseSecondaryView() {
-      if (!isSecondaryOpen) return;
+      if (!targetOpen) return;
       if (
         enteredFromMainGrid &&
         location.hash === '#hand-gesture' &&
@@ -2348,21 +2494,27 @@
           global.history.replaceState(null, '', location.pathname + location.search);
         } catch (_) {}
       }
-      closeSecondaryViewInternal(true);
+      runPortalTransition(false, true, true);
     }
 
     function syncLocationHash() {
-      if (location.hash === '#hand-gesture') {
-        if (!isSecondaryOpen) openSecondaryView({ fromUserTap: false });
-      } else if (isSecondaryOpen) {
-        closeSecondaryViewInternal(true);
+      const wantOpen = location.hash === '#hand-gesture';
+      if (wantOpen === targetOpen) return;
+      if (wantOpen) {
+        runPortalTransition(true, false, false);
+      } else {
+        // Another cell's hash took over: close instantly and do not steal focus or scroll.
+        const crossCellHash = Boolean(location.hash && location.hash !== '#hand-gesture');
+        enteredFromMainGrid = false;
+        runPortalTransition(false, !crossCellHash, !crossCellHash);
       }
     }
 
     global.addEventListener('popstate', syncLocationHash);
     global.addEventListener('hashchange', syncLocationHash);
     global.addEventListener('pagehide', function () {
-      tracker.stopWebcamStream();
+      suspendCameraForHide();
+      ensureLoopState();
     });
 
     if (location.hash === '#hand-gesture') {
