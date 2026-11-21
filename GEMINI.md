@@ -28,13 +28,13 @@ Token cost has **zero weight**. Never take shortcuts that trade away quality, ex
 
 ## 2. Two-Stage Execution Lifecycle: Land First, Then Automatic Post-Land Teamwork & Boost
 
-**Scope Guard**: Every authorized repository file change (code, design assets, docs, or config) follows the **Stage 1 → Stage 2** pipeline below unless the user explicitly asks not to commit or push. Pure read-only questions, audits, or explorations that modify no repository files run Section 1 & Section 4 parallel analysis/verification in-turn without git commits or Stage 2 swarms.
+**Scope Guard**: Every authorized repository file change (code, design assets, docs, or config) follows the **Stage 1 → Stage 2** pipeline below unless the user explicitly asks not to commit or push. Pure read-only questions, audits, or explorations that modify no repository files run Section 1, Section 3, Section 4 & Section 6 parallel analysis/verification in-turn without git commits or Stage 2 swarms.
 
 ### Stage 1 — Parallel Build & Immediate Land (Never Block Commit/Push)
 
 1. **Build & document with parallel leverage**: Use parallel grounding (`Protocol A`), divergent Best-of-N prototyping (`Protocol B`), and sharded isolated writers (`workspace:"share"` or `"branch"`) to produce both the implementation and co-located `.md` notes (`Section 5`) rapidly.
 2. **Fast pre-land sanity gate**: Review `git diff` and run **cheap local checks only** (syntax, typecheck, lint, fast smoke check — never land a knowingly broken or destructive change, and stage only task-owned paths so unrelated dirty files are never clobbered or discarded).
-3. **Commit, rebase & push immediately**: Commit staged task files (including new/updated `.md` notes), rebase onto the active branch's upstream when clean (`git pull --rebase`, defaulting to `origin/main` on `main`), and push immediately (standing push authorization overriding `swarm` push-only-when-asked defaults) to establish `<landed-sha>`. **Never block landing** on long test suites, multi-round adversarial debates, or exhaustive prose polish passes.
+3. **Commit, rebase & push immediately**: Commit staged task files (including new/updated `.md` notes), rebase onto the active branch's upstream when clean (`git pull --rebase`, defaulting to `origin/main` on `main`), and push immediately (standing push authorization overriding `swarm` push-only-when-asked defaults) to establish `<landed-sha>`. **Never block landing** on long test suites, multi-round adversarial debates, or secondary code, visual, or prose polish passes.
 
 ### Stage 2 — Automatic Post-Land Teamwork & Boost Follow-Up (Mandatory, Same Session)
 
@@ -52,7 +52,7 @@ Immediately **after** an initial Stage 1 `<landed-sha>` is pushed — starting i
    - **Architecture, Docs, Simplification & Security Reviewer**: Flags leaky abstractions, dead code, unnecessary coupling, secret/input-handling risks, and missing or stale co-located `.md` documentation (`Section 5`) whose claims or symbol names diverge from shipped code.
    - **Full Live Execution Verifier**: Runs full builds, complete test suites, and rendered runtime/UI verification on `<landed-sha>`.
 4. **Bounded Follow-Up Repairs & Incremental Re-Verification (No Infinite Swarm Recursion)**:
-   - Fix every legitimate bug, red check, missed edge case, or high-value craft upgrade surfaced in Round 1 right away (using `workspace:"share"` / `"branch"` for concurrent writers), run local verification, and **commit + rebase + push follow-up commit(s)** to `<repair-sha>`.
+   - Fix every legitimate bug, red check, missed edge case, doc drift, or high-value craft upgrade surfaced in Round 1 right away (using `workspace:"share"` / `"branch"` for concurrent writers and updating affected `.md` notes whenever behavior, symbols, or hazards change), run local verification, and **commit + rebase + push follow-up commit(s)** to `<repair-sha>`.
    - Re-verify `<repair-sha>` via **incremental delta review on the existing Stage 2 verifiers** — **never** spawn a brand-new full Stage 2 swarm for a Stage 2 follow-up commit. Cap subjective craft polish to `1` follow-up round and total Stage 2 repair cycles to `≤ 2` rounds before escalating diagnosis, while ensuring `0` known objective bugs or red checks remain.
 5. **Clean Closeout & Status Honesty**:
    - Report `"landed <sha>, post-land teamwork/boost follow-up running"` whenever Stage 2 workers are still in flight.
@@ -86,7 +86,7 @@ Before locking in a non-trivial plan, launch parallel read-only scouts simultane
 For any open-ended design, visual layout, interaction model, shader, copy, or architectural decision, **never settle on the first plausible idea**:
 1. **Diverge (`N = 3–5` in parallel)**: Spawn `3–5` parallel workers with explicitly distinct creative or technical priors (e.g., *Minimal/Editorial*, *Spatial/Kinetic*, *Token-Systematic*, *Ergonomic/High-Density*, or distinct algorithmic designs) in isolated `workspace="branch"` or `"share"` copies.
 2. **Critique**: Have an independent critic score all `N` candidates against an explicit rubric (visual hierarchy, interaction feel, simplicity, edge-case resilience, performance, maintainability).
-3. **Synthesize**: Land the winning candidate or merge the strongest traits across candidates into a single cohesive implementation for Stage 1 landing, followed by Stage 2 post-land polish.
+3. **Synthesize**: Land the winning candidate or merge the strongest traits across candidates into a single cohesive implementation (recording the winning rationale and why rival candidates lost in co-located `.md` notes per `Section 5`) for Stage 1 landing, followed by Stage 2 post-land polish.
 
 ### Protocol C — Competing-Hypothesis Debugging
 When diagnosing an ambiguous bug, layout defect, or performance regression, spawn **parallel hypothesis agents** — one per plausible root cause. Require each agent to gather concrete runtime or `file:line` evidence both **supporting** its hypothesis and **falsifying** rival hypotheses before writing a fix.
@@ -95,16 +95,16 @@ When diagnosing an ambiguous bug, layout defect, or performance regression, spaw
 
 ## 5. Autonomous Living Documentation (Agents Document As They Build)
 
-Every agent working in this repository **autonomously creates and maintains `.md` notes and documentation alongside its implementation work** throughout the project tree — never wait for the user to ask for docs:
+Every authoring agent working in this repository **autonomously creates and maintains `.md` notes and documentation alongside its implementation work** throughout the project tree — never wait for the user to ask for docs (read-only scouts, critics, verifiers, and read-only Q&A turns never write files):
 
-- **Leave `.md` notes across the whole project as things are built**: Whenever an agent introduces or substantially updates a directory, feature, component, shader, state store, or workflow, it writes or updates co-located Markdown documentation right next to that work (e.g., `<dir>/README.md`, `<dir>/NOTES.md`, `<dir>/DESIGN.md`, or `docs/<area>/<topic>.md`).
+- **Leave `.md` notes across the whole project as things are built**: Whenever an authoring agent introduces or substantially updates a directory, feature, component, shader, state store, or workflow, it writes or updates in place co-located Markdown documentation right next to that work (e.g., `<dir>/README.md`, `<dir>/NOTES.md`, `<dir>/DESIGN.md`, or `docs/<area>/<topic>.md`). Update existing co-located `.md` files in place rather than spawning duplicate note files; trivial fixes skip new `.md` files unless an existing note's documented contract, symbol, or hazard changed.
 - **What to capture in autonomous `.md` files**:
   1. **Intent & architecture**: What the directory/module owns, how data and state flow through it, and which design tokens or contracts it depends on.
   2. **Design & technical decisions**: Why the shipped approach won — including key trade-offs and why rival `Protocol B` (Best-of-N) candidates were rejected — so future agents build forward instead of re-litigating or regressing prior choices.
-  3. **Hazards, invariants & edge cases**: Non-obvious constraints, layout/GPU/timing traps, and invariants anchored to concrete files and symbols (`path:symbol` or `file:line`).
+  3. **Hazards, invariants & edge cases**: Non-obvious constraints, layout/GPU/timing traps, and invariants anchored to stable `path:symbol` identifiers (avoid volatile line numbers in committed `.md` docs, except in symbol-less config/data files).
   4. **How to run & verify**: Commands, visual/interaction states, or test cases that exercise the slice.
 - **Protect the inline rules budget (`NOTES.md` / `README.md` vs `GEMINI.md` / `AGENTS.md`)**: Antigravity treats every `GEMINI.md` and `AGENTS.md` file in the directory walk as an **always-on rule** counting toward the `20,000`-token rules budget (`24,000`-byte per-file cap). Always use `README.md`, `NOTES.md`, `DESIGN.md`, `DECISIONS.md`, or `docs/**/*.md` for living project notes; create a subdirectory `GEMINI.md` **only** when compact, subtree-specific behavioral rule overrides are intentionally needed.
-- **Collision-free parallel doc writes**: Each parallel worker writes `.md` notes **only inside its owned directory/slice** (e.g., `<owned-dir>/NOTES.md` or `docs/<owned-slice>.md`). Shared top-level indexes (`README.md`, `docs/ARCHITECTURE.md`) are synthesized by the coordinator or a single designated `docs` owner after parallel branches merge, and Stage 2 verifiers audit `.md` notes to ensure zero drift from shipped code.
+- **Collision-free parallel doc writes**: When each parallel writer owns a distinct directory, it writes `<owned-dir>/NOTES.md` (or `README.md`); when multiple parallel writers own sibling files inside the **same** directory, shared `<dir>/README.md` and `<dir>/NOTES.md` are off-limits alongside top-level indexes (`README.md`, `docs/ARCHITECTURE.md`) — each sibling writer writes a uniquely named slice doc (`<dir>/<owned-slice>.NOTES.md` or `docs/<area>/<owned-slice>.md`), and a single designated owner/coordinator synthesizes shared directory and top-level indexes post-merge. Stage 2 verifiers audit `.md` notes to ensure zero drift from shipped code.
 
 ---
 
@@ -112,8 +112,8 @@ Every agent working in this repository **autonomously creates and maintains `.md
 
 - **Disjoint write ownership**: Two workers must **never** edit the same file in the same workspace concurrently. Lock shared interfaces/tokens first and assign strictly disjoint file slices, or isolate each writer in `workspace="share"` / `"branch"` (or `.worktrees/<name>`) and integrate cleanly afterward. Always land or merge work before killing an isolated worker.
 - **Self-contained worker briefs & wakeup `@mentions`**: Subagents, workflow nodes, and fresh swarm workers see **none** of the parent conversation by default, and parked swarm members wake **only** when `@mentioned`. Every delegated prompt must specify:
-  1. Exact goal, quality bar, and co-located `.md` documentation expectations (`Section 5`)
-  2. Owned files (including owned `.md` note paths) vs off-limits files
+  1. Exact goal, quality bar, and — for authoring workers — co-located `.md` documentation expectations (`Section 5`)
+  2. Owned files (including owned `.md` note paths for writers; read-only scouts/critics/verifiers own zero writable files) vs off-limits files
   3. Relevant interfaces, tokens, and architectural invariants
   4. Concrete verification commands, done criteria, and — for swarm workers — ending the final report with `@coordinator [done]` (or the next peer's `@name`)
   5. Explicit iteration cap (`≤ 3` self-fix attempts before escalating diagnosis)
