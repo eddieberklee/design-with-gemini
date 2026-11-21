@@ -5,22 +5,22 @@ const assert = require('node:assert/strict');
 const Client = require('./client.js');
 const Renderer = require('./renderer.js');
 
-test('pickFourModels selects Gemini 4 Hydrogen, Argon, Carbon, Neon first', () => {
+test('pickFourModels keeps the 3 working Gemini 3 models and pairs with Gemini 4 Neon', () => {
   const picked = Client.pickFourModels([
-    { name: 'models/gemini-4-neon', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-4-hydrogen', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-4-carbon', supportedGenerationMethods: ['generateContent'] },
-    { name: 'models/gemini-4-argon', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-3-pro-preview', supportedGenerationMethods: ['generateContent'] },
     { name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-3.1-flash-lite-preview', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+    { name: 'models/gemini-4-neon', supportedGenerationMethods: ['generateContent'] },
     { name: 'models/gemini-2.5-flash-image', supportedGenerationMethods: ['generateContent'] }
   ]);
 
   assert.equal(picked.length, 4);
   assert.equal(new Set(picked).size, 4);
   assert.deepEqual(picked, [
-    'gemini-4-hydrogen',
-    'gemini-4-argon',
-    'gemini-4-carbon',
+    'gemini-3-pro-preview',
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite-preview',
     'gemini-4-neon'
   ]);
 });

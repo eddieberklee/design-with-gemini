@@ -8,6 +8,13 @@
   const LOCAL_KEY = 'dc_gemini_api_key_local';
 
   const DEFAULT_FOUR_MODELS = [
+    'gemini-3-pro-preview',
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite-preview',
+    'gemini-4-neon'
+  ];
+
+  const EXTRA_MODELS = [
     'gemini-4-hydrogen',
     'gemini-4-argon',
     'gemini-4-carbon',
@@ -15,13 +22,13 @@
   ];
 
   const MODEL_SLOTS_PREFERENCE = [
-    [/^gemini-4-hydrogen$/i, /^gemini-4.*hydrogen/i, /^gemini-3(\.\d+)?-pro(?!.*image)/i],
-    [/^gemini-4-argon$/i, /^gemini-4.*argon/i, /^gemini-3\.8-flash$/i, /^gemini-3(\.\d+)?-flash(?!.*(lite|image|tts|audio))/i],
-    [/^gemini-4-carbon$/i, /^gemini-4.*carbon/i, /^gemini-3(\.\d+)?-flash-lite/i],
-    [/^gemini-4-neon$/i, /^gemini-4.*neon/i, /^gemini-3\.8-flash/i, /^gemini-2\.5-pro/i]
+    [/^gemini-3(\.\d+)?-pro(?!.*image)/i, /^gemini-4-hydrogen$/i, /^gemini-2\.5-pro$/i],
+    [/^gemini-3\.8-flash$/i, /^gemini-3(\.\d+)?-flash(?!.*(lite|image|tts|audio))/i, /^gemini-4-argon$/i],
+    [/^gemini-3(\.\d+)?-flash-lite/i, /^gemini-4-carbon$/i],
+    [/^gemini-4-neon$/i, /^gemini-4-hydrogen$/i, /^gemini-4-argon$/i, /^gemini-4-carbon$/i, /^gemini-3\.8-flash$/i]
   ];
 
-  const EXCLUDE_RE = /(tts|image|live|audio|embedding|aqa|robotics|computer-use|deep-research|lyria|veo|imagen|gemma|decision|transcribe|learnlm|nano-banana|genie)/i;
+  const EXCLUDE_RE = /(tts|image|live|audio|embedding|aqa|robotics|computer-use|deep-research|lyria|veo|imagen|gemma|decision|transcribe|learnlm|nano-banana|genie|^gemini-2\.0-|^gemini-2\.5-flash$)/i;
 
   const SYSTEM_PROMPT = [
     'You are a 3D CAD & sculptural modeling engine. Given an image of an object or scene,',
@@ -203,12 +210,13 @@
       }
       const json = await res.json();
       const eligible = listEligibleModels(json && json.models);
-      const merged = DEFAULT_FOUR_MODELS.slice();
-      eligible.forEach(function (id) {
+      const selected = pickFourModels(json && json.models);
+      const merged = selected.slice();
+      EXTRA_MODELS.concat(eligible).forEach(function (id) {
         if (merged.indexOf(id) < 0) merged.push(id);
       });
       return {
-        selected: pickFourModels(json && json.models),
+        selected: selected,
         available: merged
       };
     } catch (_err) {
