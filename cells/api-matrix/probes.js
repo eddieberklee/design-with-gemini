@@ -47,9 +47,10 @@
     }
   }
 
-  // Live cross-cell key store synced with Cell #1 (cells/decisions/client.js).
+  // Live cross-cell key store synced with Cell #1 (decisions) & Cell #2 (prosody).
   const KeyStore = {
     get: function () {
+      storageRestricted = false;
       const s = safeStorageGet('sessionStorage', SESSION_KEY);
       if (s) {
         memoryKey = s;
@@ -59,6 +60,11 @@
       if (l) {
         memoryKey = l;
         return l;
+      }
+      // If browser storage is writable and both stores are empty, a clear happened elsewhere.
+      if (!storageRestricted) {
+        memoryKey = '';
+        return '';
       }
       if (
         global.GeminiDecisions &&
@@ -76,8 +82,8 @@
     },
 
     getStorageType: function () {
-      if (safeStorageGet('localStorage', LOCAL_KEY)) return 'local';
       if (safeStorageGet('sessionStorage', SESSION_KEY)) return 'session';
+      if (safeStorageGet('localStorage', LOCAL_KEY)) return 'local';
       if (KeyStore.get()) return 'memory';
       return 'none';
     },
@@ -97,18 +103,16 @@
         }
       }
 
-      // Keep Cell #1's closure cache in sync so both cells stay live without reloading.
-      if (
-        global.GeminiDecisions &&
-        global.GeminiDecisions.Client &&
-        global.GeminiDecisions.Client.KeyStore
-      ) {
-        if (cleaned) {
-          global.GeminiDecisions.Client.KeyStore.set(cleaned, Boolean(persistLocal));
-        } else {
-          global.GeminiDecisions.Client.KeyStore.clear();
+      // Keep sibling cells' closure caches in sync so all cells stay live without reloading.
+      ['GeminiDecisions', 'GeminiProsody'].forEach(function (nsName) {
+        const ks = global[nsName] && global[nsName].Client && global[nsName].Client.KeyStore;
+        if (!ks) return;
+        if (cleaned && typeof ks.set === 'function') {
+          ks.set(cleaned, Boolean(persistLocal));
+        } else if (!cleaned && typeof ks.clear === 'function') {
+          ks.clear();
         }
-      }
+      });
 
       if (typeof global.dispatchEvent === 'function' && typeof global.CustomEvent === 'function') {
         global.dispatchEvent(new global.CustomEvent('gemini-key-changed', { detail: { hasKey: Boolean(cleaned), storage: mode } }));
@@ -153,18 +157,49 @@
       }
     }
     const key = String(activeKey || '').trim();
-    if (key) {
+    if (key.length >= 4) {
       out = out.split(key).join('$GEMINI_API_KEY');
       const enc = encodeURIComponent(key);
       if (enc && enc !== key) {
         out = out.split(enc).join('$GEMINI_API_KEY');
       }
+      try {
+        const jsonEscaped = JSON.stringify(key).slice(1, -1);
+        if (jsonEscaped && jsonEscaped !== key) {
+          out = out.split(jsonEscaped).join('$GEMINI_API_KEY');
+        }
+      } catch (_err) {}
     }
     return out
       .replace(/AIza[0-9A-Za-z\-_]{20,}/g, '***REDACTED_KEY***')
       .replace(/([?&](?:key|access_token)=)[^&\s"'#]+/gi, '$1$GEMINI_API_KEY')
       .replace(/(Authorization:\s*Bearer\s+)[^\s"']+/gi, '$1$GEMINI_API_KEY')
       .replace(/(x-goog-api-key:\s*)[^\s"']+/gi, '$1$GEMINI_API_KEY');
+  }
+
+  function redactDeep(value, activeKey) {
+    if (typeof value === 'string') return redactSecrets(value, activeKey);
+    if (Array.isArray(value)) {
+      return value.map(function (v) { return redactDeep(v, activeKey); });
+    }
+    if (value && typeof value === 'object') {
+      const out = {};
+      Object.keys(value).forEach(function (k) {
+        out[k] = redactDeep(value[k], activeKey);
+      });
+      return out;
+    }
+    return value;
+  }
+
+  function scrubProbeResult(result, activeKey) {
+    if (!result || typeof result !== 'object') return result;
+    const copy = Object.assign({}, result);
+    if (typeof copy.summary === 'string') copy.summary = redactSecrets(copy.summary, activeKey);
+    if (typeof copy.remediation === 'string') copy.remediation = redactSecrets(copy.remediation, activeKey);
+    if (typeof copy.curl === 'string') copy.curl = redactSecrets(copy.curl, activeKey);
+    if (copy.raw !== undefined) copy.raw = redactDeep(copy.raw, activeKey);
+    return copy;
   }
 
   function formatByteCount(bytes) {
@@ -1028,6 +1063,7 @@
           pagesFetched: pageCount,
           bucketCounts: {
             text: b.text.length,
+            interactions: b.interactions.length,
             live: b.live.length,
             tts: b.tts.length,
             transcribe: b.transcribe.length,
@@ -1110,153 +1146,168 @@
       body: body
     });
 
-    const ctrl = createCombinedController(20000, ctx.signal);
-    const startedAt = performance.now();
+    let attempt = 0;
 
-    return fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ctx.apiKey },
-      body: JSON.stringify(body),
-      signal: ctrl.signal
-    })
-      .then(function (resp) {
-        const headerMs = Math.max(1, Math.round(performance.now() - startedAt));
-        if (!resp.ok) {
-          return resp.text().then(function (text) {
-            ctrl.cleanup();
-            let parsed = null;
-            try { parsed = text ? JSON.parse(text) : {}; } catch (_e) { parsed = { _rawText: text.slice(0, 1200) }; }
-            return makeHttpErrorResult('stream', bare, curl, {
-              httpStatus: resp.status,
-              latencyMs: headerMs,
-              data: parsed,
-              rawText: text
-            });
-          });
-        }
+    function runStreamAttempt() {
+      const ctrl = createCombinedController(20000, ctx.signal);
+      const startedAt = performance.now();
 
-        if (!resp.body || typeof resp.body.getReader !== 'function') {
-          return resp.text().then(function (text) {
-            ctrl.cleanup();
-            const totalMs = Math.max(1, Math.round(performance.now() - startedAt));
-            return {
-              id: 'stream',
-              status: 'pass',
-              badge: 'SSE OK',
-              httpStatus: resp.status,
-              latencyMs: totalMs,
-              modelUsed: bare,
-              discoveredModels: matchingNames(ctx.catalog, 'text').slice(0, 8),
-              summary: 'SSE response received (' + text.length + ' bytes, non-streaming body fallback).',
-              remediation: null,
-              curl: curl,
-              raw: { ttfbMs: headerMs, totalMs: totalMs, preview: text.slice(0, 600) },
-              probedAt: new Date().toISOString()
-            };
-          });
-        }
-
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-        let chunkCount = 0;
-        let firstDataMs = null;
-        let visibleText = '';
-        const parsedEvents = [];
-
-        function processBuffer(flush) {
-          const blocks = buffer.split(/\r?\n\r?\n/);
-          buffer = flush ? '' : blocks.pop();
-          blocks.forEach(function (block) {
-            const lines = block.split(/\r?\n/);
-            const dataLines = [];
-            lines.forEach(function (line) {
-              if (line.startsWith('data:')) {
-                dataLines.push(line.slice(5).trim());
+      return fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': ctx.apiKey },
+        body: JSON.stringify(body),
+        signal: ctrl.signal
+      })
+        .then(function (resp) {
+          const headerMs = Math.max(1, Math.round(performance.now() - startedAt));
+          if (!resp.ok) {
+            return resp.text().then(function (text) {
+              ctrl.cleanup();
+              let parsed = null;
+              try { parsed = text ? JSON.parse(text) : {}; } catch (_e) { parsed = { _rawText: text.slice(0, 1200) }; }
+              if (resp.status === 429 && attempt < 1 && !isHardQuotaExhausted(parsed)) {
+                attempt += 1;
+                const serverDelay = parseRetryDelayMs(resp, parsed);
+                const waitMs = Math.min(serverDelay || 3000, 15000) + Math.round(Math.random() * 500);
+                if (typeof ctx.onStatusNote === 'function') {
+                  ctx.onStatusNote('429 backoff (retrying in ' + (waitMs / 1000).toFixed(1) + 's)…');
+                }
+                return sleepAbortable(waitMs, ctx.signal).then(runStreamAttempt);
               }
+              return makeHttpErrorResult('stream', bare, curl, {
+                httpStatus: resp.status,
+                latencyMs: headerMs,
+                data: parsed,
+                rawText: text
+              });
             });
-            if (!dataLines.length) return;
-            const joined = dataLines.join('\n');
-            if (!joined || joined === '[DONE]') return;
-            chunkCount += 1;
-            if (firstDataMs === null) {
-              firstDataMs = Math.max(1, Math.round(performance.now() - startedAt));
-            }
-            try {
-              const obj = JSON.parse(joined);
-              if (parsedEvents.length < 5) parsedEvents.push(obj);
-              const cand = obj && Array.isArray(obj.candidates) ? obj.candidates[0] : null;
-              const txt = extractVisibleText(cand);
-              if (txt) visibleText += (visibleText ? ' ' : '') + txt;
-            } catch (_err) {
-              // Ignore partial non-JSON lines
-            }
-          });
-        }
+          }
 
-        function pump() {
-          return reader.read().then(function (step) {
-            if (step.done) {
-              buffer += decoder.decode();
-              processBuffer(true);
+          if (!resp.body || typeof resp.body.getReader !== 'function') {
+            return resp.text().then(function (text) {
               ctrl.cleanup();
               const totalMs = Math.max(1, Math.round(performance.now() - startedAt));
               return {
                 id: 'stream',
-                status: chunkCount > 0 ? 'pass' : 'warn',
-                badge: chunkCount > 0 ? 'TTFT ' + (firstDataMs || headerMs) + 'ms' : '0 CHUNKS',
+                status: 'pass',
+                badge: 'SSE OK',
                 httpStatus: resp.status,
                 latencyMs: totalMs,
                 modelUsed: bare,
                 discoveredModels: matchingNames(ctx.catalog, 'text').slice(0, 8),
-                summary:
-                  chunkCount +
-                  ' SSE chunk' +
-                  (chunkCount === 1 ? '' : 's') +
-                  ' · TTFT ' +
-                  (firstDataMs || headerMs) +
-                  'ms · "' +
-                  (visibleText.trim() || '(no visible text)') +
-                  '"',
-                remediation: chunkCount === 0 ? 'Stream returned HTTP 200 without SSE data frames.' : null,
+                summary: 'SSE response received (' + text.length + ' bytes, non-streaming body fallback).',
+                remediation: null,
                 curl: curl,
-                raw: sanitizePayloadForInspector({
-                  headersMs: headerMs,
-                  firstDataMs: firstDataMs,
-                  totalMs: totalMs,
-                  chunkCount: chunkCount,
-                  visibleText: visibleText.trim(),
-                  sampleEvents: parsedEvents
-                }),
+                raw: { ttfbMs: headerMs, totalMs: totalMs, preview: text.slice(0, 600) },
                 probedAt: new Date().toISOString()
               };
-            }
-            buffer += decoder.decode(step.value, { stream: true });
-            processBuffer(false);
-            return pump();
-          });
-        }
-
-        return pump();
-      })
-      .catch(function (err) {
-        ctrl.cleanup();
-        if (err && err.aborted) throw err;
-        if (err && err.name === 'AbortError') {
-          if (ctrl.didTimeout()) {
-            return makeNetworkResult('stream', bare, curl, {
-              timedOut: true,
-              latencyMs: 20000,
-              networkError: 'SSE stream timed out after 20s.'
             });
           }
-          throw { aborted: true };
-        }
-        return makeNetworkResult('stream', bare, curl, {
-          latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
-          networkError: err && err.message ? err.message : 'SSE request failed.'
+
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder('utf-8');
+          let buffer = '';
+          let chunkCount = 0;
+          let firstDataMs = null;
+          let visibleText = '';
+          const parsedEvents = [];
+
+          function processBuffer(flush) {
+            const blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = flush ? '' : blocks.pop();
+            blocks.forEach(function (block) {
+              const lines = block.split(/\r?\n/);
+              const dataLines = [];
+              lines.forEach(function (line) {
+                if (line.startsWith('data:')) {
+                  dataLines.push(line.slice(5).trim());
+                }
+              });
+              if (!dataLines.length) return;
+              const joined = dataLines.join('\n');
+              if (!joined || joined === '[DONE]') return;
+              chunkCount += 1;
+              if (firstDataMs === null) {
+                firstDataMs = Math.max(1, Math.round(performance.now() - startedAt));
+              }
+              try {
+                const obj = JSON.parse(joined);
+                if (parsedEvents.length < 5) parsedEvents.push(obj);
+                const cand = obj && Array.isArray(obj.candidates) ? obj.candidates[0] : null;
+                const txt = extractVisibleText(cand);
+                if (txt) visibleText += (visibleText ? ' ' : '') + txt;
+              } catch (_err) {
+                // Ignore partial non-JSON lines
+              }
+            });
+          }
+
+          function pump() {
+            return reader.read().then(function (step) {
+              if (step.done) {
+                buffer += decoder.decode();
+                processBuffer(true);
+                ctrl.cleanup();
+                const totalMs = Math.max(1, Math.round(performance.now() - startedAt));
+                return {
+                  id: 'stream',
+                  status: chunkCount > 0 ? 'pass' : 'warn',
+                  badge: chunkCount > 0 ? 'TTFT ' + (firstDataMs || headerMs) + 'ms' : '0 CHUNKS',
+                  httpStatus: resp.status,
+                  latencyMs: totalMs,
+                  modelUsed: bare,
+                  discoveredModels: matchingNames(ctx.catalog, 'text').slice(0, 8),
+                  summary:
+                    chunkCount +
+                    ' SSE chunk' +
+                    (chunkCount === 1 ? '' : 's') +
+                    ' · TTFT ' +
+                    (firstDataMs || headerMs) +
+                    'ms · "' +
+                    (visibleText.trim() || '(no visible text)') +
+                    '"',
+                  remediation: chunkCount === 0 ? 'Stream returned HTTP 200 without SSE data frames.' : null,
+                  curl: curl,
+                  raw: sanitizePayloadForInspector({
+                    headersMs: headerMs,
+                    firstDataMs: firstDataMs,
+                    totalMs: totalMs,
+                    chunkCount: chunkCount,
+                    visibleText: visibleText.trim(),
+                    sampleEvents: parsedEvents
+                  }),
+                  probedAt: new Date().toISOString()
+                };
+              }
+              buffer += decoder.decode(step.value, { stream: true });
+              processBuffer(false);
+              return pump();
+            });
+          }
+
+          return pump();
+        })
+        .catch(function (err) {
+          ctrl.cleanup();
+          if (err && err.aborted) throw err;
+          if (err && err.name === 'AbortError') {
+            if (ctrl.didTimeout()) {
+              return makeNetworkResult('stream', bare, curl, {
+                timedOut: true,
+                latencyMs: 20000,
+                networkError: 'SSE stream timed out after 20s.'
+              });
+            }
+            throw { aborted: true };
+          }
+          return makeNetworkResult('stream', bare, curl, {
+            latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+            networkError: err && err.message ? err.message : 'SSE request failed.'
+          });
         });
-      });
+    }
+
+    return runStreamAttempt();
   }
 
   function probeInteractions(ctx) {
@@ -1502,7 +1553,7 @@
       if (ctx.signal) ctx.signal.addEventListener('abort', onAbort, { once: true });
 
       const timer = setTimeout(function () {
-        try { if (ws && ws.readyState < 2) ws.close(1000, 'Timeout'); } catch (_e) {}
+        const sock = ws;
         finish({
           id: 'live_ws',
           status: 'fail',
@@ -1517,6 +1568,7 @@
           raw: { error: 'Handshake timeout after 10000ms', model: withModelsPrefix(bare) },
           probedAt: new Date().toISOString()
         });
+        try { if (sock && sock.readyState < 2) sock.close(1000, 'Timeout'); } catch (_e) {}
       }, 10000);
 
       try {
@@ -1574,8 +1626,8 @@
           } catch (_e) {
             msg = { _raw: text.slice(0, 500) };
           }
+          const sock = ws;
           if (msg && Object.prototype.hasOwnProperty.call(msg, 'setupComplete')) {
-            try { ws.close(1000, 'Probe complete'); } catch (_e) {}
             finish({
               id: 'live_ws',
               status: 'pass',
@@ -1594,8 +1646,8 @@
               }),
               probedAt: new Date().toISOString()
             });
+            try { if (sock && sock.readyState < 2) sock.close(1000, 'Probe complete'); } catch (_e) {}
           } else {
-            try { ws.close(1000, 'Probe complete'); } catch (_e) {}
             finish({
               id: 'live_ws',
               status: 'pass',
@@ -1610,6 +1662,7 @@
               raw: sanitizePayloadForInspector({ handshakeMs: latencyMs, firstServerFrame: msg }),
               probedAt: new Date().toISOString()
             });
+            try { if (sock && sock.readyState < 2) sock.close(1000, 'Probe complete'); } catch (_e) {}
           }
         }
 
@@ -1679,7 +1732,7 @@
         }
       }
     };
-    const curl = buildCurl({
+    let curl = buildCurl({
       method: 'POST',
       url: url,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': '$GEMINI_API_KEY' },
@@ -1709,6 +1762,12 @@
             speechConfig: { voiceConfig: { voice: 'Kore' } }
           }
         };
+        curl = buildCurl({
+          method: 'POST',
+          url: url,
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': '$GEMINI_API_KEY' },
+          body: altBody
+        });
         return runTtsRequest(altBody);
       }
       return res;
@@ -1846,7 +1905,7 @@
         id: cfg.id,
         status: 'warn',
         badge: 'NOT LISTED',
-        httpStatus: 200,
+        httpStatus: ctx.catalog && ctx.catalog.loadedAt ? 200 : null,
         latencyMs: 1,
         modelUsed: null,
         discoveredModels: [],
@@ -2262,9 +2321,14 @@
     if (!runner) {
       return Promise.reject(new Error('Unknown endpoint probe: ' + endpointId));
     }
-    return Promise.resolve().then(function () {
-      return runner(ctx);
-    });
+    const activeKey = ctx && ctx.apiKey ? ctx.apiKey : '';
+    return Promise.resolve()
+      .then(function () {
+        return runner(ctx);
+      })
+      .then(function (result) {
+        return scrubProbeResult(result, activeKey);
+      });
   }
 
   // =========================================================================
@@ -2350,7 +2414,9 @@
       if (signal && signal.aborted) return Promise.reject({ aborted: true });
       let lockKey = null;
       if (stage2Serialize) {
-        if (id === 'generate' || id === 'stream' || id === 'interactions' || id === 'grounding' || id === 'audio_in') {
+        if (id === 'interactions') {
+          lockKey = pickBare(catalog, 'interactions', 'gemini-2.5-flash');
+        } else if (id === 'generate' || id === 'stream' || id === 'grounding' || id === 'audio_in') {
           lockKey = pickBare(catalog, 'text', 'gemini-2.5-flash');
         }
       }
@@ -2365,13 +2431,36 @@
           onStatusNote: function (note) {
             onStatusNote(id, note);
           }
-        }).then(function (result) {
-          if (id === 'models' && result.catalog) {
-            catalog = result.catalog;
-          }
-          onResult(id, result);
-          return result;
-        });
+        })
+          .then(function (result) {
+            if (id === 'models' && result.catalog) {
+              catalog = result.catalog;
+            }
+            onResult(id, result);
+            return result;
+          })
+          .catch(function (err) {
+            if (err && err.aborted) throw err;
+            const errResult = scrubProbeResult(
+              {
+                id: id,
+                status: 'fail',
+                badge: 'ERROR',
+                httpStatus: 0,
+                latencyMs: 0,
+                modelUsed: null,
+                discoveredModels: [],
+                summary: err && err.message ? err.message : 'Unexpected probe error.',
+                remediation: 'Retry this endpoint probe or inspect browser console.',
+                curl: '',
+                raw: { error: String(err) },
+                probedAt: new Date().toISOString()
+              },
+              apiKey
+            );
+            onResult(id, errResult);
+            return errResult;
+          });
       });
     }
 

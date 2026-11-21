@@ -17,7 +17,8 @@ All files load via classic `<script defer>` (never `type="module"`) so the grid 
 | [audio.js](audio.js) | Chunked 32KB Base64 encode/decode (avoids call-stack overflow on large audio), `audio/L16` PCM16LE→WAV wrapper with RIFF magic-byte detection and odd-byte alignment, and a procedural 0.35s 440Hz WAV test-tone generator for multimodal audio input probing. |
 | [probes.js](probes.js) | Cross-cell `KeyStore` synced with `cells/decisions/client.js`, central `redactSecrets` sanitizer, paginated `/v1beta/models?pageSize=1000` capability catalog builder, all 18 endpoint probe runners (REST, SSE, WebSocket Live API, TTS, Audio Input, Opt-in Image Gen, Platform list probes, OpenAI compat), staged `runBatch` concurrency/429 scheduler, and JSON/Markdown report exporters. |
 | [ui.js](ui.js) | Mounts Cell #4's single-button 6×3 micro-LED card in `#cell-api-matrix`, full-viewport `#api-matrix` `<dialog>` secondary grid with loop-free URL hash history sync, collapsible API key bar, sticky filter rail, 18-card secondary grid, Inspector Drawer (with `←`/`→` stepping, inline TTS `<audio>` playback, opt-in Image preview, redacted cURL/JSON), and Discovered Models browser drawer. |
-| [api-matrix.css](api-matrix.css) | Strictly scoped under `.cell--api-matrix`, `.am-dialog`, and `.am-*`, mirroring Cell #1's Swiss Instrument tokens, `@container am-card` breakpoints, colorblind-safe status geometry, mobile bottom-sheet drawer, and `prefers-reduced-motion` guards. |
+| [api-matrix.css](api-matrix.css) | Strictly scoped under `.cell--api-matrix`, `.am-dialog`, and `.am-*`, mirroring Cell #1's Swiss Instrument tokens (including AA `--am-needle-ink` & `--am-ink-3`), `@container am-card` breakpoints, colorblind-safe status geometry, mobile bottom-sheet drawer, `>= 36px` touch targets, and `prefers-reduced-motion` guards. |
+| [probes.test.js](probes.test.js) | Zero-dependency Node `vm` unit & integration test suite verifying Base64/PCM→WAV audio codecs, secret redaction, thinking-safe configs, catalog bucketing, cross-cell `KeyStore` sync/clear, staged 18-endpoint batch execution, SSE/WS/TTS/image edge cases, and 429 retry vs hard-quota fast-fail. |
 
 ---
 
@@ -40,7 +41,8 @@ Live `OPTIONS` preflight checks against `https://generativelanguage.googleapis.c
 - **Staged Run-All scheduler (`probes.js:runBatch`)**: Runs `models` first as a Stage 0 auth/discovery gate (halting immediately on `401`/`403`), then Stage 1 free metadata/read-only probes (concurrency `3`), then Stage 2 metered probes (concurrency `2`, `450ms` stagger, serialized per `bareModel`) with `429 RetryInfo` backoff and fast-fail on daily/zero-limit `QuotaFailure`.
 - **PCM16LE endianness (`audio.js:pcm16leToWavBytes`)**: Gemini TTS emits signed 16-bit little-endian PCM even when `mimeType` reads `audio/L16;codec=pcm;rate=24000`; bytes are wrapped directly in a RIFF/WAVE header without byte-swapping, and existing `RIFF` headers are preserved without double-wrapping.
 - **Cost guardrails**: `veo` and `lyria` perform `$0` metadata checks only; `image_gen` performs `$0` metadata checks in batch runs and exposes an explicit opt-in `Run Live Image Gen` button in its Inspector Drawer; `grounding` can be toggled off in the filter rail.
-- **Loop-free `#api-matrix` history (`ui.js:openSecondaryGrid` / `ui.js:closeSecondaryGrid`)**: Tracks `openedFromGrid` so `← Back to Grid` calls `history.back()` when entered from Cell #2, or `history.replaceState` when deep-linked directly to `#api-matrix`.
+- **Loop-free `#api-matrix` history (`ui.js:openSecondaryGrid` / `ui.js:closeSecondaryGrid`)**: Tracks `openedFromGrid` so `← Back to Grid` calls `history.back()` when entered from Cell #4, or `history.replaceState` when deep-linked directly to `#api-matrix`.
+- **Rejected Protocol B alternatives**: Rejected (a) flat table layout in favor of a tactile secondary card grid matching `index.html`'s physical cell grammar, (b) firing all 18 probes concurrently (`Promise.all`) which triggers instant free-tier 429 bursts, and (c) auto-running probes on modal open before a key is validated.
 
 ---
 
@@ -55,8 +57,8 @@ Live `OPTIONS` preflight checks against `https://generativelanguage.googleapis.c
 
 ## 5. How to Run & Verify
 
-1. **Syntax & pure-function tests**:
+1. **Syntax & unit/integration tests**:
    ```bash
-   node --check cells/api-matrix/audio.js && node --check cells/api-matrix/probes.js && node --check cells/api-matrix/ui.js
+   node --check cells/api-matrix/audio.js && node --check cells/api-matrix/probes.js && node --check cells/api-matrix/ui.js && node --check cells/api-matrix/probes.test.js && node cells/api-matrix/probes.test.js
    ```
 2. **Browser check**: Open `index.html` via `python3 -m http.server 8000` (or `file://`), tap Cell #4 (`04 · API Matrix`), paste a Google AI Studio Gemini API key, and click **Save & Run All**. Inspect any card for redacted cURL, raw JSON, inline TTS playback, or opt-in live image generation.

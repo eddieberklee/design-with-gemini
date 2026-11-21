@@ -23,6 +23,8 @@
         if (v === undefined || v === null || v === false) return;
         if (k === 'className') node.className = v;
         else if (k === 'textContent') node.textContent = String(v);
+        else if (k === 'value') node.value = String(v);
+        else if (k === 'checked') node.checked = Boolean(v);
         else if (k === 'dataset') {
           Object.keys(v).forEach(function (dk) {
             if (v[dk] !== undefined && v[dk] !== null) node.dataset[dk] = String(v[dk]);
@@ -86,11 +88,13 @@
   }
 
   function mountApiMatrixCell(rootEl) {
-    if (!rootEl) return;
+    if (!rootEl || rootEl.dataset.amMounted === 'true') return;
+    rootEl.dataset.amMounted = 'true';
 
     const app = {
       results: Object.create(null),
       probing: Object.create(null),
+      batchProbing: Object.create(null),
       statusNotes: Object.create(null),
       objectUrls: Object.create(null), // endpointId -> objectURL
       catalog: Probes.createEmptyCatalog(),
@@ -110,8 +114,7 @@
       drawerTab: 'curl', // 'curl' | 'raw'
       modelSearch: '',
       openedFromGrid: false,
-      returnFocusEl: null,
-      drawerReturnFocusEl: null,
+      drawerReturnTarget: null, // { type: 'endpoint', id } | { type: 'models' }
       activeAudioEl: null
     };
 
@@ -221,6 +224,10 @@
     // FULL-VIEWPORT SECONDARY GRID (<dialog>)
     // =========================================================================
 
+    const existingDialog = document.getElementById('am-dialog');
+    if (existingDialog && existingDialog.parentNode) {
+      existingDialog.parentNode.removeChild(existingDialog);
+    }
     const dialog = el('dialog', {
       className: 'am-dialog',
       id: 'am-dialog',
@@ -283,7 +290,7 @@
     }
 
     // =========================================================================
-    // 1. RENDER PRIMARY CELL #2 (4:3 IN-GRID INSTRUMENT)
+    // 1. RENDER PRIMARY CELL #4 (4:3 IN-GRID INSTRUMENT)
     // =========================================================================
 
     function renderPrimaryCell() {
@@ -297,8 +304,16 @@
         pillTone = 'probing';
         pillText = 'PROBING ' + counts.probing;
       } else if (anyProbed) {
-        pillTone = counts.fail > 0 ? 'fail' : counts.warn > 0 ? 'warn' : 'pass';
-        pillText = counts.pass + '/' + counts.total + ' OK';
+        if (counts.fail > 0) {
+          pillTone = 'fail';
+          pillText = counts.fail + ' FAIL';
+        } else if (counts.warn > 0) {
+          pillTone = 'warn';
+          pillText = counts.warn + ' WARN';
+        } else {
+          pillTone = 'pass';
+          pillText = counts.pass + '/' + counts.total + ' OK';
+        }
       }
 
       const ariaSummary =
@@ -340,8 +355,8 @@
           'aria-haspopup': 'dialog',
           'aria-controls': 'am-dialog',
           'aria-label': ariaSummary,
-          onClick: function (e) {
-            openSecondaryGrid({ triggerEl: e.currentTarget, fromDeepLink: false });
+          onClick: function () {
+            openSecondaryGrid({ fromDeepLink: false });
           }
         },
         [
@@ -351,7 +366,11 @@
               el('span', { className: 'am-card-title', textContent: 'API Matrix' })
             ]),
             el('div', { className: 'am-card-right' }, [
-              el('span', { className: 'am-status-pill', dataset: { tone: pillTone }, textContent: pillText }),
+              el('span', {
+                className: 'am-status-pill',
+                dataset: { tone: pillTone },
+                textContent: statusSymbol(pillTone) + ' ' + pillText
+              }),
               el('span', { className: 'am-open-cue', 'aria-hidden': 'true' }, [
                 el('span', { className: 'am-open-label', textContent: 'Grid' }),
                 '↗'
@@ -370,17 +389,17 @@
           ]),
           el('div', { className: 'am-card-footer' }, [
             el('div', { className: 'am-footer-group' }, [
-              el('span', { className: 'am-footer-host', textContent: 'generativelanguage.googleapis.com' })
+              el('span', { className: 'am-footer-host', textContent: 'generativelanguage.googleapis.com' }),
+              el('span', { className: 'am-footer-extra', textContent: '18 APIs' })
             ]),
             el('div', { className: 'am-footer-group' }, [
-              el('span', { className: 'am-footer-extra', textContent: '18 APIs' }),
               el('span', { textContent: 'Tap →' })
             ])
           ])
         ]
       );
 
-      while (rootEl.firstChild) rootEl.removeChild(rootEl.firstChild);
+      clearNode(rootEl);
       rootEl.appendChild(liveRegion);
       rootEl.appendChild(el('div', { className: 'am-scanline', 'aria-hidden': 'true' }));
       rootEl.appendChild(trigger);
@@ -420,10 +439,11 @@
       const modelsBtn = el('button', {
         type: 'button',
         className: 'am-btn',
+        dataset: { action: 'models' },
         textContent: app.catalog.models.length ? app.catalog.models.length + ' Models' : 'Models (0)',
         title: 'Browse models discovered from GET /v1beta/models',
-        onClick: function (e) {
-          openModelsDrawer(e.currentTarget);
+        onClick: function () {
+          openModelsDrawer();
         }
       });
 
@@ -462,10 +482,15 @@
         title: 'Copy redacted Markdown status report',
         onClick: function () {
           const md = Probes.buildMarkdownSummary(app.results, app.catalog, KeyStore.get());
-          copyToClipboard(md).then(function () {
-            copyMdBtn.textContent = 'Copied ✓';
-            setTimeout(function () { copyMdBtn.textContent = 'Copy MD'; }, 1500);
-          });
+          copyToClipboard(md)
+            .then(function () {
+              copyMdBtn.textContent = 'Copied ✓';
+              setTimeout(function () { copyMdBtn.textContent = 'Copy MD'; }, 1500);
+            })
+            .catch(function () {
+              copyMdBtn.textContent = 'Copy failed';
+              setTimeout(function () { copyMdBtn.textContent = 'Copy MD'; }, 1500);
+            });
         }
       });
 
@@ -596,6 +621,17 @@
           if (andRun) startBatchRun();
         }
 
+        const showToggleBtn = el('button', {
+          type: 'button',
+          className: 'am-btn am-btn--sm',
+          textContent: app.keyVisible ? 'Hide' : 'Show',
+          onClick: function () {
+            app.keyVisible = !app.keyVisible;
+            keyInput.type = app.keyVisible ? 'text' : 'password';
+            showToggleBtn.textContent = app.keyVisible ? 'Hide' : 'Show';
+          }
+        });
+
         const form = el(
           'form',
           {
@@ -607,16 +643,7 @@
           },
           [
             keyInput,
-            el('button', {
-              type: 'button',
-              className: 'am-btn am-btn--sm',
-              textContent: app.keyVisible ? 'Hide' : 'Show',
-              onClick: function () {
-                app.keyVisible = !app.keyVisible;
-                keyInput.type = app.keyVisible ? 'text' : 'password';
-                renderKeybar();
-              }
-            }),
+            showToggleBtn,
             el('label', { className: 'am-checkbox-row' }, [persistCb, 'Remember on this device']),
             el('button', {
               type: 'button',
@@ -662,6 +689,14 @@
         ]);
 
         inner.appendChild(form);
+        if (KeyStore.isStorageRestricted()) {
+          inner.appendChild(
+            el('div', {
+              className: 'am-key-note',
+              textContent: 'Browser storage is restricted on this origin — key will stay in memory for this page session only.'
+            })
+          );
+        }
         if (app.keyPromptNotice) {
           inner.appendChild(el('div', { className: 'am-inline-alert', role: 'alert', textContent: app.keyPromptNotice }));
         }
@@ -803,7 +838,7 @@
             'aria-current': isSelected ? 'true' : null,
             onClick: function (e) {
               if (e.target && e.target.closest('button')) return;
-              openEndpointDrawer(ep.id, card.querySelector('.am-inspect-btn'));
+              openEndpointDrawer(ep.id);
             }
           },
           [
@@ -841,7 +876,7 @@
                 el('button', {
                   type: 'button',
                   className: 'am-btn am-btn--sm',
-                  disabled: isProbing,
+                  disabled: isProbing || app.isBatchRunning,
                   textContent: isProbing ? '…' : 'Test',
                   'aria-label': 'Test ' + ep.name,
                   onClick: function (e) {
@@ -856,7 +891,7 @@
                   'aria-label': 'Inspect ' + ep.name,
                   onClick: function (e) {
                     e.stopPropagation();
-                    openEndpointDrawer(ep.id, e.currentTarget);
+                    openEndpointDrawer(ep.id);
                   }
                 })
               ])
@@ -874,8 +909,9 @@
     // 3. INSPECTOR DRAWER & DISCOVERED MODELS BROWSER
     // =========================================================================
 
-    function renderDrawer() {
+    function renderDrawer(opts) {
       if (!refs.scrim || !refs.drawer) return;
+      const focusNav = opts && opts.focusNav ? opts.focusNav : null;
       stopActiveAudio();
 
       if (!app.drawerMode) {
@@ -909,44 +945,52 @@
       const res = app.results[ep.id];
       const status = getEndpointStatus(ep.id);
 
+      const prevBtn = el('button', {
+        type: 'button',
+        className: 'am-btn am-btn--sm',
+        dataset: { nav: 'prev' },
+        disabled: !prevEp,
+        'aria-label': 'Previous endpoint',
+        textContent: '←',
+        onClick: function () {
+          if (prevEp) {
+            app.selectedEndpointId = prevEp.id;
+            app.drawerReturnTarget = { type: 'endpoint', id: prevEp.id };
+            renderSecondaryGridCards();
+            renderDrawer({ focusNav: 'prev' });
+          }
+        }
+      });
+
+      const nextBtn = el('button', {
+        type: 'button',
+        className: 'am-btn am-btn--sm',
+        dataset: { nav: 'next' },
+        disabled: !nextEp,
+        'aria-label': 'Next endpoint',
+        textContent: '→',
+        onClick: function () {
+          if (nextEp) {
+            app.selectedEndpointId = nextEp.id;
+            app.drawerReturnTarget = { type: 'endpoint', id: nextEp.id };
+            renderSecondaryGridCards();
+            renderDrawer({ focusNav: 'next' });
+          }
+        }
+      });
+
       const head = el('div', { className: 'am-drawer-head' }, [
         el('div', { className: 'am-drawer-title-group' }, [
           el('span', { className: 'am-tag', textContent: ep.code }),
           el('h2', { id: 'am-drawer-title', className: 'am-drawer-title', tabindex: '-1', textContent: ep.name })
         ]),
         el('div', { className: 'am-drawer-nav' }, [
-          el('button', {
-            type: 'button',
-            className: 'am-btn am-btn--sm',
-            disabled: !prevEp,
-            'aria-label': 'Previous endpoint',
-            textContent: '←',
-            onClick: function () {
-              if (prevEp) {
-                app.selectedEndpointId = prevEp.id;
-                renderSecondaryGridCards();
-                renderDrawer();
-              }
-            }
-          }),
-          el('button', {
-            type: 'button',
-            className: 'am-btn am-btn--sm',
-            disabled: !nextEp,
-            'aria-label': 'Next endpoint',
-            textContent: '→',
-            onClick: function () {
-              if (nextEp) {
-                app.selectedEndpointId = nextEp.id;
-                renderSecondaryGridCards();
-                renderDrawer();
-              }
-            }
-          }),
+          prevBtn,
+          nextBtn,
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--primary',
-            disabled: isProbing,
+            disabled: isProbing || app.isBatchRunning,
             textContent: isProbing ? 'Running…' : 'Re-test',
             onClick: function () {
               runSingleEndpoint(ep.id, false);
@@ -989,7 +1033,7 @@
               el('button', {
                 type: 'button',
                 className: 'am-btn am-btn--sm am-btn--primary',
-                disabled: isProbing,
+                disabled: isProbing || app.isBatchRunning,
                 textContent: isProbing ? 'Generating…' : 'Run Live Image Gen',
                 onClick: function () {
                   runSingleEndpoint(ep.id, true);
@@ -1080,57 +1124,92 @@
         );
       }
 
-      // Tabs: Redacted cURL | Raw Response
-      const tabs = el('div', { className: 'am-tabs', role: 'tablist' }, [
-        ['curl', 'Redacted cURL'],
-        ['raw', 'Raw Response']
-      ].map(function (entry) {
-        return el('button', {
+      // Isolated Tab + Code Section (switching tabs never interrupts audio playback)
+      const codeSection = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+
+      function renderDrawerCodeSection(focusTabId) {
+        clearNode(codeSection);
+        const tabs = el('div', { className: 'am-tabs', role: 'tablist' }, [
+          ['curl', 'Redacted cURL'],
+          ['raw', 'Raw Response']
+        ].map(function (entry) {
+          return el('button', {
+            type: 'button',
+            role: 'tab',
+            className: 'am-tab-btn',
+            dataset: { tabId: entry[0] },
+            'aria-selected': String(app.drawerTab === entry[0]),
+            textContent: entry[1],
+            onClick: function () {
+              app.drawerTab = entry[0];
+              renderDrawerCodeSection(entry[0]);
+            }
+          });
+        }));
+
+        const codeText =
+          app.drawerTab === 'curl'
+            ? Probes.redactSecrets((res && res.curl) || '# Run this probe to generate the exact cURL command.', KeyStore.get())
+            : Probes.redactSecrets(res && res.raw ? JSON.stringify(res.raw, null, 2) : '{}', KeyStore.get());
+
+        const copyBtn = el('button', {
           type: 'button',
-          role: 'tab',
-          className: 'am-tab-btn',
-          'aria-selected': String(app.drawerTab === entry[0]),
-          textContent: entry[1],
+          className: 'am-btn am-btn--sm',
+          textContent: app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
-            app.drawerTab = entry[0];
-            renderDrawer();
+            copyToClipboard(codeText)
+              .then(function () {
+                copyBtn.textContent = 'Copied ✓';
+                setTimeout(function () {
+                  copyBtn.textContent = app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON';
+                }, 1500);
+              })
+              .catch(function () {
+                copyBtn.textContent = 'Copy failed';
+                setTimeout(function () {
+                  copyBtn.textContent = app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON';
+                }, 1500);
+              });
           }
         });
-      }));
-      body.appendChild(tabs);
 
-      const codeText =
-        app.drawerTab === 'curl'
-          ? Probes.redactSecrets((res && res.curl) || '# Run this probe to generate the exact cURL command.', KeyStore.get())
-          : Probes.redactSecrets(res && res.raw ? JSON.stringify(res.raw, null, 2) : '{}', KeyStore.get());
+        codeSection.appendChild(tabs);
+        codeSection.appendChild(
+          el('div', { className: 'am-code-bar' }, [
+            el('span', {
+              className: 'am-key-note',
+              textContent: app.drawerTab === 'curl' ? 'API key always redacted as $GEMINI_API_KEY.' : 'Base64 media payloads truncated for responsiveness.'
+            }),
+            copyBtn
+          ])
+        );
+        codeSection.appendChild(el('pre', { className: 'am-pre', textContent: codeText }));
 
-      const copyBtn = el('button', {
-        type: 'button',
-        className: 'am-btn am-btn--sm',
-        textContent: app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON',
-        onClick: function () {
-          copyToClipboard(codeText).then(function () {
-            copyBtn.textContent = 'Copied ✓';
-            setTimeout(function () {
-              copyBtn.textContent = app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON';
-            }, 1500);
-          });
+        if (focusTabId) {
+          const tabEl = codeSection.querySelector('[data-tab-id="' + focusTabId + '"]');
+          if (tabEl) tabEl.focus();
         }
-      });
+      }
 
-      body.appendChild(
-        el('div', { className: 'am-code-bar' }, [
-          el('span', {
-            className: 'am-key-note',
-            textContent: app.drawerTab === 'curl' ? 'API key always redacted as $GEMINI_API_KEY.' : 'Base64 media payloads truncated for responsiveness.'
-          }),
-          copyBtn
-        ])
-      );
-      body.appendChild(el('pre', { className: 'am-pre', textContent: codeText }));
+      renderDrawerCodeSection(null);
+      body.appendChild(codeSection);
 
       refs.drawer.appendChild(head);
       refs.drawer.appendChild(body);
+
+      if (focusNav === 'prev') {
+        if (!prevBtn.disabled) prevBtn.focus();
+        else {
+          const t = refs.drawer.querySelector('#am-drawer-title');
+          if (t) t.focus();
+        }
+      } else if (focusNav === 'next') {
+        if (!nextBtn.disabled) nextBtn.focus();
+        else {
+          const t = refs.drawer.querySelector('#am-drawer-title');
+          if (t) t.focus();
+        }
+      }
     }
 
     function renderModelsDrawerContent() {
@@ -1149,7 +1228,7 @@
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--primary',
-            disabled: Boolean(app.probing.models),
+            disabled: Boolean(app.probing.models) || app.isBatchRunning,
             textContent: app.probing.models ? 'Loading…' : 'Refresh',
             onClick: function () {
               runSingleEndpoint('models', false);
@@ -1236,6 +1315,33 @@
       refs.drawer.appendChild(body);
     }
 
+    function renderProgressUpdate(changedId) {
+      renderPrimaryCell();
+      if (dialog.open) {
+        renderTopbar();
+        renderFilterBar();
+        renderSecondaryGridCards();
+        if (app.drawerMode === 'endpoint' && (!changedId || app.selectedEndpointId === changedId)) {
+          renderDrawer();
+        } else if (app.drawerMode === 'models' && changedId === 'models') {
+          const prevSearch = refs.drawer && refs.drawer.querySelector('input[type="search"]');
+          const wasFocused = prevSearch && document.activeElement === prevSearch;
+          const selStart = wasFocused ? prevSearch.selectionStart : null;
+          renderDrawer();
+          if (wasFocused) {
+            const nextSearch = refs.drawer && refs.drawer.querySelector('input[type="search"]');
+            if (nextSearch) {
+              nextSearch.focus();
+              if (typeof selStart === 'number') {
+                try { nextSearch.setSelectionRange(selStart, selStart); } catch (_e) {}
+              }
+            }
+          }
+        }
+      }
+      syncRunningClass();
+    }
+
     function renderAll() {
       renderPrimaryCell();
       if (dialog.open) {
@@ -1274,15 +1380,16 @@
       });
       app.singleAborts = Object.create(null);
       app.probing = Object.create(null);
+      app.batchProbing = Object.create(null);
       app.statusNotes = Object.create(null);
       app.isBatchRunning = false;
       app.batchCompleted = 0;
       app.batchTotal = 0;
-      renderAll();
+      renderProgressUpdate(null);
     }
 
     function runSingleEndpoint(endpointId, liveGen) {
-      if (app.probing[endpointId]) return;
+      if (app.isBatchRunning || app.probing[endpointId]) return;
       const apiKey = requireKeyOrPrompt();
       if (!apiKey) return;
 
@@ -1291,7 +1398,7 @@
       app.singleAborts[endpointId] = ac;
       app.probing[endpointId] = true;
       app.statusNotes[endpointId] = liveGen ? 'Running opt-in live image generation…' : '';
-      renderAll();
+      renderProgressUpdate(endpointId);
 
       Probes.runSingleProbe(endpointId, {
         apiKey: apiKey,
@@ -1313,7 +1420,7 @@
           delete app.singleAborts[endpointId];
           delete app.statusNotes[endpointId];
           storeProbeResult(endpointId, result);
-          renderAll();
+          renderProgressUpdate(endpointId);
           announce(endpointId + ' probe finished: ' + result.badge + '.');
         })
         .catch(function (err) {
@@ -1322,7 +1429,7 @@
           delete app.singleAborts[endpointId];
           delete app.statusNotes[endpointId];
           if (err && err.aborted) {
-            renderAll();
+            renderProgressUpdate(endpointId);
             return;
           }
           storeProbeResult(endpointId, {
@@ -1338,7 +1445,7 @@
             raw: { error: Probes.redactSecrets(String(err), apiKey) },
             probedAt: new Date().toISOString()
           });
-          renderAll();
+          renderProgressUpdate(endpointId);
         });
     }
 
@@ -1357,7 +1464,7 @@
         if (e.id === 'grounding' && !app.includeGrounding) return false;
         return true;
       }).length;
-      renderAll();
+      renderProgressUpdate(null);
       announce('Probing ' + app.batchTotal + ' Google Gemini API endpoints.');
 
       Probes.runBatch({
@@ -1368,8 +1475,9 @@
         onStart: function (id) {
           if (seq !== app.runSeq) return;
           app.probing[id] = true;
+          app.batchProbing[id] = true;
           app.statusNotes[id] = '';
-          renderAll();
+          renderProgressUpdate(id);
         },
         onStatusNote: function (id, note) {
           if (seq !== app.runSeq) return;
@@ -1382,22 +1490,27 @@
         onResult: function (id, result) {
           if (seq !== app.runSeq) return;
           delete app.probing[id];
+          delete app.batchProbing[id];
           delete app.statusNotes[id];
           app.batchCompleted += 1;
           storeProbeResult(id, result);
-          renderAll();
+          renderProgressUpdate(id);
         }
       })
         .then(function (outcome) {
           if (seq !== app.runSeq) return;
           app.isBatchRunning = false;
           app.batchAbort = null;
-          app.probing = Object.create(null);
+          Object.keys(app.batchProbing).forEach(function (id) {
+            delete app.probing[id];
+          });
+          app.batchProbing = Object.create(null);
           if (outcome && outcome.haltedOnAuth) {
             app.showKeyEditor = true;
             app.keyPromptNotice = 'Key rejected by /v1beta/models — halted remaining probes to avoid redundant failures.';
+            renderKeybar();
           }
-          renderAll();
+          renderProgressUpdate(null);
           const c = getCounts();
           announce('Probe sweep complete: ' + c.pass + ' passed, ' + c.warn + ' warnings, ' + c.fail + ' failed.');
         })
@@ -1405,11 +1518,20 @@
           if (seq !== app.runSeq) return;
           app.isBatchRunning = false;
           app.batchAbort = null;
-          app.probing = Object.create(null);
-          renderAll();
+          Object.keys(app.batchProbing).forEach(function (id) {
+            delete app.probing[id];
+          });
+          app.batchProbing = Object.create(null);
           if (err && err.aborted) {
+            renderProgressUpdate(null);
             announce('Probe sweep stopped.');
+            return;
           }
+          app.showKeyEditor = true;
+          app.keyPromptNotice = 'Probe sweep failed unexpectedly: ' + Probes.redactSecrets(err && err.message ? err.message : String(err), apiKey);
+          renderKeybar();
+          renderProgressUpdate(null);
+          announce('Probe sweep failed unexpectedly.');
         });
     }
 
@@ -1417,8 +1539,8 @@
     // 5. NAVIGATION, HASH SYNC & 2-STEP ESCAPE STACK
     // =========================================================================
 
-    function openEndpointDrawer(endpointId, triggerEl) {
-      app.drawerReturnFocusEl = triggerEl || document.activeElement;
+    function openEndpointDrawer(endpointId) {
+      app.drawerReturnTarget = { type: 'endpoint', id: endpointId };
       app.drawerMode = 'endpoint';
       app.selectedEndpointId = endpointId;
       renderSecondaryGridCards();
@@ -1427,8 +1549,8 @@
       if (titleEl) titleEl.focus();
     }
 
-    function openModelsDrawer(triggerEl) {
-      app.drawerReturnFocusEl = triggerEl || document.activeElement;
+    function openModelsDrawer() {
+      app.drawerReturnTarget = { type: 'models' };
       app.drawerMode = 'models';
       renderDrawer();
       const titleEl = refs.drawer && refs.drawer.querySelector('#am-drawer-title');
@@ -1436,19 +1558,23 @@
     }
 
     function closeDrawer() {
+      const target = app.drawerReturnTarget;
       stopActiveAudio();
       app.drawerMode = null;
+      app.drawerReturnTarget = null;
       renderSecondaryGridCards();
       renderDrawer();
-      if (app.drawerReturnFocusEl && typeof app.drawerReturnFocusEl.focus === 'function') {
-        app.drawerReturnFocusEl.focus();
+      if (target && target.type === 'endpoint' && refs.gridContainer) {
+        const cardBtn = refs.gridContainer.querySelector('[data-endpoint-id="' + target.id + '"] .am-inspect-btn');
+        if (cardBtn) cardBtn.focus();
+      } else if (target && target.type === 'models' && refs.topbar) {
+        const modelsBtn = refs.topbar.querySelector('[data-action="models"]');
+        if (modelsBtn) modelsBtn.focus();
       }
-      app.drawerReturnFocusEl = null;
     }
 
     function openSecondaryGrid(opts) {
       const fromDeepLink = Boolean(opts && opts.fromDeepLink);
-      app.returnFocusEl = (opts && opts.triggerEl) || document.activeElement;
       app.openedFromGrid = !fromDeepLink && location.hash !== '#api-matrix';
       app.showKeyEditor = !KeyStore.get();
       app.keyPromptNotice = '';
@@ -1468,11 +1594,13 @@
     function closeSecondaryGridInternal() {
       stopActiveAudio();
       app.drawerMode = null;
+      app.drawerReturnTarget = null;
       if (refs.mainWrap) refs.mainWrap.inert = false;
       if (dialog.open) dialog.close();
       renderPrimaryCell();
-      if (app.returnFocusEl && typeof app.returnFocusEl.focus === 'function') {
-        app.returnFocusEl.focus();
+      const triggerEl = rootEl.querySelector('.am-cell-trigger');
+      if (triggerEl && typeof triggerEl.focus === 'function') {
+        triggerEl.focus();
       }
     }
 
@@ -1501,22 +1629,35 @@
       }
     });
 
+    // Fallback cleanup if browser closes <dialog> natively without firing cancel.
+    dialog.addEventListener('close', function () {
+      stopActiveAudio();
+      app.drawerMode = null;
+      if (refs.mainWrap) refs.mainWrap.inert = false;
+      if (location.hash === '#api-matrix' && history && typeof history.replaceState === 'function') {
+        try { history.replaceState(null, '', location.pathname + location.search); } catch (_e) {}
+      }
+      renderPrimaryCell();
+    });
+
     dialog.addEventListener('keydown', function (e) {
       if (app.drawerMode !== 'endpoint') return;
       const tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
-      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'audio' || tag === 'video') return;
       const filtered = getFilteredEndpoints();
       const idx = filtered.findIndex(function (x) { return x.id === app.selectedEndpointId; });
       if (e.key === 'ArrowLeft' && idx > 0) {
         e.preventDefault();
         app.selectedEndpointId = filtered[idx - 1].id;
+        app.drawerReturnTarget = { type: 'endpoint', id: app.selectedEndpointId };
         renderSecondaryGridCards();
-        renderDrawer();
+        renderDrawer({ focusNav: 'prev' });
       } else if (e.key === 'ArrowRight' && idx >= 0 && idx < filtered.length - 1) {
         e.preventDefault();
         app.selectedEndpointId = filtered[idx + 1].id;
+        app.drawerReturnTarget = { type: 'endpoint', id: app.selectedEndpointId };
         renderSecondaryGridCards();
-        renderDrawer();
+        renderDrawer({ focusNav: 'next' });
       }
     });
 
@@ -1532,6 +1673,9 @@
     global.addEventListener('popstate', syncHashState);
     global.addEventListener('gemini-key-changed', renderAll);
     global.addEventListener('storage', renderAll);
+    global.addEventListener('focus', function () {
+      if (!dialog.open) renderPrimaryCell();
+    });
     global.addEventListener('beforeunload', revokeAllMediaUrls);
 
     renderPrimaryCell();
