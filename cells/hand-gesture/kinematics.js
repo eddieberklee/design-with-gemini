@@ -96,9 +96,10 @@
   }
 
   function oneEuroAlpha(cutoffHz, dtSec) {
-    const c = cutoffHz > 1e-4 ? cutoffHz : 1e-4;
+    const c = Number.isFinite(cutoffHz) && cutoffHz > 1e-4 ? cutoffHz : 1e-4;
+    const dt = Number.isFinite(dtSec) && dtSec > 1e-5 ? dtSec : 1 / 120;
     const tau = 1 / (TWO_PI * c);
-    return 1 / (1 + tau / dtSec);
+    return 1 / (1 + tau / dt);
   }
 
   /** Coupled 2D 1-Euro Filter using isotropic vector speed hypot(edx, edy). Zero GC. */
@@ -127,6 +128,10 @@
       if (!Number.isFinite(rx) || !Number.isFinite(ry) || !Number.isFinite(timestampSec)) {
         return;
       }
+      const mc = Number.isFinite(minCutoff) && minCutoff > 1e-4 ? minCutoff : DEFAULT_CONFIG.minCutoff;
+      const b = Number.isFinite(beta) && beta >= 0 ? beta : DEFAULT_CONFIG.beta;
+      const dc = Number.isFinite(dCutoff) && dCutoff > 1e-4 ? dCutoff : DEFAULT_CONFIG.dCutoff;
+
       if (!this.initialized) {
         this.initialized = true;
         this.lastTimeSec = timestampSec;
@@ -137,20 +142,21 @@
         this.edx = 0;
         this.edy = 0;
         this.speed = 0;
-        this.cutoffHz = minCutoff;
+        this.cutoffHz = mc;
         return;
       }
       let dt = timestampSec - this.lastTimeSec;
-      if (dt <= 1e-5) dt = 1 / 120;
+      if (!Number.isFinite(dt) || dt <= 1e-5) dt = 1 / 120;
       else if (dt > 0.25) dt = 0.25;
       this.lastTimeSec = timestampSec;
 
-      const aDeriv = oneEuroAlpha(dCutoff, dt);
+      const aDeriv = oneEuroAlpha(dc, dt);
       this.edx += aDeriv * (((rx - this.rawX) / dt) - this.edx);
       this.edy += aDeriv * (((ry - this.rawY) / dt) - this.edy);
       this.speed = Math.hypot(this.edx, this.edy);
 
-      const cutoff = minCutoff + beta * this.speed;
+      const rawCutoff = mc + b * this.speed;
+      const cutoff = Number.isFinite(rawCutoff) && rawCutoff > 1e-4 ? rawCutoff : mc;
       this.cutoffHz = cutoff;
       const aPos = oneEuroAlpha(cutoff, dt);
       this.rawX = rx;
@@ -163,21 +169,22 @@
   /** Pre-allocated 60fps oscilloscope ring buffer + dB jitter attenuation metric. */
   class ScopeRingBuffer {
     constructor(capacity = 240) {
-      this.capacity = capacity;
-      this.rawX = new Float32Array(capacity);
-      this.rawY = new Float32Array(capacity);
-      this.smoothX = new Float32Array(capacity);
-      this.smoothY = new Float32Array(capacity);
-      this.speed = new Float32Array(capacity);
-      this.pinch = new Float32Array(capacity);
-      this.damped = new Uint8Array(capacity);
+      const cap = Number.isFinite(capacity) ? Math.max(4, Math.floor(capacity)) : 240;
+      this.capacity = cap;
+      this.rawX = new Float32Array(cap);
+      this.rawY = new Float32Array(cap);
+      this.smoothX = new Float32Array(cap);
+      this.smoothY = new Float32Array(cap);
+      this.speed = new Float32Array(cap);
+      this.pinch = new Float32Array(cap);
+      this.damped = new Uint8Array(cap);
       this.head = 0;
       this.count = 0;
       this.attenuationDb = 0;
     }
 
     push(rx, ry, sx, sy, spd, pinchRatio, isDamped) {
-      if (!Number.isFinite(rx) || !Number.isFinite(sx)) return;
+      if (!Number.isFinite(rx) || !Number.isFinite(ry) || !Number.isFinite(sx) || !Number.isFinite(sy)) return;
       const idx = this.head;
       const cap = this.capacity;
       this.rawX[idx] = rx;
@@ -264,21 +271,25 @@
   }
 
   function computePalmSpanFlat(normFlat, aspect) {
+    if (!normFlat || normFlat.length < 63) return 1e-5;
+    const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : 4 / 3;
     const i5 = LM.INDEX_MCP * 3;
     const i9 = LM.MIDDLE_MCP * 3;
     const i17 = LM.PINKY_MCP * 3;
-    const w = Math.hypot((normFlat[i5] - normFlat[i17]) * aspect, normFlat[i5 + 1] - normFlat[i17 + 1]);
-    const l09 = Math.hypot((normFlat[0] - normFlat[i9]) * aspect, normFlat[1] - normFlat[i9 + 1]);
-    const l05 = Math.hypot((normFlat[0] - normFlat[i5]) * aspect, normFlat[1] - normFlat[i5 + 1]);
-    return Math.max(l09, l05, 1.12 * w, 1e-5);
+    const w = Math.hypot((normFlat[i5] - normFlat[i17]) * asp, normFlat[i5 + 1] - normFlat[i17 + 1]);
+    const l09 = Math.hypot((normFlat[0] - normFlat[i9]) * asp, normFlat[1] - normFlat[i9 + 1]);
+    const l05 = Math.hypot((normFlat[0] - normFlat[i5]) * asp, normFlat[1] - normFlat[i5 + 1]);
+    const span = Math.max(l09, l05, 1.12 * w, 1e-5);
+    return Number.isFinite(span) ? span : 1e-5;
   }
 
   /** Closed-fist & curling-into-fist detectors (distinguishes whole-hand fist closure from thumb-index pinch). */
   function detectClosedFistFlat(normFlat, sPalm, aspect) {
-    if (sPalm < 1e-5) return false;
+    if (!normFlat || normFlat.length < 63 || !Number.isFinite(sPalm) || sPalm < 1e-5) return false;
+    const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : 4 / 3;
     const l0x = normFlat[0];
     const l0y = normFlat[1];
-    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * aspect, normFlat[idx * 3 + 1] - l0y) / sPalm;
+    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * asp, normFlat[idx * 3 + 1] - l0y) / sPalm;
     return (
       dWrist(LM.INDEX_TIP) < 1.22 &&
       dWrist(LM.MIDDLE_TIP) < 1.22 &&
@@ -288,10 +299,11 @@
   }
 
   function detectFistClosingFlat(normFlat, sPalm, aspect) {
-    if (sPalm < 1e-5) return false;
+    if (!normFlat || normFlat.length < 63 || !Number.isFinite(sPalm) || sPalm < 1e-5) return false;
+    const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : 4 / 3;
     const l0x = normFlat[0];
     const l0y = normFlat[1];
-    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * aspect, normFlat[idx * 3 + 1] - l0y) / sPalm;
+    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * asp, normFlat[idx * 3 + 1] - l0y) / sPalm;
     return (
       dWrist(LM.MIDDLE_TIP) < 1.42 &&
       dWrist(LM.RING_TIP) < 1.38 &&
@@ -301,10 +313,20 @@
 
   /** Two-Finger V-Scroll: Index + Middle extended, Ring + Pinky curled, unpinched. */
   function detectVScrollPostureFlat(normFlat, sPalm, aspect, pinchRatio) {
-    if (sPalm < 1e-5 || pinchRatio < 0.42) return false;
+    if (
+      !normFlat ||
+      normFlat.length < 63 ||
+      !Number.isFinite(sPalm) ||
+      sPalm < 1e-5 ||
+      !Number.isFinite(pinchRatio) ||
+      pinchRatio < 0.42
+    ) {
+      return false;
+    }
+    const asp = Number.isFinite(aspect) && aspect > 0 ? aspect : 4 / 3;
     const l0x = normFlat[0];
     const l0y = normFlat[1];
-    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * aspect, normFlat[idx * 3 + 1] - l0y) / sPalm;
+    const dWrist = (idx) => Math.hypot((normFlat[idx * 3] - l0x) * asp, normFlat[idx * 3 + 1] - l0y) / sPalm;
 
     const idxTip = dWrist(LM.INDEX_TIP);
     const idxPip = dWrist(LM.INDEX_PIP);
@@ -320,7 +342,7 @@
 
     const a = LM.INDEX_TIP * 3;
     const b = LM.MIDDLE_TIP * 3;
-    return Math.hypot((normFlat[a] - normFlat[b]) * aspect, normFlat[a + 1] - normFlat[b + 1]) / sPalm > 0.12;
+    return Math.hypot((normFlat[a] - normFlat[b]) * asp, normFlat[a + 1] - normFlat[b + 1]) / sPalm > 0.12;
   }
 
   class HandSlot {
@@ -474,6 +496,58 @@
       this._lastStepSec = 0;
     }
 
+    resetSlot(idx) {
+      if (idx === 0 || idx === 1) {
+        this.slots[idx].reset();
+      }
+    }
+
+    updateConfig(patch) {
+      if (patch && typeof patch === 'object') {
+        Object.assign(this.config, patch);
+      }
+      return this.config;
+    }
+
+    addScrollImpulse(dv) {
+      if (Number.isFinite(dv)) {
+        this._scrollVelPx += dv;
+      }
+    }
+
+    reanchorLockOrigin(slotIdx, x, y) {
+      if ((slotIdx === 0 || slotIdx === 1) && Number.isFinite(x) && Number.isFinite(y)) {
+        this.slots[slotIdx].lockOriginX = x;
+        this.slots[slotIdx].lockOriginY = y;
+      }
+    }
+
+    stepPointerSample(rawU, rawV, nowSecOrSmoothU, smoothV, cutoffHz, speed) {
+      if (!Number.isFinite(rawU) || !Number.isFinite(rawV)) return;
+      const s0 = this.slots[0];
+      const rx = clamp(rawU, 0, 1);
+      const ry = clamp(rawV, 0, 1);
+      if (arguments.length >= 4 && Number.isFinite(smoothV)) {
+        const sx = clamp(nowSecOrSmoothU, 0, 1);
+        const sy = clamp(smoothV, 0, 1);
+        s0.rawU = rx;
+        s0.rawV = ry;
+        s0.cursorU = sx;
+        s0.cursorV = sy;
+        if (Number.isFinite(cutoffHz)) s0.euroFilter.cutoffHz = cutoffHz;
+        this.scope.push(rx, ry, sx, sy, Number.isFinite(speed) ? speed : 0, 1.0, false);
+        return;
+      }
+      const tSec = Number.isFinite(nowSecOrSmoothU) ? nowSecOrSmoothU : this._lastStepSec + 1 / 60;
+      const cfg = this.config;
+      s0.euroFilter.filter(rx, ry, tSec, cfg.minCutoff, cfg.beta, cfg.dCutoff);
+      s0.rawU = rx;
+      s0.rawV = ry;
+      s0.cursorU = s0.euroFilter.x;
+      s0.cursorV = s0.euroFilter.y;
+      this.scope.push(rx, ry, s0.cursorU, s0.cursorV, s0.euroFilter.speed, 1.0, false);
+    }
+
     /** Promote slot 1 to primary when the primary hand is gone but the second hand is still tracked. */
     _promoteSecondaryIfPrimaryLost() {
       const s0 = this.slots[0];
@@ -555,29 +629,36 @@
       const aspect = Number.isFinite(camAspect) && camAspect > 0 ? camAspect : 4 / 3;
       const vw = Math.max(1, Number.isFinite(viewportW) ? viewportW : 1280);
       const vh = Math.max(1, Number.isFinite(viewportH) ? viewportH : 800);
+      const count = Number.isFinite(candidateCount)
+        ? Math.max(0, Math.min(4, Math.floor(candidateCount)))
+        : 0;
 
       this._clearFrameEvents();
-      let dt = this._lastStepSec > 0 ? nowSec - this._lastStepSec : 1 / 60;
+      const safeNowSec = Number.isFinite(nowSec) ? nowSec : this._lastStepSec + 1 / 60;
+      let dt = this._lastStepSec > 0 ? safeNowSec - this._lastStepSec : 1 / 60;
       if (!Number.isFinite(dt) || dt <= 1e-5) dt = 1 / 120;
       else if (dt > 0.25) dt = 0.25;
-      this._lastStepSec = nowSec;
+      this._lastStepSec = safeNowSec;
 
       if (hasNewSample) {
-        let i0 = this._matchSlotCandidate(this.slots[0], candidateCount, aspect);
+        for (let i = 0; i < count; i++) {
+          this.candidates[i].assigned = false;
+        }
+        let i0 = this._matchSlotCandidate(this.slots[0], count, aspect);
         if (i0 >= 0) this.candidates[i0].assigned = true;
-        let i1 = this._matchSlotCandidate(this.slots[1], candidateCount, aspect);
+        let i1 = this._matchSlotCandidate(this.slots[1], count, aspect);
         if (i1 >= 0) this.candidates[i1].assigned = true;
         if (i0 < 0) {
-          i0 = this._pickLargestUnassigned(candidateCount);
+          i0 = this._pickLargestUnassigned(count);
           if (i0 >= 0) this.candidates[i0].assigned = true;
         }
         if (i1 < 0) {
-          i1 = this._pickLargestUnassigned(candidateCount);
+          i1 = this._pickLargestUnassigned(count);
           if (i1 >= 0) this.candidates[i1].assigned = true;
         }
 
-        this._updateSlotFromSample(this.slots[0], i0 >= 0 ? this.candidates[i0] : null, nowSec, dt, vw, vh, aspect, true);
-        this._updateSlotFromSample(this.slots[1], i1 >= 0 ? this.candidates[i1] : null, nowSec, dt, vw, vh, aspect, false);
+        this._updateSlotFromSample(this.slots[0], i0 >= 0 ? this.candidates[i0] : null, safeNowSec, dt, vw, vh, aspect, true);
+        this._updateSlotFromSample(this.slots[1], i1 >= 0 ? this.candidates[i1] : null, safeNowSec, dt, vw, vh, aspect, false);
         this._promoteSecondaryIfPrimaryLost();
       }
 
@@ -599,6 +680,14 @@
         this.events.twoHandMidY = 0.5 * (s0.screenY + s1.screenY);
         s0.pinchMode = PINCH_MODE.TWO_HAND;
         s1.pinchMode = PINCH_MODE.TWO_HAND;
+        s0.interactiveX = s0.screenX;
+        s0.interactiveY = s0.screenY;
+        s1.interactiveX = s1.screenX;
+        s1.interactiveY = s1.screenY;
+        s0.twistDeltaDeg = 0;
+        s1.twistDeltaDeg = 0;
+        this._prevInteractiveX = s0.interactiveX;
+        this._prevInteractiveY = s0.interactiveY;
 
         if (!this._twoHandWasActive) {
           this._twoHandWasActive = true;
@@ -636,11 +725,27 @@
             this._prevInteractiveX = s0.interactiveX;
             this._prevInteractiveY = s0.interactiveY;
           }
+          if (s1.pinched) {
+            s1.pinchMode = PINCH_MODE.DRAG;
+            s1.lockOriginX = s1.screenX;
+            s1.lockOriginY = s1.screenY;
+            s1.breakoutOffsetX = 0;
+            s1.breakoutOffsetY = 0;
+            s1.interactiveX = s1.screenX;
+            s1.interactiveY = s1.screenY;
+            s1.twistAnchorRad = s1.unwrappedRad;
+            s1.twistBrokenOut = false;
+            s1.twistTotalDeg = 0;
+            s1.twistDeltaDeg = 0;
+          }
         }
       }
 
-      this._scrollVelPx *= Math.pow(this.config.vScrollDecay, dt * 60);
-      if (Math.abs(this._scrollVelPx) < 0.8) this._scrollVelPx = 0;
+      const decay = clamp(this.config.vScrollDecay, 0, 0.999);
+      this._scrollVelPx *= Math.pow(decay, dt * 60);
+      if (!Number.isFinite(this._scrollVelPx) || Math.abs(this._scrollVelPx) < 0.8) {
+        this._scrollVelPx = 0;
+      }
       this.events.scrollVelocityPx = this._scrollVelPx;
       this.events.scrollDeltaPx = this._scrollVelPx * dt;
       return this.events;
@@ -684,6 +789,9 @@
             slot.state = HAND_STATE.COASTING;
             slot.visible = false;
             slot.twistDeltaDeg = 0;
+            slot.velocityDamped = false;
+            slot.vScrollActive = false;
+            slot.vWasActive = false;
             return;
           }
           if (isPrimary && slot.pinched) this.events.pinchRelease = true;
@@ -770,6 +878,14 @@
           slot.armProgress = 0;
           slot.pinched = false;
           slot.pinchMode = PINCH_MODE.NONE;
+          slot.pinchSlipPx = 0;
+          slot.velocityDamped = false;
+          slot.clutchReleased = false;
+          slot.twistBrokenOut = false;
+          slot.twistBreakoutSign = 0;
+          slot.twistTotalDeg = 0;
+          slot.twistDeltaDeg = 0;
+          slot.angleInitialized = false;
           slot.vScrollActive = false;
           slot.vWasActive = false;
           return;
@@ -785,7 +901,8 @@
             slot.prevFilterU = slot.euroFilter.x;
             slot.prevFilterV = slot.euroFilter.y;
           }
-          slot.armProgress = clamp(slot.armProgress + dt / cfg.armDwellSec, 0, 1);
+          const dwellSec = Number.isFinite(cfg.armDwellSec) && cfg.armDwellSec > 1e-3 ? cfg.armDwellSec : DEFAULT_CONFIG.armDwellSec;
+          slot.armProgress = clamp(slot.armProgress + dt / dwellSec, 0, 1);
           if (slot.armProgress >= 1) {
             slot.state = HAND_STATE.ARMED;
             if (cfg.mappingMode !== MAPPING_MODE.RELATIVE_CLUTCH) {
@@ -798,10 +915,12 @@
             slot.screenY = slot.cursorV * viewportH;
             slot.interactiveX = slot.screenX;
             slot.interactiveY = slot.screenY;
-            this._prevInteractiveX = slot.interactiveX;
-            this._prevInteractiveY = slot.interactiveY;
             slot.angleInitialized = false;
-            if (isPrimary) this.events.justArmed = true;
+            if (isPrimary) {
+              this._prevInteractiveX = slot.interactiveX;
+              this._prevInteractiveY = slot.interactiveY;
+              this.events.justArmed = true;
+            }
           }
         } else if (!allGatesPass) {
           slot.armProgress = 0;
@@ -834,6 +953,10 @@
         if (isClosedFist && slot.pinched && slot.pinchMode === PINCH_MODE.CLICK_LOCK) {
           slot.pinched = false;
           slot.pinchMode = PINCH_MODE.NONE;
+          slot.twistBrokenOut = false;
+          slot.twistTotalDeg = 0;
+          slot.twistDeltaDeg = 0;
+          if (isPrimary) this.events.pinchRelease = true;
         }
         const fistRelease = !slot.pinched && !vPostureNow && isClosedFist;
         slot.clutchReleased = fistRelease;
@@ -897,8 +1020,8 @@
           slot.pinched = true;
           slot.pinchMode = PINCH_MODE.CLICK_LOCK;
           slot.pinchStartSec = nowSec;
-          slot.lockOriginX = prevScreenX || slot.screenX;
-          slot.lockOriginY = prevScreenY || slot.screenY;
+          slot.lockOriginX = Number.isFinite(prevScreenX) ? prevScreenX : slot.screenX;
+          slot.lockOriginY = Number.isFinite(prevScreenY) ? prevScreenY : slot.screenY;
           slot.breakoutOffsetX = 0;
           slot.breakoutOffsetY = 0;
           slot.pinchSlipPx = 0;
@@ -940,17 +1063,25 @@
         }
         slot.interactiveX = slot.screenX;
         slot.interactiveY = slot.screenY;
+      } else if (slot.pinchMode === PINCH_MODE.TWO_HAND) {
+        slot.interactiveX = slot.screenX;
+        slot.interactiveY = slot.screenY;
+        slot.twistDeltaDeg = 0;
       } else {
         const dxO = slot.screenX - slot.lockOriginX;
         const dyO = slot.screenY - slot.lockOriginY;
         const distO = Math.hypot(dxO, dyO);
         slot.pinchSlipPx = distO;
 
+        const breakoutPx = Math.max(
+          0,
+          Number.isFinite(cfg.clickBreakoutPx) ? cfg.clickBreakoutPx : DEFAULT_CONFIG.clickBreakoutPx
+        );
         if (slot.pinchMode === PINCH_MODE.CLICK_LOCK) {
-          if (distO >= cfg.clickBreakoutPx) {
+          if (distO >= breakoutPx) {
             slot.pinchMode = PINCH_MODE.DRAG;
             // distO can be 0 when clickBreakoutPx <= 0; avoid 0/0 = NaN poisoning the drag offset.
-            const invD = distO > 1e-6 ? cfg.clickBreakoutPx / distO : 0;
+            const invD = distO > 1e-6 && breakoutPx > 0 ? breakoutPx / distO : 0;
             slot.breakoutOffsetX = dxO * invD;
             slot.breakoutOffsetY = dyO * invD;
             if (isPrimary) this.events.pinchDragStart = true;
@@ -1054,6 +1185,48 @@
       this.tourTimeSec = 0;
     }
 
+    sampleNoise() {
+      return this._randNormalApprox();
+    }
+
+    buildPoseForTest(optsOrRawCamX, camY, scale, pinch, vScroll, fist, rollRad, dorsal, isLeftLabel, aspect, outNorm, outWorld) {
+      if (typeof optsOrRawCamX === 'object' && optsOrRawCamX !== null) {
+        const o = optsOrRawCamX;
+        const norm = camY || o.outNorm || new Float64Array(63);
+        const world = scale || o.outWorld || new Float64Array(63);
+        this._buildHandLandmarks(
+          o.rawCamX !== undefined ? o.rawCamX : 0.5,
+          o.camY !== undefined ? o.camY : 0.5,
+          o.scale !== undefined ? o.scale : 0.14,
+          o.pinch || 0,
+          o.vScroll || 0,
+          o.fist || 0,
+          o.rollRad || 0,
+          o.dorsal || 0,
+          o.isLeftLabel !== undefined ? o.isLeftLabel : true,
+          o.aspect || 4 / 3,
+          norm,
+          world
+        );
+        return { norm, world };
+      }
+      this._buildHandLandmarks(
+        optsOrRawCamX,
+        camY,
+        scale,
+        pinch,
+        vScroll,
+        fist,
+        rollRad,
+        dorsal,
+        isLeftLabel,
+        aspect,
+        outNorm,
+        outWorld
+      );
+      return { norm: outNorm, world: outWorld };
+    }
+
     _randNormalApprox() {
       let s = this._rngState;
       let sum = 0;
@@ -1069,21 +1242,23 @@
 
     stepAndPopulate(engine, dt, camAspect) {
       const aspect = Number.isFinite(camAspect) && camAspect > 0 ? camAspect : 4 / 3;
+      const safeDt = Number.isFinite(dt) && dt > 0 ? dt : 1 / 60;
 
       if (this.autoTour) {
-        this.tourTimeSec = (this.tourTimeSec + dt) % 12.0;
+        this.tourTimeSec = (this.tourTimeSec + safeDt) % 12.0;
         const t = this.tourTimeSec;
         this.handPresent = true;
         this.targetDorsal = 0;
         this.targetFist = 0;
         if (t < 3.0) {
-          // Phase 1: Figure-8 position sweep + pinch click on Cell 03
+          // Phase 1: Figure-8 position sweep + steady zero-slip pinch click on Cell 03
           this.dualHand = false;
           this.targetVScroll = 0;
           this.wristRollDeg = 0;
-          this.mirrorX = 0.50 + 0.22 * Math.sin(t * 2.1);
-          this.camY = 0.42 + 0.14 * Math.cos(t * 2.1);
-          this.targetPinch = (t > 1.8 && t < 2.0) ? 1 : 0;
+          const sweepT = t < 1.35 ? t : t < 2.20 ? 1.35 : t - 0.85;
+          this.mirrorX = 0.50 + 0.22 * Math.sin(sweepT * 2.1);
+          this.camY = 0.42 + 0.14 * Math.cos(sweepT * 2.1);
+          this.targetPinch = (t >= 1.80 && t <= 1.96) ? 1 : 0;
         } else if (t < 6.0) {
           // Phase 2: Hover Cell 04 rotary dial + pinch & clockwise/counter-clockwise wrist twist
           const u = t - 3.0;
@@ -1122,16 +1297,16 @@
           this.dualSteerDeg = 22 * Math.sin(u * 2.0);
         }
       } else if (this.autoOrbit) {
-        this.orbitPhase += dt * 0.92;
+        this.orbitPhase += safeDt * 0.92;
         this.mirrorX = 0.50 + 0.19 * Math.sin(this.orbitPhase);
         this.camY = 0.49 + 0.15 * Math.sin(this.orbitPhase * 2.0);
       }
 
-      const a = 1 - Math.exp(-dt * 20);
+      const a = 1 - Math.exp(-safeDt * 20);
       this.pinchAmount += (this.targetPinch - this.pinchAmount) * a;
       this.vScrollAmount += (this.targetVScroll - this.vScrollAmount) * a;
       this.fistAmount += (this.targetFist - this.fistAmount) * a;
-      this.dorsalAmount += (this.targetDorsal - this.dorsalAmount) * (1 - Math.exp(-dt * 12));
+      this.dorsalAmount += (this.targetDorsal - this.dorsalAmount) * (1 - Math.exp(-safeDt * 12));
 
       if (!this.handPresent) return 0;
 

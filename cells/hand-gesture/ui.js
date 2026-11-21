@@ -117,6 +117,13 @@
     if (el) el.setAttribute(k, String(v));
   }
 
+  function safeSetPointerCapture(el, pointerId) {
+    if (!el || typeof el.setPointerCapture !== 'function' || pointerId === undefined) return;
+    try {
+      el.setPointerCapture(pointerId);
+    } catch (_) {}
+  }
+
   function prefersReducedMotion() {
     return Boolean(
       global.matchMedia && global.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -140,7 +147,6 @@
       ROTATION_SOURCE,
       KinematicEngine,
       LM,
-      OneEuroFilter2D,
       SyntheticHandRig,
       clamp,
     } = K;
@@ -148,8 +154,7 @@
 
     const engine = new KinematicEngine();
     const synthRig = new SyntheticHandRig();
-    synthRig.autoOrbit = true;
-    const ptrFilter = new OneEuroFilter2D();
+    synthRig.autoOrbit = !prefersReducedMotion();
 
     // -----------------------------------------------------------------------
     // 1. Primary 1x1 Grid Cell (`#cell-hand-gesture`)
@@ -342,7 +347,7 @@
     const rigBtnVScroll = h('button', { type: 'button', className: 'hg-btn hg-btn--warn', 'aria-pressed': 'false', textContent: 'V-Scroll' });
     const rigBtnDorsal = h('button', { type: 'button', className: 'hg-btn hg-btn--warn', 'aria-pressed': 'false', textContent: '3D Flip' });
     const rigBtnDual = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'false', textContent: '2-Hand' });
-    const rigBtnOrbit = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'true', textContent: 'Orbit' });
+    const rigBtnOrbit = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': String(synthRig.autoOrbit), textContent: 'Orbit' });
 
     const wbCell01 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '01 Optical Rig and 21-Joint' }, [
       h('div', { className: 'hg-cell-head' }, [
@@ -421,6 +426,7 @@
       'aria-valuemin': '-720',
       'aria-valuemax': '720',
       'aria-valuenow': '0',
+      'aria-valuetext': '+0.0° (0 turns)',
     }, [dialCanvas]);
     const c4DzStatus = h('span', { textContent: 'DZ ±3.5° · FUSED 72/28' });
     const c4VecBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Vec: Fused' });
@@ -484,9 +490,11 @@
       tabindex: '0',
       role: 'slider',
       'aria-label': 'Target-Latched Vertical Fader',
+      'aria-orientation': 'vertical',
       'aria-valuemin': '0',
       'aria-valuemax': '100',
       'aria-valuenow': '68',
+      'aria-valuetext': '68.0% (-0.9 dB)',
     }, [h('div', { className: 'hg-fader-rail' }, [c6Fill]), c6Peak, c6Thumb]);
     const c6BigPct = h('div', { className: 'hg-fader-big-val', textContent: '68.0%' });
     const c6BigDb = h('div', { className: 'hg-fader-db-val', textContent: '-0.9 dB' });
@@ -513,7 +521,13 @@
     ]);
 
     const c7Metric = h('span', { className: 'hg-cell-metric', textContent: 'VEL 0 px/s · γ=0.94' });
-    const c7Tape = h('div', { className: 'hg-tape-list', tabindex: '0', role: 'listbox', 'aria-label': 'Momentum Scroll Specification Tape' });
+    const c7Tape = h('div', {
+      className: 'hg-tape-list',
+      tabindex: '0',
+      role: 'listbox',
+      'aria-label': 'Momentum Scroll Specification Tape',
+      'aria-activedescendant': 'hg-tape-opt-0',
+    });
     const c7VelBar = h('div', { className: 'hg-tape-vel-bar' });
     const c7PosReadout = h('span', { textContent: 'ROW 01/28 · V-PEACE POSE' });
     const c7FlickDown = h('button', { type: 'button', className: 'hg-btn', textContent: 'Flick ↓' });
@@ -678,11 +692,12 @@
     const c4 = { angleDeg: 0 };
     const c5 = { tx: 0, ty: 0, scale: 1.0, rotDeg: 0, baseScaleOn2H: 1.0, showGuides: true };
     const c6 = { value: 0.68, peak: 0.68, peakHoldFrames: 0 };
-    const c7 = { pinnedRow: 0, subPixelScroll: 0 };
+    const c7 = { pinnedRow: 0, subPixelScroll: 0, buttonVelPx: 0, displayVelPx: 0 };
     const c8 = { pucks: INITIAL_PUCKS.map(function (p) { return Object.assign({}, p); }) };
     const spatial = {
       hoveredCellIdx: -1, hoveredPadIdx: -1, hoveredPuckIdx: -1, hoveredTunerIdx: -1,
       latchedType: null, latchedCellIdx: -1, latchedSubIdx: -1, latchStartVal: 0,
+      vScrollTarget: 'tape',
     };
 
     let isSecondaryOpen = false;
@@ -692,12 +707,14 @@
     let enteredFromMainGrid = false;
     let cameraSuspendedByVisibility = false;
     let rafId = 0;
+    let lastUiFrameMs = 0;
     let uiFrameCounter = 0;
     let rectsDirty = true;
     let puckEls = [];
 
     const tapeRowEls = TAPE_SPEC_ITEMS.map(function (pair, i) {
       const row = h('div', {
+        id: 'hg-tape-opt-' + i,
         className: 'hg-tape-row' + (i === 0 ? ' is-pinned' : ''),
         dataset: { row: i },
         role: 'option',
@@ -749,8 +766,8 @@
     function resizeCanvas(canvas, ctx, wKey, hKey) {
       const dpr = Math.min(global.devicePixelRatio || 1, 2);
       const r = canvas.getBoundingClientRect();
-      const cssW = Math.max(40, Math.round(r.width));
-      const cssH = Math.max(40, Math.round(r.height));
+      const cssW = Math.max(24, Math.round(r.width));
+      const cssH = Math.max(24, Math.round(r.height));
       if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
         canvas.width = Math.round(cssW * dpr);
         canvas.height = Math.round(cssH * dpr);
@@ -901,8 +918,14 @@
     function setDialAngle(deg) {
       c4.angleDeg = clamp(deg, -720, 720);
       const sign = c4.angleDeg >= 0 ? '+' : '';
+      const turns = Math.trunc(c4.angleDeg / 360);
       c4Metric.textContent = sign + c4.angleDeg.toFixed(1) + '° · 2.0×';
       setAttr(c4DialWrap, 'aria-valuenow', String(Math.round(c4.angleDeg)));
+      setAttr(
+        c4DialWrap,
+        'aria-valuetext',
+        sign + c4.angleDeg.toFixed(1) + '° (' + turns + (Math.abs(turns) === 1 ? ' turn)' : ' turns)')
+      );
     }
 
     function renderStageTransform() {
@@ -937,8 +960,20 @@
       c6BigDb.textContent = dbStr;
       c6Metric.textContent = pct.toFixed(1) + '% · ' + dbStr;
       setAttr(c6Track, 'aria-valuenow', String(Math.round(pct)));
+      setAttr(c6Track, 'aria-valuetext', pct.toFixed(1) + '% (' + dbStr + ')');
     }
     setFaderValue(0.68);
+
+    function updateTapePosReadout() {
+      const approxRow = clamp(Math.floor(c7Tape.scrollTop / 25) + 1, 1, TAPE_SPEC_ITEMS.length);
+      c7PosReadout.textContent =
+        'ROW ' +
+        String(approxRow).padStart(2, '0') +
+        '/' +
+        TAPE_SPEC_ITEMS.length +
+        ' · PIN #' +
+        String(c7.pinnedRow + 1).padStart(2, '0');
+    }
 
     function pinTapeRow(idx) {
       if (idx < 0 || idx >= tapeRowEls.length) return;
@@ -947,6 +982,8 @@
       c7.pinnedRow = idx;
       tapeRowEls[idx].classList.add('is-pinned');
       setAttr(tapeRowEls[idx], 'aria-selected', 'true');
+      setAttr(c7Tape, 'aria-activedescendant', 'hg-tape-opt-' + idx);
+      updateTapePosReadout();
     }
 
     function togglePuckBypass(idx) {
@@ -973,16 +1010,17 @@
 
     tracker.onStatusChange(function (mode, camStatus, camError, delegate) {
       const isLive = mode === TRACKER_MODE.WEBCAM && camStatus === CAMERA_STATUS.STREAMING;
+      const camPending = tracker.isWebcamStarting;
       miniVideo.classList.toggle('is-live', isLive && !isSecondaryOpen);
       wbVideo.classList.toggle('is-live', isLive && isSecondaryOpen);
 
-      setAttr(portalCamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM));
-      setAttr(portalSimBtn, 'aria-pressed', String(mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR));
+      setAttr(portalCamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM || (!isSecondaryOpen && camPending)));
+      setAttr(portalSimBtn, 'aria-pressed', String(!camPending && (mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR)));
 
-      setAttr(modeSynthBtn, 'aria-pressed', String(mode === TRACKER_MODE.SYNTH));
-      setAttr(modeTourBtn, 'aria-pressed', String(mode === TRACKER_MODE.TOUR));
-      setAttr(modeWebcamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM));
-      setAttr(modePointerBtn, 'aria-pressed', String(mode === TRACKER_MODE.POINTER));
+      setAttr(modeSynthBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.SYNTH));
+      setAttr(modeTourBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.TOUR));
+      setAttr(modeWebcamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM || camPending));
+      setAttr(modePointerBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.POINTER));
 
       const mapSuffix = engine.config.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH' : 'ROI [.22–.78]';
       if (camStatus === CAMERA_STATUS.LOADING_MODEL) c1Metric.textContent = 'LOADING MODEL…';
@@ -992,7 +1030,6 @@
       else if (mode === TRACKER_MODE.POINTER) c1Metric.textContent = 'POINTER DIRECT MODE';
       else c1Metric.textContent = 'SYNTH · ' + mapSuffix;
 
-      const camPending = camStatus === CAMERA_STATUS.REQUESTING_CAM || camStatus === CAMERA_STATUS.LOADING_MODEL;
       setAttr(portalCamBtn, 'aria-busy', String(camPending));
       if (camError) {
         camBannerMsg.textContent = camError;
@@ -1011,7 +1048,13 @@
         camBanner.hidden = true;
         portalStatusText.textContent = 'Raise open palm 200ms · Pinch · Twist · V-Scroll';
       }
-      if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) resetPortalPreview();
+      if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) {
+        resetPortalPreview();
+        if (camPending) {
+          portalStatePill.className = 'hg-portal-pill is-warn';
+          portalStatePill.textContent = 'STARTING';
+        }
+      }
       rectsDirty = true;
       syncRigButtons();
       ensureLoopState();
@@ -1036,7 +1079,7 @@
         tracker.setMode(TRACKER_MODE.IDLE);
       } else {
         synthRig.resetPosture();
-        synthRig.autoOrbit = true;
+        synthRig.autoOrbit = !prefersReducedMotion();
         tracker.setMode(TRACKER_MODE.SYNTH);
       }
     });
@@ -1069,11 +1112,12 @@
       tracker.setMode(TRACKER_MODE.TOUR);
     });
     modeWebcamBtn.addEventListener('click', function () {
+      cameraSuspendedByVisibility = false;
+      tracker.setFallbackMode(TRACKER_MODE.SYNTH);
       tracker.setVideoElement(wbVideo);
       tracker.setMode(TRACKER_MODE.WEBCAM);
     });
     modePointerBtn.addEventListener('click', function () {
-      ptrFilter.reset();
       tracker.setMode(TRACKER_MODE.POINTER);
     });
     mapModeBtn.addEventListener('click', function () {
@@ -1081,11 +1125,11 @@
         engine.config.mappingMode === MAPPING_MODE.ABSOLUTE_ROI
           ? MAPPING_MODE.RELATIVE_CLUTCH
           : MAPPING_MODE.ABSOLUTE_ROI;
-      engine.config.mappingMode = next;
+      engine.updateConfig({ mappingMode: next });
       const isClutch = next === MAPPING_MODE.RELATIVE_CLUTCH;
       setAttr(mapModeBtn, 'aria-pressed', String(isClutch));
       mapModeBtn.textContent = isClutch ? 'Map: Clutch' : 'Map: ROI';
-      tracker._emitStatus();
+      tracker.notifyStatus();
     });
 
     btnToggleKeys.addEventListener('click', function () {
@@ -1100,21 +1144,39 @@
     });
 
     document.addEventListener('keydown', function (e) {
-      if (!isSecondaryOpen) return;
       if (e.key === 'Escape') {
-        e.preventDefault();
-        requestCloseSecondaryView();
+        if (targetOpen) {
+          e.preventDefault();
+          requestCloseSecondaryView();
+          return;
+        }
+        if (
+          !mainGrid.hidden &&
+          !document.querySelector('dialog[open]') &&
+          (tracker.mode !== TRACKER_MODE.IDLE || tracker.isCameraActive())
+        ) {
+          e.preventDefault();
+          cameraSuspendedByVisibility = false;
+          tracker.setMode(TRACKER_MODE.IDLE);
+        }
         return;
       }
-      if (e.metaKey || e.ctrlKey) return;
+      if (!isSecondaryOpen) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const tag = e.target && e.target.tagName ? e.target.tagName : '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       const k = e.key;
       if (k === '?') { e.preventDefault(); btnToggleKeys.click(); return; }
       if (k === 'c' || k === 'C') {
         e.preventDefault();
-        tracker.setVideoElement(wbVideo);
-        tracker.setMode(tracker.mode === TRACKER_MODE.WEBCAM ? TRACKER_MODE.SYNTH : TRACKER_MODE.WEBCAM);
+        cameraSuspendedByVisibility = false;
+        if (tracker.isCameraActive()) {
+          tracker.setMode(TRACKER_MODE.SYNTH);
+        } else {
+          tracker.setFallbackMode(TRACKER_MODE.SYNTH);
+          tracker.setVideoElement(wbVideo);
+          tracker.enableWebcam(TRACKER_MODE.SYNTH);
+        }
         return;
       }
       if ((k === 'p' || k === 'P') && !e.repeat) {
@@ -1141,7 +1203,7 @@
       } else if ((k === 'd' || k === 'D') && !e.repeat) {
         takeManualRigControl();
         synthRig.dualHand = !synthRig.dualHand;
-        if (!synthRig.dualHand) engine.slots[1].reset();
+        if (!synthRig.dualHand) engine.resetSlot(1);
         syncRigButtons();
       } else if ((k === 'o' || k === 'O') && !e.repeat) {
         takeManualRigControl();
@@ -1162,8 +1224,26 @@
     });
 
     document.addEventListener('keyup', function (e) {
-      if (!isSecondaryOpen) return;
       if (e.key === 'p' || e.key === 'P') {
+        if (synthRig.targetPinch !== 0) {
+          synthRig.targetPinch = 0;
+          syncRigButtons();
+        }
+      }
+    });
+
+    global.addEventListener('blur', function () {
+      rigDrag = false;
+      scopeDrag = false;
+      dialDrag = false;
+      stDrag = false;
+      fdDrag = false;
+      if (puckDragSlot >= 0) endPuck();
+      c5Card.classList.remove('is-manipulating');
+      c6Track.classList.remove('is-latched');
+      c6LatchBadge.textContent = 'READY';
+      c6LatchBadge.classList.remove('is-latched');
+      if (synthRig.targetPinch !== 0) {
         synthRig.targetPinch = 0;
         syncRigButtons();
       }
@@ -1177,7 +1257,7 @@
       if (tracker.mode === TRACKER_MODE.WEBCAM) return;
       takeManualRigControl();
       rigDrag = true;
-      rigStage.setPointerCapture(e.pointerId);
+      safeSetPointerCapture(rigStage, e.pointerId);
       synthRig.autoOrbit = false;
       synthRig.handPresent = true;
       rigStartRoll = synthRig.wristRollDeg;
@@ -1235,15 +1315,20 @@
 
     rigBtnPresent.addEventListener('click', function () { takeManualRigControl(); synthRig.handPresent = !synthRig.handPresent; syncRigButtons(); });
     let pinchPressTs = 0;
-    rigBtnPinch.addEventListener('pointerdown', function () {
+    rigBtnPinch.addEventListener('pointerdown', function (e) {
       takeManualRigControl();
       pinchPressTs = performance.now();
       synthRig.targetVScroll = 0;
+      safeSetPointerCapture(rigBtnPinch, e.pointerId);
       if (synthRig.targetPinch < 0.5) { synthRig.targetPinch = 1; syncRigButtons(); }
       else pinchPressTs = -1;
     });
     rigBtnPinch.addEventListener('pointerup', function () {
       if (pinchPressTs === -1 || performance.now() - pinchPressTs > 260) { synthRig.targetPinch = 0; syncRigButtons(); }
+    });
+    rigBtnPinch.addEventListener('pointercancel', function () {
+      synthRig.targetPinch = 0;
+      syncRigButtons();
     });
     rigBtnPinch.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); takeManualRigControl(); synthRig.targetPinch = synthRig.targetPinch > 0.5 ? 0 : 1; syncRigButtons(); }
@@ -1253,7 +1338,7 @@
     rigBtnDual.addEventListener('click', function () {
       takeManualRigControl();
       synthRig.dualHand = !synthRig.dualHand;
-      if (!synthRig.dualHand) engine.slots[1].reset();
+      if (!synthRig.dualHand) engine.resetSlot(1);
       syncRigButtons();
     });
     rigBtnOrbit.addEventListener('click', function () { takeManualRigControl(); synthRig.autoOrbit = !synthRig.autoOrbit; syncRigButtons(); });
@@ -1263,16 +1348,9 @@
     function feedPointerToScope(u, v) {
       const nowSec = performance.now() * 0.001;
       const sig = synthRig.noiseSigma;
-      const rx = clamp(u + (sig > 0 ? synthRig._randNormalApprox() * sig * 2.2 : 0), 0, 1);
-      const ry = clamp(v + (sig > 0 ? synthRig._randNormalApprox() * sig * 2.2 : 0), 0, 1);
-      ptrFilter.filter(rx, ry, nowSec, engine.config.minCutoff, engine.config.beta, engine.config.dCutoff);
-      const s0 = engine.slots[0];
-      s0.rawU = rx;
-      s0.rawV = ry;
-      s0.cursorU = ptrFilter.x;
-      s0.cursorV = ptrFilter.y;
-      s0.euroFilter.cutoffHz = ptrFilter.cutoffHz;
-      engine.scope.push(rx, ry, ptrFilter.x, ptrFilter.y, ptrFilter.speed, 1.0, false);
+      const rx = clamp(u + (sig > 0 ? synthRig.sampleNoise() * sig * 2.2 : 0), 0, 1);
+      const ry = clamp(v + (sig > 0 ? synthRig.sampleNoise() * sig * 2.2 : 0), 0, 1);
+      engine.stepPointerSample(rx, ry, nowSec);
     }
 
     secondaryPage.addEventListener('pointermove', function (e) {
@@ -1294,9 +1372,10 @@
         }
       }
     }
-    scopeCanvas.addEventListener('pointerdown', function (e) { scopeDrag = true; scopeCanvas.setPointerCapture(e.pointerId); setWp(e); });
+    scopeCanvas.addEventListener('pointerdown', function (e) { scopeDrag = true; safeSetPointerCapture(scopeCanvas, e.pointerId); setWp(e); });
     scopeCanvas.addEventListener('pointermove', function (e) { if (scopeDrag) setWp(e); });
     scopeCanvas.addEventListener('pointerup', function () { scopeDrag = false; });
+    scopeCanvas.addEventListener('pointercancel', function () { scopeDrag = false; });
     scopeCanvas.addEventListener('keydown', function (e) {
       if (e.key === ' ') { e.preventDefault(); c2FreezeBtn.click(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); c2.waypointU = clamp(c2.waypointU - 0.04, 0, 1); }
@@ -1322,13 +1401,14 @@
     // Cell 04
     let dialDrag = false;
     let dialLastY = 0;
-    c4DialWrap.addEventListener('pointerdown', function (e) { dialDrag = true; dialLastY = e.clientY; c4DialWrap.setPointerCapture(e.pointerId); });
+    c4DialWrap.addEventListener('pointerdown', function (e) { dialDrag = true; dialLastY = e.clientY; safeSetPointerCapture(c4DialWrap, e.pointerId); });
     c4DialWrap.addEventListener('pointermove', function (e) {
       if (!dialDrag) return;
       setDialAngle(c4.angleDeg + (dialLastY - e.clientY) * 1.4);
       dialLastY = e.clientY;
     });
     c4DialWrap.addEventListener('pointerup', function () { dialDrag = false; });
+    c4DialWrap.addEventListener('pointercancel', function () { dialDrag = false; });
     c4DialWrap.addEventListener('wheel', function (e) { e.preventDefault(); setDialAngle(c4.angleDeg - e.deltaY * 0.35); }, { passive: false });
     c4DialWrap.addEventListener('keydown', function (e) {
       const s = e.shiftKey ? 15 : 5;
@@ -1344,7 +1424,7 @@
           : cur === ROTATION_SOURCE.KNUCKLE_BAR
             ? ROTATION_SOURCE.WRIST_LEVER
             : ROTATION_SOURCE.FUSED;
-      engine.config.rotationSource = next;
+      engine.updateConfig({ rotationSource: next });
       syncRotationSourceUi();
     });
     c4ZeroBtn.addEventListener('click', function () { setDialAngle(0); });
@@ -1357,7 +1437,7 @@
       stDrag = true;
       stX = e.clientX;
       stY = e.clientY;
-      c5Viewport.setPointerCapture(e.pointerId);
+      safeSetPointerCapture(c5Viewport, e.pointerId);
       c5Card.classList.add('is-manipulating');
     });
     c5Viewport.addEventListener('pointermove', function (e) {
@@ -1403,7 +1483,7 @@
     }
     c6Track.addEventListener('pointerdown', function (e) {
       fdDrag = true;
-      c6Track.setPointerCapture(e.pointerId);
+      safeSetPointerCapture(c6Track, e.pointerId);
       c6Track.classList.add('is-latched');
       c6LatchBadge.textContent = 'PTR LATCH';
       c6LatchBadge.classList.add('is-latched');
@@ -1434,8 +1514,23 @@
       const row = e.target.closest('.hg-tape-row');
       if (row) pinTapeRow(Number(row.dataset.row));
     });
-    c7FlickDown.addEventListener('click', function () { engine._scrollVelPx += 620; });
-    c7FlickUp.addEventListener('click', function () { engine._scrollVelPx -= 620; });
+    c7Tape.addEventListener('scroll', updateTapePosReadout, { passive: true });
+    c7Tape.addEventListener('keydown', function (e) {
+      let next = c7.pinnedRow;
+      if (e.key === 'ArrowDown') next = Math.min(tapeRowEls.length - 1, c7.pinnedRow + 1);
+      else if (e.key === 'ArrowUp') next = Math.max(0, c7.pinnedRow - 1);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = tapeRowEls.length - 1;
+      else return;
+      e.preventDefault();
+      pinTapeRow(next);
+      if (tapeRowEls[next] && typeof tapeRowEls[next].scrollIntoView === 'function') {
+        tapeRowEls[next].scrollIntoView({ block: 'nearest' });
+      }
+      updateTapePosReadout();
+    });
+    c7FlickDown.addEventListener('click', function () { c7.buttonVelPx += 620; });
+    c7FlickUp.addEventListener('click', function () { c7.buttonVelPx -= 620; });
 
     // Cell 08
     let puckDragSlot = -1;
@@ -1449,7 +1544,7 @@
       puckSx = e.clientX;
       puckSy = e.clientY;
       puckBroken = false;
-      c8Bay.setPointerCapture(e.pointerId);
+      safeSetPointerCapture(c8Bay, e.pointerId);
     });
     c8Bay.addEventListener('pointermove', function (e) {
       if (puckDragSlot < 0) return;
@@ -1499,12 +1594,12 @@
     // Cell 09
     tuneMinCutoff.addEventListener('input', function () {
       const v = Number(tuneMinCutoff.value);
-      engine.config.minCutoff = v;
+      engine.updateConfig({ minCutoff: v });
       valMinCutoff.textContent = v.toFixed(2) + 'Hz';
     });
     tuneBeta.addEventListener('input', function () {
       const v = Number(tuneBeta.value);
-      engine.config.beta = v;
+      engine.updateConfig({ beta: v });
       valBeta.textContent = v.toFixed(2);
     });
     function syncSchmittMarks() {
@@ -1524,8 +1619,8 @@
 
     tunePinch.addEventListener('input', function () {
       const v = Number(tunePinch.value);
-      engine.config.pinchEngage = v;
-      engine.config.pinchRelease = Number(Math.max(v + 0.10, 0.40).toFixed(2));
+      const rel = Number(Math.max(v + 0.10, 0.40).toFixed(2));
+      engine.updateConfig({ pinchEngage: v, pinchRelease: rel });
       valPinch.textContent = v.toFixed(2);
       syncSchmittMarks();
     });
@@ -1536,12 +1631,12 @@
     });
     c9ChiralBtn.addEventListener('click', function () {
       const next = !engine.config.invertChirality;
-      engine.config.invertChirality = next;
+      engine.updateConfig({ invertChirality: next });
       setAttr(c9ChiralBtn, 'aria-pressed', String(next));
       c9ChiralBtn.textContent = next ? 'Chiral: Inv' : 'Chiral: Auto';
     });
     c9DefaultsBtn.addEventListener('click', function () {
-      Object.assign(engine.config, DEFAULT_CONFIG);
+      engine.updateConfig(DEFAULT_CONFIG);
       synthRig.noiseSigma = 0.0032;
       tuneMinCutoff.value = String(DEFAULT_CONFIG.minCutoff);
       valMinCutoff.textContent = DEFAULT_CONFIG.minCutoff.toFixed(2) + 'Hz';
@@ -1557,20 +1652,26 @@
       mapModeBtn.textContent = 'Map: ROI';
       syncSchmittMarks();
       syncRotationSourceUi();
-      tracker._emitStatus();
+      tracker.notifyStatus();
     });
 
     // -----------------------------------------------------------------------
     // 7. 60fps Render & Spatial Gesture Dispatch (Main Grid + Secondary Studio)
     // -----------------------------------------------------------------------
     function onFrame(nowMs) {
+      rafId = 0;
       if (!shouldRunLoop()) {
-        rafId = 0;
         return;
       }
       if (rectsDirty) refreshRectCache();
 
-      const events = tracker.tick(nowMs, global.innerWidth, global.innerHeight);
+      const safeNowMs = Number.isFinite(nowMs) ? nowMs : lastUiFrameMs + 16.67;
+      let uiDtSec = lastUiFrameMs > 0 ? (safeNowMs - lastUiFrameMs) * 0.001 : 1 / 60;
+      if (!Number.isFinite(uiDtSec) || uiDtSec <= 1e-5) uiDtSec = 1 / 120;
+      else if (uiDtSec > 0.25) uiDtSec = 0.25;
+      lastUiFrameMs = safeNowMs;
+
+      const events = tracker.tick(safeNowMs, global.innerWidth, global.innerHeight);
       const s0 = engine.slots[0];
       const s1 = engine.slots[1];
 
@@ -1580,7 +1681,7 @@
           c6.peak = Math.max(c6.value, c6.peak - 0.004);
           c6Peak.style.bottom = (c6.peak * 100).toFixed(1) + '%';
         }
-        dispatchSecondaryGestures(s0, s1, events);
+        dispatchSecondaryGestures(s0, s1, events, uiDtSec);
         drawCell01Rig(s0, s1);
         drawCell02Scope(s0);
         drawCell04Dial(s0);
@@ -1596,20 +1697,34 @@
         updateSecondaryReadouts(s0, events);
       }
 
-      rafId = requestAnimationFrame(onFrame);
+      if (shouldRunLoop() && !rafId) {
+        rafId = requestAnimationFrame(onFrame);
+      }
     }
 
     function dispatchMainGridGestures(s0, events) {
+      if (mainGrid.hidden || document.querySelector('dialog[open]')) return;
       const isArmed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
       if (!isArmed) return;
       if (Math.abs(events.scrollDeltaPx) > 0.25) {
         global.scrollBy(0, events.scrollDeltaPx);
       }
       if (events.clickFired && Number.isFinite(events.clickX) && Number.isFinite(events.clickY)) {
-        const el = document.elementFromPoint(events.clickX, events.clickY);
+        const maxX = Math.max(0, (global.innerWidth || 1) - 1);
+        const maxY = Math.max(0, (global.innerHeight || 1) - 1);
+        const cx = clamp(events.clickX, 0, maxX);
+        const cy = clamp(events.clickY, 0, maxY);
+        const el = document.elementFromPoint(cx, cy);
         if (el) {
           const btn = el.closest('button, a, [role="button"], input');
-          if (btn) btn.click();
+          if (
+            btn &&
+            btn !== portalStage &&
+            !btn.disabled &&
+            btn.getAttribute('aria-disabled') !== 'true'
+          ) {
+            btn.click();
+          }
         }
       }
     }
@@ -1673,10 +1788,17 @@
       }
     }
 
-    function dispatchSecondaryGestures(s0, s1, events) {
+    function dispatchSecondaryGestures(s0, s1, events, uiDtSec) {
       const isArmed = s0.state === HAND_STATE.ARMED || s0.state === HAND_STATE.COASTING;
       const cx = s0.interactiveX;
       const cy = s0.interactiveY;
+
+      const decay = clamp(engine.config.vScrollDecay, 0, 0.999);
+      c7.buttonVelPx *= Math.pow(decay, uiDtSec * 60);
+      if (!Number.isFinite(c7.buttonVelPx) || Math.abs(c7.buttonVelPx) < 0.8) {
+        c7.buttonVelPx = 0;
+      }
+      const buttonDeltaPx = c7.buttonVelPx * uiDtSec;
 
       if (events.twoHandJustEnded && spatial.latchedType !== 'c5-stage') {
         c5Card.classList.remove('is-manipulating');
@@ -1691,6 +1813,17 @@
         c5.rotDeg += events.twoHandDeltaDeg;
         renderStageTransform();
         setHighlightedCell(4, true);
+        if (Math.abs(c7.buttonVelPx) > 0) {
+          c7.displayVelPx = c7.buttonVelPx;
+          c7.subPixelScroll += buttonDeltaPx;
+          const whole = Math.trunc(c7.subPixelScroll);
+          if (whole !== 0) {
+            c7Tape.scrollTop += whole;
+            c7.subPixelScroll -= whole;
+          }
+        } else {
+          c7.displayVelPx = 0;
+        }
         return;
       }
 
@@ -1718,25 +1851,35 @@
         spatial.hoveredTunerIdx = nextTuner;
       }
 
-      // V-Scroll momentum + soft row-detent snap at low velocity (< 18 px/s). The detent must be
-      // checked first: the scroll branch below swallows every frame down to ~1 px/s, which left the
-      // detent only a few frames before the engine zeroes velocity (< 0.8 px/s), so rows never snapped.
-      const scrollSpeed = Math.abs(events.scrollVelocityPx);
-      if (!s0.vScrollActive && hitCell !== 5 && scrollSpeed > 0 && scrollSpeed < 18) {
+      // Separate hand V-Scroll target (`fader` when V-peace starts over Cell 06 vs `tape`) from Cell 07 button momentum
+      if (s0.vScrollActive) {
+        spatial.vScrollTarget = hitCell === 5 ? 'fader' : 'tape';
+      } else if (Math.abs(events.scrollVelocityPx) < 0.8) {
+        spatial.vScrollTarget = 'tape';
+      }
+
+      if (spatial.vScrollTarget === 'fader' && Math.abs(events.scrollDeltaPx) > 0.02) {
+        setFaderValue(clamp(c6.value - events.scrollDeltaPx * 0.0018, 0, 1));
+      }
+
+      const handTapeVel = spatial.vScrollTarget === 'fader' ? 0 : events.scrollVelocityPx;
+      const handTapeDelta = spatial.vScrollTarget === 'fader' ? 0 : events.scrollDeltaPx;
+      const totalTapeVel = handTapeVel + c7.buttonVelPx;
+      const totalTapeDelta = handTapeDelta + buttonDeltaPx;
+      c7.displayVelPx = totalTapeVel;
+
+      // Detent runs first below 18 px/s; momentum scroll runs above 18 px/s or during active V-Scroll
+      if (!(s0.vScrollActive && spatial.vScrollTarget === 'tape') && Math.abs(totalTapeVel) > 0 && Math.abs(totalTapeVel) < 18) {
         const targetTop = Math.round(c7Tape.scrollTop / 25) * 25;
         const gap = targetTop - c7Tape.scrollTop;
         c7Tape.scrollTop += Math.abs(gap) <= 1.5 ? gap : gap * 0.22;
         c7.subPixelScroll = 0;
-      } else if (Math.abs(events.scrollDeltaPx) > 0.02) {
-        if (hitCell === 5) {
-          setFaderValue(clamp(c6.value - events.scrollDeltaPx * 0.0018, 0, 1));
-        } else {
-          c7.subPixelScroll += events.scrollDeltaPx;
-          const whole = Math.trunc(c7.subPixelScroll);
-          if (whole !== 0) {
-            c7Tape.scrollTop += whole;
-            c7.subPixelScroll -= whole;
-          }
+      } else if (Math.abs(totalTapeDelta) > 0.02) {
+        c7.subPixelScroll += totalTapeDelta;
+        const whole = Math.trunc(c7.subPixelScroll);
+        if (whole !== 0) {
+          c7Tape.scrollTop += whole;
+          c7.subPixelScroll -= whole;
         }
       }
 
@@ -1796,8 +1939,7 @@
             if (overSlot >= 0 && overSlot !== slot) {
               swapPucks(slot, overSlot);
               spatial.latchedSubIdx = overSlot;
-              s0.lockOriginX = cx;
-              s0.lockOriginY = cy;
+              engine.reanchorLockOrigin(0, cx, cy);
               puckEls[overSlot].classList.add('is-dragging');
             }
           }
@@ -1846,16 +1988,25 @@
         c5Viewport.classList.toggle('show-guides', c5.showGuides);
         return;
       }
-      const el = document.elementFromPoint(x, y);
+      const maxX = Math.max(0, (global.innerWidth || 1) - 1);
+      const maxY = Math.max(0, (global.innerHeight || 1) - 1);
+      const el = document.elementFromPoint(clamp(x, 0, maxX), clamp(y, 0, maxY));
       if (!el) return;
       const btn = el.closest('button');
-      if (btn) { btn.click(); return; }
+      if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') {
+        btn.click();
+        return;
+      }
       const row = el.closest('.hg-tape-row');
       if (row) pinTapeRow(Number(row.dataset.row));
     }
 
     function updateSpatialReticle(s0, s1, events) {
+      const mainObscured =
+        !isSecondaryOpen &&
+        (mainGrid.hidden || Boolean(document.querySelector('dialog[open]')));
       if (
+        mainObscured ||
         tracker.mode === TRACKER_MODE.POINTER ||
         tracker.mode === TRACKER_MODE.IDLE ||
         (s0.state === HAND_STATE.IDLE && !s0.visible)
@@ -1983,7 +2134,7 @@
       ctx.moveTo(rx, ry + rh - tk); ctx.lineTo(rx, ry + rh); ctx.lineTo(rx + tk, ry + rh);
       ctx.moveTo(rx + rw - tk, ry + rh); ctx.lineTo(rx + rw, ry + rh); ctx.lineTo(rx + rw, ry + rh - tk);
       ctx.stroke();
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = '#52525b';
       ctx.font = '500 8.5px ui-monospace, monospace';
       ctx.fillText(cfg.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'REL CLUTCH (FIST=FREE)' : 'ROI [0.22..0.78]', rx + 4, ry + 10);
 
@@ -2209,7 +2360,7 @@
       ctx.fillText('RAW', ox + 4, topY + 9);
       ctx.fillStyle = '#2563eb';
       ctx.fillText('1-EURO', ox + 26, topY + 9);
-      ctx.fillStyle = '#059669';
+      ctx.fillStyle = '#047857';
       ctx.fillText('||V||', ox + 4, botY + 9);
     }
 
@@ -2315,13 +2466,12 @@
       c3SchmittFill.classList.toggle('is-damped', s0.velocityDamped && !s0.pinched);
       c3Metric.textContent = 'd/s ' + pr.toFixed(2) + ' · ' + (s0.pinched ? (s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'LOCK' : 'DRAG') : (s0.velocityDamped ? 'DAMP' : 'OPEN'));
 
-      const vel = events.scrollVelocityPx;
+      const vel = c7.displayVelPx;
       c7Metric.textContent = 'VEL ' + Math.round(vel) + ' px/s · γ=0.94';
       const barMag = clamp(Math.abs(vel) / 900, 0, 0.5) * 100;
       c7VelBar.style.top = vel >= 0 ? '50%' : (50 - barMag).toFixed(1) + '%';
       c7VelBar.style.height = barMag.toFixed(1) + '%';
-      const approxRow = clamp(Math.floor(c7Tape.scrollTop / 25) + 1, 1, TAPE_SPEC_ITEMS.length);
-      c7PosReadout.textContent = 'ROW ' + String(approxRow).padStart(2, '0') + '/' + TAPE_SPEC_ITEMS.length + ' · PIN #' + String(c7.pinnedRow + 1).padStart(2, '0');
+      updateTapePosReadout();
 
       c9Metric.textContent = st.detectMs.toFixed(2) + 'ms · ZERO-GC';
       teleSpan.textContent = s0.visible ? s0.palmSpan.toFixed(3) : '—';
@@ -2332,9 +2482,6 @@
     // -----------------------------------------------------------------------
     // 8. Seamless SPA View Swap, Spatial Homothety Transition & History Sync
     // -----------------------------------------------------------------------
-    // Another cell's secondary page (e.g. `.lg-secondary-page` for `#left-grille`) can own the hidden
-    // main grid. Only unhide the grid when no other secondary page is showing, so a cross-cell hash
-    // jump never leaves both the grid and another page visible (or neither).
     function otherSecondaryPageVisible() {
       const kids = document.body ? document.body.children : [];
       for (let i = 0; i < kids.length; i++) {
@@ -2345,59 +2492,77 @@
       return false;
     }
 
+    function clearSpatialLatches() {
+      if (spatial.hoveredPadIdx >= 0) {
+        c3Pads[spatial.hoveredPadIdx].classList.remove('is-spatial-target', 'is-locking');
+      }
+      if (spatial.hoveredPuckIdx >= 0 && puckEls[spatial.hoveredPuckIdx]) {
+        puckEls[spatial.hoveredPuckIdx].classList.remove('is-spatial-target');
+      }
+      if (spatial.hoveredTunerIdx >= 0) {
+        tunerRows[spatial.hoveredTunerIdx].classList.remove('is-spatial-target');
+      }
+      if (spatial.latchedSubIdx >= 0 && puckEls[spatial.latchedSubIdx]) {
+        puckEls[spatial.latchedSubIdx].style.transform = '';
+        puckEls[spatial.latchedSubIdx].classList.remove('is-dragging');
+      }
+      setHighlightedCell(-1, false);
+      c5Card.classList.remove('is-manipulating');
+      c6Track.classList.remove('is-latched');
+      c6LatchBadge.textContent = 'READY';
+      c6LatchBadge.classList.remove('is-latched');
+      spatial.hoveredPadIdx = -1;
+      spatial.hoveredPuckIdx = -1;
+      spatial.hoveredTunerIdx = -1;
+      spatial.latchedType = null;
+      spatial.latchedCellIdx = -1;
+      spatial.latchedSubIdx = -1;
+      spatial.vScrollTarget = 'tape';
+      c7.buttonVelPx = 0;
+      c7.displayVelPx = 0;
+    }
+
     function swapDomToSecondary() {
       if (isSecondaryOpen) return;
       mainGrid.hidden = true;
       secondaryPage.hidden = false;
       isSecondaryOpen = true;
-      const camPending =
-        tracker.mode !== TRACKER_MODE.WEBCAM &&
-        (tracker.cameraStatus === CAMERA_STATUS.REQUESTING_CAM || tracker.cameraStatus === CAMERA_STATUS.LOADING_MODEL);
-      if (tracker.mode === TRACKER_MODE.WEBCAM) {
+      if (tracker.mode === TRACKER_MODE.WEBCAM || tracker.isWebcamStarting) {
+        tracker.setFallbackMode(TRACKER_MODE.SYNTH);
         tracker.setVideoElement(wbVideo);
-        tracker._emitStatus();
-      } else if (camPending) {
-        // A portal Cam request is still pending: keep the rig alive and re-issue the request so it
-        // lands on the Studio video with the Studio's SYNTH fallback (the old one targeted the
-        // hidden tile video and would fall back to IDLE, leaving a dead rig).
-        if (tracker.mode === TRACKER_MODE.IDLE) {
-          synthRig.resetPosture();
-          synthRig.autoOrbit = true;
-          tracker.setMode(TRACKER_MODE.SYNTH);
-        }
-        tracker.setVideoElement(wbVideo);
-        tracker.enableWebcam(TRACKER_MODE.SYNTH);
+        tracker.notifyStatus();
       } else if (tracker.mode === TRACKER_MODE.IDLE) {
-        // Also cancels a still-pending portal camera request (new session epoch).
         synthRig.resetPosture();
-        synthRig.autoOrbit = true;
+        synthRig.autoOrbit = !prefersReducedMotion();
         tracker.setMode(TRACKER_MODE.SYNTH);
+      } else {
+        tracker.notifyStatus();
       }
       resizeAllCanvases();
       refreshRectCache();
       ensureLoopState();
-      global.scrollTo(0, 0);
+      if (typeof global.scrollTo === 'function') global.scrollTo(0, 0);
       backBtn.focus({ preventScroll: true });
     }
 
-    function swapDomToMain(restoreFocus) {
+    function swapDomToMain(restoreFocus, crossCellHash) {
       if (!isSecondaryOpen) return;
       secondaryPage.hidden = true;
-      if (!otherSecondaryPageVisible()) mainGrid.hidden = false;
+      if (!crossCellHash && !otherSecondaryPageVisible()) {
+        mainGrid.hidden = false;
+      }
       isSecondaryOpen = false;
-      // Release any spatial latch so reopening starts clean.
-      spatial.latchedType = null;
-      spatial.latchedCellIdx = -1;
-      spatial.latchedSubIdx = -1;
-      setHighlightedCell(-1, false);
-      c5Card.classList.remove('is-manipulating');
-      // Deterministically extinguish webcam & synthetic loop when returning to main grid
+      clearSpatialLatches();
+      synthRig.resetPosture();
+      engine.resetSlot(1);
+      syncRigButtons();
       cameraSuspendedByVisibility = false;
+      tracker.setVideoElement(miniVideo);
       tracker.setMode(TRACKER_MODE.IDLE);
       resetPortalPreview();
       ensureLoopState();
-      if (restoreFocus && !mainGrid.hidden) {
-        global.scrollTo(0, savedMainScrollY);
+      if (restoreFocus && !crossCellHash && !mainGrid.hidden) {
+        if (typeof global.scrollTo === 'function') global.scrollTo(0, savedMainScrollY);
         portalStudioBtn.focus({ preventScroll: true });
       }
     }
@@ -2407,26 +2572,28 @@
       secondaryGrid.style.viewTransitionName = '';
     }
 
-    function applyDomState(open, restoreFocus) {
+    function applyDomState(open, restoreFocus, crossCellHash) {
       if (open) swapDomToSecondary();
-      else swapDomToMain(restoreFocus);
+      else swapDomToMain(restoreFocus, crossCellHash);
     }
 
     // Race-free open/close: the latest request (targetOpen) wins even if an earlier View Transition
-    // callback runs later. Every transition promise is handled (a skipped transition, e.g. in a
-    // hidden tab, rejects `ready`, which otherwise surfaces as an unhandled rejection).
-    function runPortalTransition(nextOpen, animate, restoreFocus) {
+    // callback runs later. Both `vt.ready` and `vt.finished` are guarded with `.catch()`.
+    function runPortalTransition(nextOpen, animate, restoreFocus, crossCellHash) {
+      const isCross = Boolean(crossCellHash);
       if (nextOpen && !targetOpen && !isSecondaryOpen) savedMainScrollY = global.scrollY || 0;
       targetOpen = nextOpen;
+      if (!nextOpen) enteredFromMainGrid = false;
       const mySeq = ++vtSeq;
       const canAnimate =
         animate &&
+        !isCross &&
         !document.hidden &&
         typeof document.startViewTransition === 'function' &&
         !prefersReducedMotion();
       if (!canAnimate) {
         clearTransitionNames();
-        applyDomState(nextOpen, restoreFocus);
+        applyDomState(nextOpen, restoreFocus && !isCross, isCross);
         return;
       }
       clearTransitionNames();
@@ -2436,23 +2603,26 @@
       try {
         vt = document.startViewTransition(function () {
           clearTransitionNames();
+          const nowCross = Boolean(location.hash && location.hash !== '#hand-gesture');
           if (mySeq === vtSeq) {
             if (targetOpen) secondaryGrid.style.viewTransitionName = 'hg-stage-portal';
             else portalCell.style.viewTransitionName = 'hg-stage-portal';
+            applyDomState(targetOpen, restoreFocus && !isCross, isCross);
+          } else {
+            applyDomState(targetOpen, !targetOpen && !nowCross, nowCross);
           }
-          applyDomState(targetOpen, restoreFocus);
         });
       } catch (_) {
         clearTransitionNames();
-        applyDomState(nextOpen, restoreFocus);
+        applyDomState(nextOpen, restoreFocus && !isCross, isCross);
         return;
       }
       const noop = function () {};
-      if (vt.ready) vt.ready.catch(noop);
-      if (vt.updateCallbackDone) vt.updateCallbackDone.catch(noop);
-      Promise.resolve(vt.finished)
+      Promise.resolve(vt && vt.ready).catch(noop);
+      Promise.resolve(vt && vt.updateCallbackDone).catch(noop);
+      Promise.resolve(vt && vt.finished)
         .catch(noop)
-        .then(function () {
+        .finally(function () {
           if (mySeq === vtSeq) clearTransitionNames();
         });
     }
@@ -2469,7 +2639,7 @@
           } catch (_) {}
         }
       }
-      runPortalTransition(true, fromUserTap, false);
+      runPortalTransition(true, fromUserTap, false, false);
     }
 
     function requestCloseSecondaryView() {
@@ -2494,26 +2664,33 @@
           global.history.replaceState(null, '', location.pathname + location.search);
         } catch (_) {}
       }
-      runPortalTransition(false, true, true);
+      const crossCellHash = Boolean(location.hash && location.hash !== '#hand-gesture');
+      runPortalTransition(false, !crossCellHash, !crossCellHash, crossCellHash);
     }
 
     function syncLocationHash() {
       const wantOpen = location.hash === '#hand-gesture';
-      if (wantOpen === targetOpen) return;
+      if (wantOpen === targetOpen) {
+        if (!wantOpen && !location.hash && mainGrid.hidden && !otherSecondaryPageVisible()) {
+          mainGrid.hidden = false;
+        }
+        return;
+      }
       if (wantOpen) {
-        runPortalTransition(true, false, false);
+        runPortalTransition(true, false, false, false);
       } else {
-        // Another cell's hash took over: close instantly and do not steal focus or scroll.
+        // Another cell's hash took over: close instantly and do not unhide main.grid or steal focus.
         const crossCellHash = Boolean(location.hash && location.hash !== '#hand-gesture');
         enteredFromMainGrid = false;
-        runPortalTransition(false, !crossCellHash, !crossCellHash);
+        runPortalTransition(false, !crossCellHash, !crossCellHash, crossCellHash);
       }
     }
 
     global.addEventListener('popstate', syncLocationHash);
     global.addEventListener('hashchange', syncLocationHash);
     global.addEventListener('pagehide', function () {
-      suspendCameraForHide();
+      cameraSuspendedByVisibility = false;
+      tracker.teardown();
       ensureLoopState();
     });
 
