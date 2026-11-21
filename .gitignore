@@ -1,0 +1,28 @@
+# OS & editor
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+*.swp
+.idea/
+.vscode/
+
+# Agent worktrees
+.worktrees/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.key
+
+# Common dependencies & build outputs
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+__pycache__/
+.venv/
