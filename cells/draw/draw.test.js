@@ -1173,12 +1173,24 @@ test('Stylus buttons, pen hover drop, lift-off tail taper, palm-before-pen preem
   const dom = createSimulatedDom({ left: 10, top: 20, width: 400, height: 300 }, '#141413');
   const instance = UI.mount(dom.section, { engine: Engine });
 
-  // Verify MutationObserver observes html, body, and main.grid with class, but rootEl WITHOUT class
+  // MutationObserver watches only data-theme on html, body and main.grid, and
+  // data-theme/style on rootEl (never class: stroke class toggles must not re-read styles)
   const rootObs = dom.observedTargets.find((o) => o.target === dom.section);
   const gridObs = dom.observedTargets.find((o) => o.target === dom.mainGrid);
   assert.ok(rootObs && gridObs);
   assert.deepEqual(rootObs.opts.attributeFilter, ['data-theme', 'style']);
-  assert.deepEqual(gridObs.opts.attributeFilter, ['data-theme', 'class', 'style']);
+  assert.deepEqual(gridObs.opts.attributeFilter, ['data-theme']);
+
+  // MotionGrid writes `--mg-cell-w` into main.grid's style (and toggles its class)
+  // on every spring frame; neither may cost a getComputedStyle on this cell.
+  const stylesBeforeGridFrames = dom.getComputedStyleCalls();
+  for (let i = 0; i < 30; i++) {
+    dom.mainGrid.setAttribute('style', '--mg-cell-w: ' + (200 + i) + 'px');
+  }
+  dom.mainGrid.classList.add('is-motion-controlled');
+  assert.equal(dom.getComputedStyleCalls() - stylesBeforeGridFrames, 0);
+  dom.mainGrid.classList.remove('is-motion-controlled');
+  dom.mainGrid.setAttribute('style', '');
 
   // Fractional zoom DPR range query (e.g. 110% Retina zoom = 2.200000047683716)
   dom.setDpr(2.200000047683716);
@@ -1612,10 +1624,21 @@ test('Dark-mode CSS specificity & forced-colors contract beat index.html .cell r
   const indexHtml = fs.readFileSync(path.join(__dirname, '..', '..', 'index.html'), 'utf8');
   const drawCss = fs.readFileSync(path.join(__dirname, 'draw.css'), 'utf8');
 
-  const linkIdx = indexHtml.indexOf('cells/draw/draw.css');
-  const styleIdx = indexHtml.indexOf('<style>');
-  assert.ok(linkIdx > 0 && styleIdx > linkIdx, 'index.html inline <style> appears after draw.css link');
-  assert.match(indexHtml, /\.cell\s*\{[^}]*background:\s*#ffffff/s);
+  // The page-wide `.cell { background; border }` rule may live in an inline
+  // <style> or in any linked stylesheet, before or after draw.css. Whatever the
+  // order, draw.css must win on specificity, so collect every page CSS source.
+  assert.ok(indexHtml.includes('cells/draw/draw.css'), 'index.html links draw.css');
+  const pageCss = [];
+  for (const m of indexHtml.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) pageCss.push(m[1]);
+  for (const m of indexHtml.matchAll(/<link[^>]+rel="stylesheet"[^>]+href="([^"]+)"/g)) {
+    if (m[1].includes('cells/draw/')) continue;
+    const p = path.join(__dirname, '..', '..', m[1]);
+    if (fs.existsSync(p)) pageCss.push(fs.readFileSync(p, 'utf8'));
+  }
+  assert.ok(
+    pageCss.some((css) => /(^|[\s,}])\.cell\s*\{[^}]*background\s*:/m.test(css)),
+    'page declares a bare .cell rule with a background that draw.css must override'
+  );
 
   function selectorSpecificity(sel) {
     const clean = sel.replace(/:not\(([^)]*)\)/g, ' $1 ');
@@ -1657,4 +1680,94 @@ test('Dark-mode CSS specificity & forced-colors contract beat index.html .cell r
     /\.cell--draw,\s*\.cell\.cell--draw\s*\{\s*forced-color-adjust:\s*none;\s*\}/
   );
   assert.match(forcedMatch[1], /\.dw-clear\s*\{[^}]*forced-color-adjust:\s*auto;/s);
+});
+
+test('Heavy drawings coalesce ResizeObserver/window-resize bursts into one trailing replay; light ones replay at once', async () => {
+  function countReplays(dom) {
+    return dom.ctx2d.calls.filter((c) => c.fn === 'clearRect').length;
+  }
+  function addZigzagStrokes(engine, rect, strokeCount, pointsPerStroke) {
+    for (let s = 0; s < strokeCount; s++) {
+      engine.beginStroke({ clientX: rect.left + 5, clientY: rect.top + 10 + s * 3, rect, pointerType: 'mouse', timeMs: 0 });
+      for (let i = 1; i < pointsPerStroke; i++) {
+        engine.appendPoint({
+          clientX: rect.left + 5 + (i % 2 === 0 ? 0 : 6) + i * 0.9,
+          clientY: rect.top + 10 + s * 3 + (i % 2 === 0 ? 0 : 4),
+          rect,
+          pointerType: 'mouse',
+          timeMs: i * 8
+        });
+      }
+      engine.endStroke(null);
+    }
+  }
+
+  // Light drawing: every resize signal replays immediately (unchanged behaviour)
+  const light = createSimulatedDom({ left: 0, top: 0, width: 400, height: 300 }, '#141413');
+  const lightInst = UI.mount(light.section, { engine: Engine });
+  addZigzagStrokes(lightInst.engine, { left: 0, top: 0, width: 400, height: 300 }, 1, 40);
+  light.ctx2d.calls.length = 0;
+  light.setRect({ width: 420, height: 315 });
+  assert.equal(countReplays(light), 1);
+  assert.equal(lightInst.canvas.width, 840);
+  lightInst.destroy();
+
+  // Heavy drawing: a 60fps burst costs zero replays, then exactly one after it settles
+  const dom = createSimulatedDom({ left: 0, top: 0, width: 400, height: 300 }, '#141413');
+  const instance = UI.mount(dom.section, { engine: Engine });
+  addZigzagStrokes(instance.engine, { left: 0, top: 0, width: 400, height: 300 }, 30, 300);
+  assert.ok(instance.engine.getVertexCount() > 4000, 'fixture must exceed the coalesce threshold');
+
+  dom.ctx2d.calls.length = 0;
+  for (let i = 1; i <= 8; i++) {
+    dom.setRect({ width: 400 + i * 20, height: 300 + i * 15 });
+  }
+  dom.win.dispatchEvent({ type: 'resize' });
+  assert.equal(countReplays(dom), 0, 'no full replay per resize frame for heavy drawings');
+  assert.equal(instance.canvas.width, 800, 'backing store untouched (CSS stretches the old bitmap)');
+  assert.equal(dom.getActiveTimerCount(), 1, 'one trailing settle timer');
+
+  await new Promise((r) => setTimeout(r, 170));
+  assert.equal(countReplays(dom), 1, 'exactly one trailing replay');
+  assert.equal(instance.canvas.width, 1120);
+  assert.equal(instance.canvas.height, 840);
+  assert.equal(instance.engine.getStrokeCount(), 30, 'no strokes lost');
+
+  // Pointer input during a pending settle syncs immediately (accuracy over coalescing)
+  dom.setRect({ width: 500, height: 375 });
+  assert.equal(instance.canvas.width, 1120);
+  instance.canvas.dispatchEvent({
+    type: 'pointerdown', pointerId: 5, pointerType: 'mouse', button: 0, buttons: 1,
+    clientX: 100, clientY: 100, timeStamp: 10
+  });
+  assert.equal(instance.canvas.width, 1000);
+
+  // Zero-size (main.grid[hidden]) is never deferred: the active stroke finalizes now
+  dom.setRect({ width: 0, height: 0 });
+  assert.equal(dom.section.classList.contains('is-drawing'), false);
+  assert.equal(instance.engine.getStrokeCount(), 31);
+  assert.equal(dom.getActiveTimerCount(), 0);
+
+  // Sustained motion (signals every 40ms for ~480ms) must not starve: at least
+  // one replay with a changed backing store happens before the motion ends
+  dom.setRect({ width: 400, height: 300 });
+  await new Promise((r) => setTimeout(r, 170));
+  const widthBeforeMotion = instance.canvas.width;
+  dom.ctx2d.calls.length = 0;
+  for (let i = 1; i <= 12; i++) {
+    dom.setRect({ width: 400 + i * 10, height: 300 + i * 7.5 });
+    await new Promise((r) => setTimeout(r, 40));
+  }
+  const replaysDuringMotion = countReplays(dom);
+  assert.ok(replaysDuringMotion >= 1, 'sustained resize still replays during the motion');
+  assert.ok(replaysDuringMotion <= 6, 'replays stay throttled (got ' + replaysDuringMotion + ')');
+  assert.notEqual(instance.canvas.width, widthBeforeMotion);
+  await new Promise((r) => setTimeout(r, 170));
+  assert.equal(instance.canvas.width, 1040, 'final replay matches the settled size');
+
+  // destroy() clears a pending settle timer
+  dom.setRect({ width: 640, height: 480 });
+  assert.equal(dom.getActiveTimerCount(), 1);
+  instance.destroy();
+  assert.equal(dom.getActiveTimerCount(), 0);
 });

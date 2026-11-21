@@ -18,7 +18,8 @@
  *     macOS Mission Control / 3-finger-drag dropped-release `(e.buttons & 1) === 0`
  *     guard, and `getCoalescedEvents()` empty-array fallback.
  *   - Zero global `window` keyboard shortcuts (coexists with `MotionGrid` `r`/`R`),
- *     60fps `ResizeObserver` vector replay across `140x105px`..`960x720px`, and
+ *     `ResizeObserver` vector replay across `140x105px`..`960x720px` (immediate
+ *     below `RESIZE_COALESCE_VERTICES`, at most one per `RESIZE_SETTLE_MS` above it), and
  *     live `--dw-ink` re-inking on `[data-theme="dark"]` changes.
  */
 (function (root, factory) {
@@ -46,6 +47,13 @@
 
     const SVG_NS = 'http://www.w3.org/2000/svg';
     const CLEAR_FADE_MS = 130;
+    // Above this many stored vertices a full replay costs several ms per frame
+    // (measured ~2.3 us/vertex on a 960x720 tile at DPR 2), so continuous
+    // ResizeObserver / window-resize bursts (MotionGrid spring) are throttled
+    // to one replay per RESIZE_SETTLE_MS. Between replays the old bitmap is stretched by
+    // CSS; strokes are normalized to the rect, so they stay in place.
+    const RESIZE_COALESCE_VERTICES = 4000;
+    const RESIZE_SETTLE_MS = 120;
 
     function resolveEngine() {
       if (root && root.GeminiDraw && root.GeminiDraw.Engine) {
@@ -186,6 +194,7 @@
       let announceTimerId = 0;
       let clearPhaseToggle = false;
       let dprMediaQuery = null;
+      let resizeSettleTimerId = 0;
 
       function prefersReducedMotion() {
         if (win && typeof win.matchMedia === 'function') {
@@ -657,9 +666,46 @@
         }
       }
 
-      function onWindowResize() {
+      function cancelResizeSettle() {
+        if (resizeSettleTimerId && win && typeof win.clearTimeout === 'function') {
+          win.clearTimeout(resizeSettleTimerId);
+        }
+        resizeSettleTimerId = 0;
+      }
+
+      // Shared by ResizeObserver and window `resize`. Light drawings replay
+      // immediately; heavy ones replay once the size settles. Zero-size (hidden
+      // grid) always goes straight through so an active stroke finalizes now.
+      function onResizeSignal() {
         if (destroyed) return;
-        syncCanvasBackingStore(false);
+        const rect = measureRect();
+        const heavy =
+          rect.width > 0 &&
+          rect.height > 0 &&
+          engine.getVertexCount() > RESIZE_COALESCE_VERTICES &&
+          win &&
+          typeof win.setTimeout === 'function';
+        if (!heavy) {
+          cancelResizeSettle();
+          syncCanvasBackingStore(false);
+          return;
+        }
+        // Throttle, not debounce: keep a pending timer so sustained motion
+        // (long slider drag, window drag-resize) still replays every
+        // RESIZE_SETTLE_MS; the replay measures the live rect when it runs.
+        if (resizeSettleTimerId) return;
+        resizeSettleTimerId = win.setTimeout(function () {
+          resizeSettleTimerId = 0;
+          if (destroyed) return;
+          syncCanvasBackingStore(false);
+        }, RESIZE_SETTLE_MS);
+        if (resizeSettleTimerId && typeof resizeSettleTimerId.unref === 'function') {
+          resizeSettleTimerId.unref();
+        }
+      }
+
+      function onWindowResize() {
+        onResizeSignal();
       }
 
       function onThemeMutation() {
@@ -705,9 +751,7 @@
         (win && win.ResizeObserver) ||
         (typeof ResizeObserver === 'function' ? ResizeObserver : null);
       if (ResizeObserverCtor) {
-        resizeObserver = new ResizeObserverCtor(function () {
-          syncCanvasBackingStore(false);
-        });
+        resizeObserver = new ResizeObserverCtor(onResizeSignal);
         resizeObserver.observe(rootEl);
       }
 
@@ -717,7 +761,11 @@
         (typeof MutationObserver === 'function' ? MutationObserver : null);
       if (MutationObserverCtor) {
         themeObserver = new MutationObserverCtor(onThemeMutation);
-        const ancestorOpts = { attributes: true, attributeFilter: ['data-theme', 'class', 'style'] };
+        // Only `data-theme` can switch the ink (draw.css keys dark mode on it).
+        // Ancestor `class`/`style` are excluded on purpose: MotionGrid writes
+        // `--mg-cell-w` into `main.grid`'s style on every spring frame, which
+        // would otherwise force a getComputedStyle per frame.
+        const ancestorOpts = { attributes: true, attributeFilter: ['data-theme'] };
         const selfOpts = { attributes: true, attributeFilter: ['data-theme', 'style'] };
         if (doc.documentElement) themeObserver.observe(doc.documentElement, ancestorOpts);
         if (doc.body && doc.body !== doc.documentElement) {
@@ -751,6 +799,7 @@
         finalizeActiveStroke(null);
         destroyed = true;
         cancelClearVeil();
+        cancelResizeSettle();
         if (announceTimerId && win && typeof win.clearTimeout === 'function') {
           win.clearTimeout(announceTimerId);
           announceTimerId = 0;

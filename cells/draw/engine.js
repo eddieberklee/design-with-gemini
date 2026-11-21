@@ -13,8 +13,10 @@
  *     (immune to iOS `touch` `pressure === 0`).
  *   - Crisp zero-movement tap-to-dot (`1.25px` jitter deadband).
  *   - Iterative stack-safe 3D `(x, y, w)` Ramer-Douglas-Peucker compaction (`0.28px`
- *     tolerance) preserving mid-stroke pressure swells plus a `12,000`-vertex session
- *     compaction ceiling for bounded 60fps resize replay.
+ *     tolerance) preserving mid-stroke pressure swells plus a `12,000`-vertex soft
+ *     session budget. The budget is NOT a ceiling: each older stroke is coarsened
+ *     once (`0.85px`) and the newest stroke never, so totals keep growing in long
+ *     sessions. Replay cost during resizes is bounded in `ui.js` instead.
  *
  * Classic `<script defer>` IIFE on `window.GeminiDraw.Engine` + CommonJS UMD export.
  */
