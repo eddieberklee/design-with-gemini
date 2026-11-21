@@ -1,0 +1,728 @@
+/* ==========================================================================
+   Cell 01 — 16" MacBook Pro (Mac16,5) Acoustic Grille Swipe & 19 kHz Sonar Lab
+   Swiss-Braun token palette scoped strictly to .cell-acoustic so sibling cells
+   and the host #fafafa / #ffffff / #e5e5e5 bento grid stay untouched.
+   ========================================================================== */
+
+.cell-acoustic {
+  --ag-surface: #ffffff;
+  --ag-border: #e5e5e5;
+  --ag-well: #f6f6f4;
+  --ag-well-border: #e6e5e1;
+  --ag-deck: #ecebe7;
+  --ag-control: #f1f0ec;
+  --ag-thumb: #ffffff;
+  --ag-rule: #d5d4ce;
+  --ag-ink: #141413;
+  --ag-ink-sec: #52514d;
+  --ag-ink-muted: #706f6a;
+  --ag-up: #0052cc;
+  --ag-up-soft: rgba(0, 82, 204, 0.11);
+  --ag-down: #c93700;
+  --ag-down-soft: rgba(201, 55, 0, 0.11);
+  --ag-ok: #047857;
+  --ag-ok-soft: rgba(4, 120, 87, 0.11);
+  --ag-warn: #9a4700;
+  --ag-warn-bg: #fff8eb;
+  --ag-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+  --ag-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  container-type: inline-size;
+  container-name: cell;
+  font-family: var(--ag-sans);
+  color: var(--ag-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Zero-reflow Workbench Overlay Expansion:
+   Keeps a 1x1 .ag-grid-placeholder in the grid so sibling cells never shift
+   regardless of column (1, 2, or 3), while elevating the Workbench cleanly. */
+.cell-acoustic.is-expanded {
+  position: fixed;
+  inset: clamp(12px, 4vw, 44px);
+  max-width: 1120px;
+  max-height: 760px;
+  margin: auto;
+  aspect-ratio: auto;
+  z-index: 60;
+  border-color: #c9c8c2;
+  box-shadow: 0 20px 56px rgba(20, 20, 19, 0.18), 0 0 0 100vmax rgba(20, 20, 19, 0.28);
+}
+
+.ag-grid-placeholder {
+  background: #f5f5f3;
+  border-style: dashed;
+}
+
+.cell-acoustic *,
+.cell-acoustic *::before,
+.cell-acoustic *::after {
+  box-sizing: border-box;
+}
+
+.ag-shell {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 20px minmax(0, 1fr) 24px;
+  row-gap: 4px;
+  padding: 6px 8px;
+  min-width: 0;
+  min-height: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.ag-shell > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Numeric tabular discipline everywhere */
+.ag-num {
+  font-family: var(--ag-mono);
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Header bar */
+.ag-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ag-led {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #b5b4ae;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.ag-led[data-state="live"] {
+  background: var(--ag-ok);
+  box-shadow: 0 0 0 2px var(--ag-ok-soft);
+}
+
+.ag-led[data-state="sonar"] {
+  background: var(--ag-up);
+  box-shadow: 0 0 0 2px var(--ag-up-soft);
+}
+
+.ag-led[data-state="warn"] {
+  background: var(--ag-warn);
+  box-shadow: 0 0 0 2px rgba(168, 75, 8, 0.16);
+}
+
+.ag-title {
+  font-family: var(--ag-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ag-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.ag-title-long {
+  display: none;
+}
+
+.ag-spacer {
+  flex: 1 1 auto;
+  min-width: 2px;
+}
+
+/* Interactive buttons & pills (WCAG >= 24x24px hit area) */
+.ag-btn,
+.ag-seg-btn,
+.ag-icon-btn,
+.ag-mic-select {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--ag-rule);
+  background: var(--ag-thumb);
+  color: var(--ag-ink);
+  font-family: var(--ag-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums lining-nums;
+  line-height: 1;
+  border-radius: 5px;
+  cursor: pointer;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease;
+}
+
+.ag-btn:hover,
+.ag-seg-btn:hover,
+.ag-icon-btn:hover,
+.ag-mic-select:hover {
+  border-color: #aba9a2;
+  background: #fafaf8;
+}
+
+.ag-btn:active,
+.ag-seg-btn:active,
+.ag-icon-btn:active {
+  transform: translateY(0.5px);
+}
+
+.ag-btn:focus-visible,
+.ag-seg-btn:focus-visible,
+.ag-icon-btn:focus-visible,
+.ag-mic-select:focus-visible,
+.ag-stage-well:focus-visible {
+  outline: 2px solid var(--ag-up);
+  outline-offset: 1px;
+}
+
+/* Invisible touch-target expansion for compact tiers */
+.ag-icon-btn::after,
+.ag-btn::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.ag-icon-btn {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 11px;
+  color: var(--ag-ink-sec);
+}
+
+.ag-mic-wrap {
+  display: none;
+  align-items: center;
+  min-width: 0;
+  max-width: 118px;
+  position: relative;
+}
+
+.ag-mic-select {
+  width: 100%;
+  height: 22px;
+  padding: 0 16px 0 6px;
+  font-size: 9.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, var(--ag-ink-sec) 50%),
+    linear-gradient(135deg, var(--ag-ink-sec) 50%, transparent 50%);
+  background-position: calc(100% - 9px) 9px, calc(100% - 5px) 9px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+
+.ag-mic-wrap[data-warn="true"] .ag-mic-select {
+  background-color: var(--ag-warn-bg);
+  border-color: rgba(168, 75, 8, 0.45);
+  color: var(--ag-warn);
+}
+
+.ag-demo-pair {
+  display: none;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.ag-demo-pair .ag-btn {
+  height: 22px;
+  padding: 0 6px;
+  font-size: 9px;
+  color: var(--ag-ink-sec);
+}
+
+/* Primary stage well (1x1 and left column of 2x2) */
+.ag-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+}
+
+.ag-primary-col {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  gap: 8px;
+}
+
+.ag-stage-well {
+  position: relative;
+  background: var(--ag-well);
+  border: 1px solid var(--ag-well-border);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 1.5px rgba(20, 20, 19, 0.03);
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.ag-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ag-canvas-wrap canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Status banner floating subtly at top-left of stage only when needed */
+.ag-toast {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--ag-rule);
+  font-family: var(--ag-mono);
+  font-size: 9.5px;
+  line-height: 1.3;
+  color: var(--ag-ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 3;
+  box-shadow: 0 2px 6px rgba(20, 20, 19, 0.06);
+}
+
+.ag-toast[hidden] {
+  display: none !important;
+}
+
+.ag-toast[data-tone="warn"] {
+  background: var(--ag-warn-bg);
+  border-color: rgba(168, 75, 8, 0.4);
+  color: var(--ag-warn);
+}
+
+.ag-toast-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Footer controls */
+.ag-footer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+/* Tier 0 (<280px) compact action pill */
+.ag-micro-cta {
+  width: 100%;
+  height: 24px;
+  padding: 0 8px;
+  justify-content: space-between;
+  font-size: 9.5px;
+}
+
+.ag-controls-bar {
+  display: none;
+  width: 100%;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.ag-arm-btn {
+  height: 26px;
+  padding: 0 8px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.ag-arm-btn[data-armed="true"] {
+  background: var(--ag-ink);
+  border-color: var(--ag-ink);
+  color: #ffffff;
+}
+
+.ag-seg {
+  display: inline-flex;
+  align-items: center;
+  background: var(--ag-control);
+  border: 1px solid var(--ag-well-border);
+  border-radius: 5px;
+  padding: 1px;
+  height: 26px;
+  flex: 0 0 auto;
+}
+
+.ag-seg-btn {
+  border: 1px solid transparent;
+  background: transparent;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 3.5px;
+  color: var(--ag-ink-sec);
+  font-size: 9px;
+}
+
+.ag-seg-btn:hover {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: transparent;
+}
+
+.ag-seg-btn[aria-pressed="true"] {
+  background: var(--ag-thumb);
+  border-color: var(--ag-rule);
+  color: var(--ag-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 1px rgba(20, 20, 19, 0.04);
+}
+
+.ag-seg-grille {
+  display: none;
+}
+
+.ag-cal-btn {
+  height: 26px;
+  padding: 0 7px;
+  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-cal-btn[data-active="true"] {
+  border-color: var(--ag-up);
+  background: var(--ag-up-soft);
+  color: var(--ag-up);
+  font-weight: 600;
+}
+
+.ag-cal-btn[data-calibrated="true"] {
+  border-color: rgba(21, 122, 68, 0.45);
+  background: var(--ag-ok-soft);
+  color: var(--ag-ok);
+}
+
+/* Lab-only panels hidden unless compound 2x2 desktop expand is active */
+.ag-lab-col,
+.ag-cal-studio,
+.ag-lab-strip {
+  display: none;
+}
+
+.ag-Vernier-mini {
+  font-family: var(--ag-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--ag-ink-sec);
+  flex: 0 0 auto;
+}
+
+/* ==========================================================================
+   Tier 1: @container cell (width >= 280px)
+   Covers 616..767px 2-col 1x1, 320..414px mobile 2x1 expand, 926..1254px 3-col
+   ========================================================================== */
+@container cell (width >= 280px) {
+  .ag-shell {
+    padding: 8px 10px;
+    grid-template-rows: 24px minmax(0, 1fr) 26px;
+    row-gap: 6px;
+  }
+
+  .ag-icon-btn {
+    width: 22px;
+    height: 22px;
+  }
+
+  .ag-mic-wrap {
+    display: inline-flex;
+    max-width: 108px;
+  }
+
+  .ag-Vernier-mini {
+    display: none;
+  }
+
+  .ag-micro-cta {
+    display: none;
+  }
+
+  .ag-controls-bar {
+    display: flex;
+  }
+}
+
+/* ==========================================================================
+   Tier 2: @container cell (width >= 380px)
+   Covers 1280px (388x290), 1440px (437x327), 1512px 14" MBP (459x344)
+   ========================================================================== */
+@container cell (width >= 380px) {
+  .ag-shell {
+    padding: 10px 12px;
+    grid-template-rows: 26px minmax(0, 1fr) 28px;
+    row-gap: 7px;
+  }
+
+  .ag-title {
+    font-size: 10px;
+  }
+
+  .ag-mic-wrap {
+    max-width: 146px;
+  }
+
+  .ag-mic-select {
+    height: 24px;
+    font-size: 10px;
+  }
+
+  .ag-icon-btn {
+    width: 24px;
+    height: 24px;
+  }
+
+  .ag-seg-grille {
+    display: inline-flex;
+  }
+
+  .ag-arm-btn,
+  .ag-seg,
+  .ag-cal-btn {
+    height: 28px;
+  }
+
+  .ag-seg-btn {
+    height: 24px;
+    padding: 0 7px;
+    font-size: 9.5px;
+  }
+}
+
+/* ==========================================================================
+   Tier 3: @container cell (width >= 500px)
+   Covers 1728px 16" MBP 1x1 (525x393) and mobile/desktop expanded tiles
+   ========================================================================== */
+@container cell (width >= 500px) {
+  .ag-shell {
+    padding: 12px 14px;
+    grid-template-rows: 26px minmax(0, 1fr) 30px;
+    row-gap: 8px;
+  }
+
+  .ag-title-short {
+    display: none;
+  }
+
+  .ag-title-long {
+    display: inline;
+  }
+
+  .ag-mic-wrap {
+    max-width: 185px;
+  }
+
+  .ag-demo-pair {
+    display: inline-flex;
+  }
+
+  .ag-arm-btn,
+  .ag-seg,
+  .ag-cal-btn {
+    height: 30px;
+  }
+
+  .ag-seg-btn {
+    height: 26px;
+    padding: 0 8px;
+    font-size: 10px;
+  }
+}
+
+/* ==========================================================================
+   Compound-Gated 2x2 Empirical Acoustic Workbench
+   Strictly requires .is-expanded + desktop >=768px + container >= 540px so
+   wide <768px mobile 2x1 rows never trigger tall multi-panel stacks.
+   ========================================================================== */
+@media (min-width: 768px) {
+  @container cell (width >= 540px) {
+    .cell-acoustic.is-expanded .ag-shell {
+      padding: 12px 14px;
+      grid-template-rows: 28px 26px minmax(0, 1fr) 30px;
+      row-gap: 8px;
+    }
+
+    .cell-acoustic.is-expanded .ag-lab-strip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 8px;
+      background: var(--ag-well);
+      border: 1px solid var(--ag-well-border);
+      border-radius: 5px;
+      font-family: var(--ag-mono);
+      font-size: 9.5px;
+      color: var(--ag-ink-sec);
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .cell-acoustic.is-expanded .ag-lab-badge {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .cell-acoustic.is-expanded .ag-lab-badge strong {
+      color: var(--ag-ink);
+      font-weight: 600;
+    }
+
+    .cell-acoustic.is-expanded .ag-gain-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-left: auto;
+      flex: 0 0 auto;
+    }
+
+    .cell-acoustic.is-expanded .ag-gain-wrap input[type="range"] {
+      width: 68px;
+      accent-color: var(--ag-up);
+      cursor: pointer;
+    }
+
+    .cell-acoustic.is-expanded .ag-workbench {
+      grid-template-columns: minmax(0, 0.96fr) minmax(0, 1.08fr);
+      gap: 10px;
+    }
+
+    .cell-acoustic.is-expanded .ag-primary-col {
+      grid-template-rows: minmax(0, 1fr) auto;
+      gap: 8px;
+    }
+
+    .cell-acoustic.is-expanded .ag-cal-studio {
+      display: grid;
+      grid-template-rows: auto auto;
+      gap: 5px;
+      padding: 7px 9px;
+      background: var(--ag-well);
+      border: 1px solid var(--ag-well-border);
+      border-radius: 6px;
+      font-family: var(--ag-mono);
+      font-size: 9.5px;
+    }
+
+    .cell-acoustic.is-expanded .ag-cal-row {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-wrap: nowrap;
+      min-width: 0;
+    }
+
+    .cell-acoustic.is-expanded .ag-slot-btn {
+      height: 24px;
+      padding: 0 6px;
+      font-size: 9px;
+    }
+
+    .cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="UP"] {
+      border-color: rgba(30, 86, 217, 0.5);
+      background: var(--ag-up-soft);
+      color: var(--ag-up);
+    }
+
+    .cell-acoustic.is-expanded .ag-slot-btn[data-filled="true"][data-dir="DOWN"] {
+      border-color: rgba(224, 72, 25, 0.5);
+      background: var(--ag-down-soft);
+      color: var(--ag-down);
+    }
+
+    .cell-acoustic.is-expanded .ag-slot-btn[data-recording="true"] {
+      border-color: var(--ag-ink);
+      background: var(--ag-ink);
+      color: #ffffff;
+    }
+
+    .cell-acoustic.is-expanded .ag-lab-col {
+      display: grid;
+      grid-template-rows: minmax(0, 1.25fr) minmax(0, 0.72fr) minmax(0, 0.95fr);
+      gap: 8px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .cell-acoustic.is-expanded .ag-panel {
+      display: grid;
+      grid-template-rows: 18px minmax(0, 1fr);
+      gap: 3px;
+      padding: 6px 8px;
+      background: var(--ag-well);
+      border: 1px solid var(--ag-well-border);
+      border-radius: 6px;
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .cell-acoustic.is-expanded .ag-panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      font-family: var(--ag-mono);
+      font-size: 9px;
+      color: var(--ag-ink-sec);
+      min-width: 0;
+    }
+
+    .cell-acoustic.is-expanded .ag-panel-head span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ag-led,
+  .ag-btn,
+  .ag-seg-btn,
+  .ag-icon-btn {
+    transition: none !important;
+  }
+}
