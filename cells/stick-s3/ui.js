@@ -188,6 +188,11 @@
       bridgeReachable: false,
       portName: '',
       packetHz: 0,
+      bridgeProbe: 'probing', // transport: 'probing' | 'open' | 'paused' | 'stopped' | 'off'
+      bridgePortOpen: false,
+      linkPhase: '', // '' | 'connecting' | 'failed' (Web Serial / BLE button outcome)
+      linkNote: '',
+      linkFailTag: '',
 
       // Race-immunity leases & dedup
       pendingModeUntil: 0,
@@ -495,51 +500,78 @@
 
     const connSummaryEl = el('span', { className: 's3-mono', style: { fontSize: '10.5px', color: '#525250' }, textContent: 'Probing ws://127.0.0.1:8791/ws…' });
 
+    // Shared Web Serial / BLE button flow. The outcome is kept in state.linkPhase / state.linkNote
+    // so renderStaticControls() shows it instead of overwriting it on the next status event.
+    async function runLinkAction(kind) {
+      const isSerial = kind === 'serial';
+      const label = isSerial ? 'Web Serial' : 'Web Bluetooth';
+      const tag = isSerial ? 'USB' : 'BLE';
+      if (state.linkPhase === 'connecting') return; // ignore double clicks while a chooser is open
+      if (state.linkSource !== kind && !(isSerial ? Transport.supportsWebSerial() : Transport.supportsWebBluetooth())) {
+        state.linkPhase = '';
+        state.linkNote = isSerial
+          ? 'Web Serial is unavailable here (needs Chrome or Edge on localhost / HTTPS). Use the USB bridge instead.'
+          : 'Web Bluetooth is unavailable here (needs Chrome or Edge on localhost / HTTPS).';
+        showToast(isSerial ? 'WEB SERIAL UNSUPPORTED' : 'BLE UNSUPPORTED');
+        renderStaticControls();
+        return;
+      }
+      try {
+        if (state.linkSource === kind) {
+          await (isSerial ? link.disconnectWebSerial() : link.disconnectWebBluetooth());
+          state.linkPhase = '';
+          state.linkNote = '';
+        } else {
+          state.linkPhase = 'connecting';
+          state.linkNote = '';
+          state.linkFailTag = tag;
+          renderStaticControls();
+          await (isSerial ? link.connectWebSerial() : link.connectWebBluetooth());
+          state.linkPhase = '';
+          showToast(tag + ' LINK OPEN');
+        }
+      } catch (err) {
+        const name = err && err.name ? String(err.name) : '';
+        const msg = err && err.message ? String(err.message) : String(err || 'unknown error');
+        if (name === 'NotFoundError') {
+          // Chooser dismissed without picking a device: not a failure, nothing changed.
+          state.linkPhase = '';
+          state.linkNote = label + ' cancelled: no device chosen. Press the button again to retry.';
+          showToast(tag + ' CANCELLED');
+        } else {
+          state.linkPhase = 'failed';
+          state.linkFailTag = tag;
+          state.linkNote = label + ' failed' + (name === 'SecurityError' ? ' (permission denied)' : '') + ': ' + msg;
+          showToast(tag + ' FAILED');
+        }
+      }
+      renderStaticControls();
+    }
+
     const webSerialBtn = el('button', {
       type: 'button',
       className: 's3-btn s3-btn--primary',
-      onClick: async function () {
-        if (state.linkSource !== 'serial' && !Transport.supportsWebSerial()) {
-          showToast('WEB SERIAL UNSUPPORTED');
-          connSummaryEl.textContent = 'Web Serial requires Chrome or Edge on localhost / HTTPS (or use the auto USB bridge).';
-          return;
-        }
-        try {
-          if (state.linkSource === 'serial') {
-            await link.disconnectWebSerial();
-          } else {
-            await link.connectWebSerial();
-            showToast('USB WEB SERIAL LIVE');
-          }
-        } catch (err) {
-          showToast(!Transport.supportsWebSerial() ? 'WEB SERIAL UNSUPPORTED' : 'SERIAL CANCELLED');
-          connSummaryEl.textContent = err && err.message ? err.message : 'Web Serial connection cancelled';
-        }
-      }
+      onClick: function () { return runLinkAction('serial'); }
     }, 'Connect USB Web Serial');
 
     const webBleBtn = el('button', {
       type: 'button',
       className: 's3-btn',
-      onClick: async function () {
-        if (state.linkSource !== 'ble' && !Transport.supportsWebBluetooth()) {
-          showToast('BLE UNSUPPORTED');
-          connSummaryEl.textContent = 'Web Bluetooth requires Chrome or Edge on localhost / HTTPS.';
-          return;
-        }
-        try {
-          if (state.linkSource === 'ble') {
-            await link.disconnectWebBluetooth();
-          } else {
-            await link.connectWebBluetooth();
-            showToast('WIRELESS BLE LIVE');
-          }
-        } catch (err) {
-          showToast(!Transport.supportsWebBluetooth() ? 'BLE UNSUPPORTED' : 'BLE CANCELLED');
-          connSummaryEl.textContent = err && err.message ? err.message : 'BLE pairing cancelled';
-        }
-      }
+      onClick: function () { return runLinkAction('ble'); }
     }, 'Pair Wireless BLE');
+
+    const retryBridgeBtn = el('button', {
+      type: 'button',
+      className: 's3-btn',
+      hidden: true,
+      onClick: function () {
+        state.linkNote = '';
+        if (state.linkPhase === 'failed') state.linkPhase = '';
+        link.retryBridge();
+        showToast('LOOKING FOR BRIDGE');
+        renderStaticControls();
+      }
+    }, 'Retry bridge');
 
     const simPresetBtns = [
       { id: 'idle', label: 'Manual Pad' },
@@ -634,7 +666,7 @@
               el('span', { textContent: 'Hardware Transport & Simulator' }),
               connSummaryEl
             ]),
-            el('div', { className: 's3-btn-row' }, [webSerialBtn, webBleBtn].concat(simPresetBtns)),
+            el('div', { className: 's3-btn-row' }, [webSerialBtn, webBleBtn, retryBridgeBtn].concat(simPresetBtns)),
             el('pre', { className: 's3-cmd-pre s3-mono' }, 'node cells/stick-s3/bridge.mjs   # Auto-streams /dev/cu.usbmodem* to file:// & localhost:8791')
           ]),
           el('div', { className: 's3-section-box' }, [
@@ -1030,27 +1062,63 @@
       statusPill.classList.toggle('is-live', state.hwConnected && !state.hold);
       statusPill.classList.toggle('is-hold', state.hold);
 
+      // Pill states (data-link for styling): held, connecting, live, demo, failed, waiting, manual.
+      // Only `live` (fresh StickS3 telemetry) gets the green .is-live treatment.
+      const directLinkOpen = state.linkSource === 'serial' || state.linkSource === 'ble';
+      let pillState;
       if (state.hold) {
+        pillState = 'held';
         statusText.textContent = 'HELD';
+      } else if (state.linkPhase === 'connecting') {
+        pillState = 'connecting';
+        statusText.textContent = 'CONNECTING';
       } else if (state.hwConnected) {
+        pillState = 'live';
         const srcBadge = state.linkSource === 'ble' ? 'S3 BLE' : (state.linkSource === 'serial' ? 'S3 USB' : 'STICK S3');
         statusText.textContent = state.battery >= 0 ? (srcBadge + ' · ' + state.battery + '%') : srcBadge;
       } else if (state.simPreset !== 'idle') {
+        pillState = 'demo';
         statusText.textContent = 'DEMO ' + state.simPreset.toUpperCase();
+      } else if (state.linkPhase === 'failed') {
+        pillState = 'failed';
+        statusText.textContent = (state.linkFailTag || 'LINK') + ' FAILED';
+      } else if (directLinkOpen) {
+        pillState = 'waiting';
+        statusText.textContent = (state.linkSource === 'ble' ? 'BLE' : 'USB') + ' · NO DATA';
       } else {
+        pillState = 'manual';
         statusText.textContent = 'TILT PAD';
       }
+      statusPill.setAttribute('data-link', pillState);
 
       webSerialBtn.textContent = state.linkSource === 'serial' ? 'Disconnect Web Serial' : 'Connect USB Web Serial';
       webBleBtn.textContent = state.linkSource === 'ble' ? 'Disconnect BLE' : 'Pair Wireless BLE';
+      webSerialBtn.disabled = state.linkPhase === 'connecting';
+      webBleBtn.disabled = state.linkPhase === 'connecting';
+      retryBridgeBtn.hidden = directLinkOpen || state.bridgeReachable || state.bridgeProbe === 'probing';
 
+      let summary;
       if (state.hwConnected) {
-        connSummaryEl.textContent = 'LIVE (' + state.linkSource.toUpperCase() + (state.portName ? ' · ' + state.portName : '') + ')';
+        summary = 'LIVE (' + state.linkSource.toUpperCase() + (state.portName ? ' · ' + state.portName : '') + ')';
+      } else if (state.linkPhase === 'connecting') {
+        summary = 'Waiting for the ' + (state.linkFailTag === 'BLE' ? 'Bluetooth' : 'serial port') + ' chooser…';
+      } else if (state.linkNote) {
+        summary = state.linkNote;
+      } else if (directLinkOpen) {
+        summary = (state.linkSource === 'ble' ? 'BLE link' : 'Web Serial port') + ' open — no StickS3 telemetry yet';
       } else if (state.bridgeReachable) {
-        connSummaryEl.textContent = 'Local bridge ready — plug in StickS3 USB-C or pair BLE';
+        summary = state.bridgePortOpen
+          ? 'Local bridge has ' + (state.portName || 'a USB port') + ' open — no StickS3 telemetry yet'
+          : 'Local bridge ready — plug in StickS3 USB-C or pair BLE';
+      } else if (state.bridgeProbe === 'stopped') {
+        summary = 'No local bridge on 127.0.0.1:8791 (stopped looking). Start bridge.mjs, then press Retry bridge.';
+      } else if (state.bridgeProbe === 'probing') {
+        summary = 'Looking for local bridge on 127.0.0.1:8791…';
       } else {
-        connSummaryEl.textContent = 'Interactive Tilt Pad active (run bridge.mjs or connect Web Serial / BLE)';
+        summary = 'Interactive Tilt Pad active (run bridge.mjs or connect Web Serial / BLE)';
       }
+      connSummaryEl.textContent = summary;
+      statusPill.title = summary;
     }
 
     // ---------- Hardware Twin Canvas & Scope Renderers (Dialog Open Only) ----------
@@ -1344,10 +1412,18 @@
         const prevReachable = state.bridgeReachable;
         const prevSrc = state.linkSource;
         const prevPort = state.portName;
+        const prevProbe = state.bridgeProbe;
+        const prevPortOpen = state.bridgePortOpen;
         state.hwConnected = Boolean(st.connected);
         state.linkSource = st.source || 'none';
         state.bridgeReachable = Boolean(st.bridgeReachable);
         state.portName = st.portName || '';
+        state.bridgeProbe = st.bridgeProbe || 'probing';
+        state.bridgePortOpen = Boolean(st.bridgePortOpen);
+        if (state.hwConnected && state.linkPhase !== 'connecting') {
+          state.linkPhase = '';
+          state.linkNote = '';
+        }
         if (!state.hwConnected) {
           state.battery = -1;
           state.packetHz = 0;
@@ -1358,6 +1434,8 @@
           prevReachable !== state.bridgeReachable ||
           prevSrc !== state.linkSource ||
           prevPort !== state.portName ||
+          prevProbe !== state.bridgeProbe ||
+          prevPortOpen !== state.bridgePortOpen ||
           Boolean(st.detail)
         ) {
           renderStaticControls();

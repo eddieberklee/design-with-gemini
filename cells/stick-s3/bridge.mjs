@@ -209,6 +209,14 @@ function isAllowedOrigin(originHeader) {
   return ALLOWED_ORIGIN_RE.test(String(originHeader));
 }
 
+// DNS-rebinding guard: a page on attacker.example that re-resolves to 127.0.0.1 makes
+// same-origin requests with no Origin header, so the Host header must name loopback too.
+const ALLOWED_HOST_RE = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+
+function isAllowedHost(hostHeader) {
+  return typeof hostHeader === 'string' && ALLOWED_HOST_RE.test(hostHeader);
+}
+
 function encodeWsRawFrame(payloadBuf, opcode = 0x1) {
   const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(String(payloadBuf), 'utf8');
   const len = payload.length;
@@ -301,6 +309,9 @@ export function createStickBridgeServer(options = {}) {
   let lastPacketAtMs = 0;
   let stdoutRemainder = '';
   let closed = false;
+  let workerStartedAtMs = 0;
+  let quickWorkerExits = 0;
+  const MAX_QUICK_WORKER_EXITS = 5;
 
   function broadcastJson(obj) {
     const line = JSON.stringify(obj);
@@ -403,6 +414,9 @@ export function createStickBridgeServer(options = {}) {
       stdio: ['pipe', 'pipe', 'ignore']
     });
     pyProc = proc;
+    workerStartedAtMs = Date.now();
+    // Writing a command after the helper died emits EPIPE on stdin; unhandled, that crashed the bridge.
+    proc.stdin.on('error', () => {});
 
     proc.stdout.on('data', (chunk) => {
       if (pyProc !== proc) return;
@@ -435,6 +449,13 @@ export function createStickBridgeServer(options = {}) {
       serialConnected = false;
       activeSerialPort = '';
       broadcastStatus();
+      // The helper normally runs until stdin closes; quick repeated exits mean it cannot run
+      // here (no python3 termios, bad interpreter). Stop respawning after a few in a row.
+      quickWorkerExits = Date.now() - workerStartedAtMs < 5000 ? quickWorkerExits + 1 : 0;
+      if (quickWorkerExits >= MAX_QUICK_WORKER_EXITS) {
+        process.stderr.write('[stick-s3-bridge] serial helper keeps exiting; stopped respawning (POST /api/stick-s3/claim to retry)\n');
+        return;
+      }
       if (!serialReleased && !closed) {
         workerRestartTimer = setTimeout(() => {
           workerRestartTimer = null;
@@ -539,16 +560,9 @@ export function createStickBridgeServer(options = {}) {
 
   const server = http.createServer(async (req, res) => {
     try {
-      if (!isAllowedOrigin(req.headers.origin)) {
+      if (!isAllowedOrigin(req.headers.origin) || !isAllowedHost(req.headers.host)) {
         res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Forbidden');
-        return;
-      }
-
-      setCors(req, res);
-      if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
         return;
       }
 
@@ -561,6 +575,17 @@ export function createStickBridgeServer(options = {}) {
         return;
       }
       const pathname = urlObj.pathname;
+
+      // CORS only for the bridge API. Static files are served same-origin to
+      // http://127.0.0.1:8791/ pages and never need it; reflecting Origin 'null' there let any
+      // sandboxed iframe on any site read repository files.
+      const isApi = pathname.startsWith('/api/stick-s3/');
+      if (isApi) setCors(req, res);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(isApi ? 204 : 403);
+        res.end();
+        return;
+      }
 
       if (pathname === '/api/stick-s3/status' && req.method === 'GET') {
         const fresh = lastPacketAtMs > 0 && Date.now() - lastPacketAtMs < 3500;
@@ -645,6 +670,7 @@ export function createStickBridgeServer(options = {}) {
 
       if (pathname === '/api/stick-s3/claim' && req.method === 'POST') {
         serialReleased = false;
+        quickWorkerExits = 0;
         startSerialWorker();
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(JSON.stringify({ ok: true, released: false }));
@@ -664,6 +690,12 @@ export function createStickBridgeServer(options = {}) {
       if (decodedRel.indexOf('\0') !== -1) {
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('Bad Request');
+        return;
+      }
+      // Never serve dotfiles or dot-directories (.git/, .env, .claude/ worktrees, ...).
+      if (decodedRel.split(/[\\/]+/).some((seg) => seg.startsWith('.'))) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not found');
         return;
       }
 
@@ -716,7 +748,8 @@ export function createStickBridgeServer(options = {}) {
   });
 
   server.on('upgrade', (req, socket, head) => {
-    if (!isAllowedOrigin(req.headers.origin)) {
+    socket.on('error', () => {}); // a reset during the handshake must not crash the bridge
+    if (!isAllowedOrigin(req.headers.origin) || !isAllowedHost(req.headers.host)) {
       try {
         socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       } catch (_e) {}

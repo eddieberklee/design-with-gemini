@@ -712,7 +712,8 @@
 
 @media (max-width: 760px) {
   .s3-dlg-body {
-    grid-template-columns: 1fr;
+    /* minmax(0, …): a bare 1fr track grows to min-content and the body scrolled sideways at 390px */
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -908,6 +909,7 @@
   font-weight: 600;
   color: var(--s3-ink);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;

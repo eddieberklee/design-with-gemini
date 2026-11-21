@@ -19,6 +19,20 @@
   const BACKOFF_BASE_MS  = 1600;
   const BACKOFF_MAX_MS   = 5000;
   const MAX_RX_LINE_LEN  = 4096;
+  // Consecutive bridge WebSocket/SSE attempts before probing stops. Re-armed only by
+  // retryBridge() (a user action) or the tab becoming visible again.
+  const MAX_BRIDGE_ATTEMPTS = 4;
+  // A device counts as connected only while telemetry arrived within this window.
+  const HW_FRESH_MS      = 3200;
+
+  function isPageHidden() {
+    try {
+      const doc = root.document;
+      return Boolean(doc && doc.visibilityState === 'hidden');
+    } catch (_e) {
+      return false;
+    }
+  }
 
   function supportsWebSerial() {
     return Boolean(root.navigator && root.navigator.serial && typeof root.navigator.serial.requestPort === 'function');
@@ -74,6 +88,9 @@
     let reconnectAttempt = 0;
     let watchdogTimer = null;
     let probedSameOrigin = false;
+    let bridgeAttempts = 0;
+    let bridgeProbe = 'probing'; // 'probing' | 'open' | 'paused' (tab hidden) | 'stopped' (budget spent)
+    let visibilityHooked = false;
 
     // Web Serial handles
     let serialPort = null;
@@ -104,24 +121,47 @@
       return delay;
     }
 
+    function isHardwareFresh() {
+      return lastHardwarePacketMs > 0 && Date.now() - lastHardwarePacketMs < HW_FRESH_MS;
+    }
+
     function emitStatus(detail) {
       if (destroyed) return;
-      const hwFresh = lastHardwarePacketMs > 0 && Date.now() - lastHardwarePacketMs < 3200;
-      const connected =
-        activeSource === 'serial' ||
-        activeSource === 'ble' ||
-        (activeSource === 'bridge' && (bridgeHasHardware || hwFresh));
+      const hwFresh = isHardwareFresh();
+      // Connected means StickS3 telemetry is actually arriving. A bridge that merely has a
+      // /dev/cu.usbmodem* port open (bridge_status.serialConnected) or an open Web Serial / BLE
+      // link with no packets yet is reported through `source` / `bridgePortOpen`, not `connected`.
+      const connected = activeSource !== 'none' && hwFresh;
 
       onStatus({
         connected: connected,
         source: activeSource,
         bridgeReachable: isBridgeOpen(),
-        bridgeHasHardware: bridgeHasHardware || hwFresh,
+        bridgeHasHardware: hwFresh && activeSource === 'bridge',
+        bridgePortOpen: bridgeHasHardware,
+        bridgeProbe: activeSource === 'serial' || activeSource === 'ble' ? 'off' : bridgeProbe,
         portName: bridgePortName,
         supportsWebSerial: supportsWebSerial(),
         supportsWebBluetooth: supportsWebBluetooth(),
         detail: detail || ''
       });
+    }
+
+    // Runs only while telemetry is fresh; stops itself (and reports) once packets stop.
+    function ensureFreshnessWatchdog() {
+      if (watchdogTimer || destroyed) return;
+      watchdogTimer = setInterval(function () {
+        if (destroyed) return;
+        if (!isHardwareFresh()) {
+          clearInterval(watchdogTimer);
+          watchdogTimer = null;
+          bridgeHasHardware = false;
+          emitStatus('Waiting for StickS3 telemetry');
+        }
+      }, 1500);
+      if (watchdogTimer && typeof watchdogTimer.unref === 'function') {
+        watchdogTimer.unref();
+      }
     }
 
     function handleIncomingLine(line, sourceTag) {
@@ -162,6 +202,7 @@
       } else if (sourceTag === 'ble') {
         activeSource = 'ble';
       }
+      ensureFreshnessWatchdog();
       onTelemetry(pkt, sourceTag);
       emitStatus();
     }
@@ -183,13 +224,34 @@
       }
     }
 
+    // False (and records why) when another automatic probe must not start now.
+    function mayProbeBridge() {
+      if (isPageHidden()) {
+        bridgeProbe = 'paused';
+        return false;
+      }
+      if (bridgeAttempts >= MAX_BRIDGE_ATTEMPTS) {
+        bridgeProbe = 'stopped';
+        return false;
+      }
+      return true;
+    }
+
     function scheduleBridgeReconnect(delayMs, preferSse) {
       if (destroyed || activeSource === 'serial' || activeSource === 'ble') return;
       if (wsRetryTimer) return;
+      if (!mayProbeBridge()) {
+        emitStatus(bridgeProbe === 'stopped' ? 'No local bridge found' : '');
+        return;
+      }
       const waitMs = typeof delayMs === 'number' && delayMs > 0 ? delayMs : nextBackoffDelayMs();
       wsRetryTimer = setTimeout(function () {
         wsRetryTimer = null;
         if (destroyed || activeSource === 'serial' || activeSource === 'ble') return;
+        if (!mayProbeBridge()) {
+          emitStatus();
+          return;
+        }
         if (preferSse && typeof EventSource === 'function') {
           startSseFallback();
         } else {
@@ -238,6 +300,8 @@
         return;
       }
       if (sse || ws) return;
+      bridgeAttempts++;
+      bridgeProbe = 'probing';
       try {
         const es = new EventSource(bridgeOrigin + '/api/stick-s3/stream');
         sse = es;
@@ -246,6 +310,8 @@
           wsFailCount = 0;
           sseFailCount = 0;
           reconnectAttempt = 0;
+          bridgeAttempts = 0;
+          bridgeProbe = 'open';
           if (activeSource === 'none') activeSource = 'bridge';
           emitStatus('Local USB bridge SSE ready');
         };
@@ -259,7 +325,10 @@
           try { es.close(); } catch (_e) {}
           bridgeHasHardware = false;
           sseFailCount++;
-          if (activeSource === 'bridge') activeSource = 'none';
+          if (activeSource === 'bridge') {
+            activeSource = 'none';
+            lastHardwarePacketMs = 0;
+          }
           emitStatus();
           scheduleBridgeReconnect(nextBackoffDelayMs(), false);
         };
@@ -281,6 +350,8 @@
 
       const wsUrl = bridgeOrigin.replace(/^http/, 'ws') + '/ws';
       let opened = false;
+      bridgeAttempts++;
+      bridgeProbe = 'probing';
       try {
         const sock = new WebSocket(wsUrl);
         ws = sock;
@@ -290,6 +361,8 @@
           wsFailCount = 0;
           sseFailCount = 0;
           reconnectAttempt = 0;
+          bridgeAttempts = 0;
+          bridgeProbe = 'open';
           if (activeSource === 'none') activeSource = 'bridge';
           emitStatus('Local USB bridge connected');
         };
@@ -303,9 +376,12 @@
           if (ws === sock) ws = null;
           bridgeHasHardware = false;
           if (!opened) wsFailCount++;
-          if (activeSource === 'bridge') activeSource = 'none';
+          if (activeSource === 'bridge') {
+            activeSource = 'none';
+            lastHardwarePacketMs = 0;
+          }
           emitStatus();
-          if (wsFailCount >= 2 && sseFailCount === 0 && typeof EventSource === 'function') {
+          if (wsFailCount >= 2 && sseFailCount === 0 && typeof EventSource === 'function' && mayProbeBridge()) {
             startSseFallback();
           } else {
             const preferSse = wsFailCount >= 2 && typeof EventSource === 'function' && ( sseFailCount % 2 === 0 );
@@ -353,6 +429,7 @@
       const wasSerial = activeSource === 'serial';
       if (wasSerial) {
         activeSource = 'none';
+        lastHardwarePacketMs = 0;
       }
 
       if (reader) {
@@ -390,26 +467,31 @@
 
       connecting = true;
       try {
-        if (bleDevice || activeSource === 'ble') {
-          await disconnectWebBluetooth(false);
-          if (destroyed) return;
-        }
-        if (serialPort || activeSource === 'serial') {
-          await disconnectWebSerial(false);
-          if (destroyed) return;
-        }
-
-        // Ask local bridge to release /dev/cu.usbmodem* first so browser serial never hits EBUSY
-        await postBridgeEndpoint('/api/stick-s3/release', {});
-        closeBridgeSockets();
-        if (destroyed) return;
-
         let port = null;
         let portOpened = false;
+        let bridgeReleased = false;
         try {
+          // Chooser first, while the click's user activation is fresh. Cancelling it (NotFoundError)
+          // or a denied request (SecurityError) must leave the bridge and any BLE link untouched.
           port = await root.navigator.serial.requestPort({
             filters: [{ usbVendorId: 0x303a }] // Espressif native USB-Serial/JTAG
           });
+          if (destroyed) return;
+
+          if (bleDevice || activeSource === 'ble') {
+            await disconnectWebBluetooth(false);
+            if (destroyed) return;
+          }
+          if (serialPort || activeSource === 'serial') {
+            await disconnectWebSerial(false);
+            if (destroyed) return;
+          }
+
+          // Ask the local bridge to release /dev/cu.usbmodem* so port.open() never hits EBUSY
+          await postBridgeEndpoint('/api/stick-s3/release', {});
+          bridgeReleased = true;
+          closeBridgeSockets();
+          if (activeSource === 'bridge') activeSource = 'none';
           if (destroyed) return;
 
           await port.open({ baudRate: 115200 });
@@ -422,11 +504,11 @@
           if (port && portOpened) {
             try { await port.close(); } catch (_e) {}
           }
-          if (!destroyed) {
+          if (!destroyed && bridgeReleased) {
             await postBridgeEndpoint('/api/stick-s3/claim', {});
-            if (!destroyed && activeSource === 'none') {
-              connectBridge();
-            }
+          }
+          if (!destroyed && activeSource === 'none') {
+            connectBridge(); // no-op while the bridge socket is still open (chooser cancelled)
           }
           throw err;
         }
@@ -439,6 +521,7 @@
             serialWriter = null;
           }
         }
+        lastHardwarePacketMs = 0;
         activeSource = 'serial';
         bridgePortName = 'USB Web Serial';
         emitStatus('Connected via Web Serial');
@@ -556,6 +639,7 @@
       bleRxDiscard = false;
       if (activeSource === 'ble') {
         activeSource = 'none';
+        lastHardwarePacketMs = 0;
       }
       if (!destroyed) {
         emitStatus('BLE disconnected');
@@ -577,6 +661,7 @@
       const wasBle = activeSource === 'ble';
       if (wasBle) {
         activeSource = 'none';
+        lastHardwarePacketMs = 0;
       }
       cleanupBleDevice(dev, notify);
       if (wasBle && !destroyed) {
@@ -631,6 +716,11 @@
         }
 
         closeBridgeSockets();
+        if (activeSource === 'bridge') {
+          // Sockets are gone; without this a failed GATT connect below skipped the bridge reconnect.
+          activeSource = 'none';
+          lastHardwarePacketMs = 0;
+        }
         bleRxBuf = '';
         bleRxDiscard = false;
 
@@ -667,6 +757,7 @@
         bleDevice = device;
         bleNotifyChar = notifyChar;
         bleCmdChar = cmdChar;
+        lastHardwarePacketMs = 0;
         activeSource = 'ble';
         bridgePortName = device.name || 'StickS3-Color BLE';
         emitStatus('Connected wirelessly via BLE');
@@ -676,6 +767,13 @@
         }
         if (!destroyed && activeSource === 'none') {
           connectBridge();
+        }
+        if (tempDevice && err && err.name === 'NotFoundError') {
+          // After a device was picked, NotFoundError means the StickS3 GATT service or a
+          // characteristic is missing, not a dismissed chooser; do not let the UI call it "cancelled".
+          const wrapped = new Error('StickS3 BLE service not found on ' + (tempDevice.name || 'the chosen device') + ': ' + (err.message || err.name));
+          wrapped.name = 'StickS3ServiceError';
+          throw wrapped;
         }
         throw err;
       } finally {
@@ -728,31 +826,64 @@
         } catch (_e) {}
       }
 
-      return postBridgeEndpoint('/api/stick-s3/cmd', cmdObj);
+      // HTTP command fallback only when the bridge is known reachable over SSE; with no bridge
+      // every mode/hold click would otherwise POST to 127.0.0.1:8791 and fail.
+      if (sse && sse.readyState === 1) {
+        return postBridgeEndpoint('/api/stick-s3/cmd', cmdObj);
+      }
+      return false;
+    }
+
+    // User-initiated re-arm of bridge probing (fresh attempt budget). No-op while a probe is
+    // already in flight or a direct Web Serial / BLE link owns the device.
+    function retryBridge() {
+      if (destroyed || activeSource === 'serial' || activeSource === 'ble') return false;
+      if (ws || sse) return false;
+      if (wsRetryTimer) {
+        clearTimeout(wsRetryTimer);
+        wsRetryTimer = null;
+      }
+      bridgeAttempts = 0;
+      wsFailCount = 0;
+      sseFailCount = 0;
+      reconnectAttempt = 0;
+      connectBridge();
+      return true;
+    }
+
+    function onVisibilityChange() {
+      if (destroyed || isPageHidden()) return;
+      if (bridgeProbe === 'paused' || bridgeProbe === 'stopped') {
+        retryBridge();
+      }
+      probeSameOriginBridge();
     }
 
     function start() {
       if (destroyed || started) return;
       started = true;
+      const doc = root.document;
+      if (doc && typeof doc.addEventListener === 'function') {
+        doc.addEventListener('visibilitychange', onVisibilityChange);
+        visibilityHooked = true;
+      }
+      if (isPageHidden()) {
+        // Loaded in a background tab: probe nothing until the tab is shown.
+        bridgeProbe = 'paused';
+        emitStatus();
+        return;
+      }
       connectBridge();
       probeSameOriginBridge();
-      if (!watchdogTimer) {
-        watchdogTimer = setInterval(function () {
-          if (destroyed) return;
-          if (activeSource === 'bridge' && bridgeHasHardware && Date.now() - lastHardwarePacketMs > 3400) {
-            bridgeHasHardware = false;
-            emitStatus('Waiting for StickS3 USB telemetry');
-          }
-        }, 1500);
-        if (watchdogTimer && typeof watchdogTimer.unref === 'function') {
-          watchdogTimer.unref();
-        }
-      }
     }
 
     async function destroy() {
       if (destroyed) return;
       destroyed = true;
+      if (visibilityHooked) {
+        try { root.document.removeEventListener('visibilitychange', onVisibilityChange); } catch (_e) {}
+        visibilityHooked = false;
+      }
       if (watchdogTimer) {
         clearInterval(watchdogTimer);
         watchdogTimer = null;
@@ -770,6 +901,7 @@
       disconnectWebSerial: function () { return disconnectWebSerial(true); },
       connectWebBluetooth: connectWebBluetooth,
       disconnectWebBluetooth: function () { return disconnectWebBluetooth(true); },
+      retryBridge: retryBridge,
       handleIncomingLine: handleIncomingLine
     };
   }

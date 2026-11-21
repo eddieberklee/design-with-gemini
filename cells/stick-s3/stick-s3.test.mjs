@@ -816,8 +816,14 @@ test('ui.js VM harness: first-connect + live 91% battery sync, swatch-pin & mode
     assert.equal(statusPill.classList.contains('is-live'), false);
     assert.equal(statusPill.textContent, 'TILT PAD');
 
-    // Reconnect with unknown battery (-1) must not leak stale 91%
+    // Bridge reports a serial port open but no telemetry yet: not a connected StickS3, and no stale 91%
     ws.receiveJson({ t: 'bridge_status', serialConnected: true, port: '/dev/cu.usbmodem1101' });
+    assert.equal(statusPill.classList.contains('is-live'), false);
+    assert.equal(statusPill.textContent, 'TILT PAD');
+    // Reconnect with unknown battery (-1) must not leak stale 91%
+    ws.receiveJson({
+      t: 's3', seq: 30, ax: 0.0, ay: 0.0, az: 0.98, tx: 0.0, ty: 0.0, kin: 0, m: 2, h: 0, hex: '#D5C8C0', ev: ''
+    });
     assert.equal(statusPill.textContent, 'STICK S3');
     h.advanceTime(4000);
     ws.receiveJson({ t: 'bridge_status', serialConnected: false, port: '' });
@@ -1038,6 +1044,46 @@ test('Offline swatch-pin synchronous WCAG ink sync, unhold recovery, unit-disk p
     });
     h.stepFrame(80);
     assert.equal(twinRig.style.transform, 'rotateX(30.0deg) rotateY(204.0deg)');
+  } finally {
+    handle.destroy();
+  }
+});
+
+test('axis sign contract: device +X (tilt right) / +Y (tilt up) render right/up on the dome and tilt the twin the same way', () => {
+  // Firmware (main.cpp loop) negates raw accel.x and accel.y before smoothing, so telemetry ax/tx and
+  // ay/ty already mean right/up. JS must pass them through unchanged, exactly like the tilt pad does.
+  const h = createUiVmHarness({ reducedMotion: true });
+  const cellEl = h.document.createElement('section');
+  cellEl.id = 'cell-stick-s3';
+  cellEl.className = 'cell cell--stick-s3';
+  h.document.body.appendChild(cellEl);
+  const handle = h.sandbox.StickS3Color.UI.mount(cellEl);
+  try {
+    cellEl.querySelector('.s3-open-btn').click();
+    const ws = h.wsInstances[0];
+    ws.openNow();
+    ws.receiveJson({ t: 's3', seq: 1, ax: 0.5, ay: 0.4, az: 0.75, tx: 0.5, ty: 0.4, kin: 0, m: 0, h: 0, hex: '#000000', bat: 80, ev: '' });
+    h.stepFrame(16);
+    const puck = cellEl.querySelector('.s3-dome-puck');
+    assert.ok(Number(puck.getAttribute('cx')) > 50, 'device +X must move the dome puck right');
+    assert.ok(Number(puck.getAttribute('cy')) < 50, 'device +Y must move the dome puck up');
+    const rig = h.document.body.querySelector('dialog.s3-dialog').querySelector('.s3-twin-rig');
+    const m = /rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)/.exec(rig.style.transform);
+    assert.ok(m, 'twin transform rendered');
+    assert.ok(Number(m[1]) > 0, 'device +Y tilts the twin with positive rotateX');
+    assert.ok(Number(m[2]) > 0, 'device +X tilts the twin with positive rotateY');
+
+    // The tilt pad uses the same convention once the device goes away.
+    h.advanceTime(5000);
+    ws.receiveJson({ t: 'bridge_status', serialConnected: false, port: '' });
+    const domePad = cellEl.querySelector('.s3-dome-pad');
+    domePad.dispatchEvent({ type: 'dblclick' });
+    domePad.dispatchEvent({ type: 'keydown', key: 'ArrowRight' });
+    domePad.dispatchEvent({ type: 'keydown', key: 'ArrowUp' });
+    h.stepFrame(32);
+    const m2 = /rotateX\((-?[\d.]+)deg\) rotateY\((-?[\d.]+)deg\)/.exec(rig.style.transform);
+    assert.ok(Number(puck.getAttribute('cx')) > 50 && Number(puck.getAttribute('cy')) < 50);
+    assert.ok(Number(m2[1]) > 0 && Number(m2[2]) > 0, 'tilt pad +X/+Y tilts the twin like the device');
   } finally {
     handle.destroy();
   }
