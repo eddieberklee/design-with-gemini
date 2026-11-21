@@ -440,11 +440,14 @@
           state.analyser.fftSize = 256;
           source.connect(state.analyser);
 
-          // Continuous PCM capture node (4096 samples ~85ms at 48kHz)
+          // Continuous PCM capture node (4096 samples ~85ms at 48kHz) into a silent sink (no speaker echo)
           const processor = state.audioCtx.createScriptProcessor(4096, 1, 1);
+          const silentGain = state.audioCtx.createGain();
+          silentGain.gain.value = 0;
           state.processor = processor;
           source.connect(processor);
-          processor.connect(state.audioCtx.destination);
+          processor.connect(silentGain);
+          silentGain.connect(state.audioCtx.destination);
 
           state.liveSession = NS.Client.createLiveSession(apiKey, {
             onReady: function (modelName) {
@@ -457,8 +460,12 @@
               renderReadout('Live streaming (' + modelName.replace('models/', '') + ') — speak naturally.', false);
               startWaveLoop();
             },
-            onTranscript: function (chunk) {
-              pushMarqueeWords(chunk, '');
+            onTranscript: function (chunk, isInterim) {
+              if (isInterim) {
+                renderReadout('Hearing: "' + chunk.trim() + '"', false);
+              } else {
+                pushMarqueeWords(chunk, '');
+              }
             },
             onResize: function (res) {
               applyProsodyResult(res);

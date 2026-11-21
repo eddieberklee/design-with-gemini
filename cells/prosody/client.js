@@ -5,7 +5,7 @@
 
   const LIVE_MODELS = [
     'models/gemini-3.8-live',
-    'models/gemini-2.5-flash-native-audio-preview-12-2025'
+    'models/gemini-live-2.5-flash-native-audio'
   ];
   const WS_BASE = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
@@ -301,12 +301,17 @@
             setupDone = true;
             if (cb.onReady) cb.onReady(modelName);
           }
-          // Live input transcription (either top-level or inside serverContent)
-          const tx =
+          // Live input transcription (final or interim, top-level or inside serverContent)
+          const finalTx =
             (msg.inputTranscription && msg.inputTranscription.text) ||
             (msg.serverContent && msg.serverContent.inputTranscription && msg.serverContent.inputTranscription.text);
-          if (tx && cb.onTranscript) {
-            cb.onTranscript(String(tx));
+          const interimTx =
+            (msg.interimInputTranscription && msg.interimInputTranscription.text) ||
+            (msg.serverContent && msg.serverContent.interimInputTranscription && msg.serverContent.interimInputTranscription.text);
+          if (finalTx && cb.onTranscript) {
+            cb.onTranscript(String(finalTx), false);
+          } else if (interimTx && cb.onTranscript) {
+            cb.onTranscript(String(interimTx), true);
           }
           // Live tool calls for button resize
           if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls)) {
@@ -366,12 +371,10 @@
         ws.send(
           JSON.stringify({
             realtimeInput: {
-              mediaChunks: [
-                {
-                  mimeType: 'audio/pcm;rate=16000',
-                  data: base64
-                }
-              ]
+              audio: {
+                mimeType: 'audio/pcm;rate=16000',
+                data: base64
+              }
             }
           })
         );
