@@ -1159,8 +1159,6 @@
       else if (mode === TRACKER_MODE.POINTER) c1Metric.textContent = 'POINTER';
       else c1Metric.textContent = 'SIM · ' + mapSuffix;
 
-      // The tracker's failure emit can still report `isWebcamStarting` (its promise clears after the
-      // emit), so the tile's toggle and pill treat a reported error as "not pending".
       const camBusy = camPending && !camError;
       setAttr(portalCamBtn, 'aria-busy', String(camBusy));
       syncPortalToggles(mode, camBusy, isSecondaryOpen);

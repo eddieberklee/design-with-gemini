@@ -319,12 +319,25 @@
 
       let acquiredStream = null;
       let attemptDead = false;
+      let attemptSettled = false;
+      let attemptPromise = null;
+      const clearPendingAttempt = () => {
+        attemptSettled = true;
+        if (this._pendingWebcamPromise === attemptPromise) {
+          this._pendingWebcamPromise = null;
+        }
+      };
 
-      const attemptPromise = (async () => {
+      attemptPromise = (async () => {
         try {
           this.cameraStatus = CAMERA_STATUS.REQUESTING_CAM;
           this.cameraError = '';
           this._emitStatus();
+          if (myEpoch !== this._sessionEpoch) {
+            attemptDead = true;
+            clearPendingAttempt();
+            return false;
+          }
 
           // Start model download in parallel, while guarding getUserMedia so any rejection or stale
           // epoch stops tracks immediately without ever leaking an active camera LED.
@@ -372,6 +385,7 @@
           const stream = results[0];
           if (myEpoch !== this._sessionEpoch || !stream) {
             attemptDead = true;
+            clearPendingAttempt();
             stopStreamTracks(acquiredStream || stream);
             if (this._pendingStream === stream) this._pendingStream = null;
             acquiredStream = null;
@@ -383,19 +397,41 @@
           this._activeFallbackMode = this._pendingFallbackMode || fb;
           this._attachTrackEndedGuards(stream, myEpoch);
 
-          if (this.videoEl) {
-            this.videoEl.srcObject = stream;
-            this.videoEl.playsInline = true;
-            this.videoEl.muted = true;
-            if (typeof this.videoEl.play === 'function') {
-              await this.videoEl.play();
+          const startEl = this.videoEl;
+          if (startEl) {
+            startEl.srcObject = stream;
+            startEl.playsInline = true;
+            startEl.muted = true;
+            if (typeof startEl.play === 'function') {
+              try {
+                await startEl.play();
+              } catch (playErr) {
+                const handedOff =
+                  myEpoch === this._sessionEpoch &&
+                  this._mediaStream === stream &&
+                  this.videoEl !== startEl;
+                if (!handedOff) {
+                  throw playErr;
+                }
+                if (this.videoEl && typeof this.videoEl.play === 'function') {
+                  await Promise.resolve(this.videoEl.play()).catch(function () {});
+                }
+              }
             }
           }
-          if (myEpoch !== this._sessionEpoch) {
+          if (myEpoch !== this._sessionEpoch || this._mediaStream !== stream) {
             attemptDead = true;
-            this.stopWebcamStream();
+            clearPendingAttempt();
+            stopStreamTracks(stream);
+            if (this._mediaStream === stream) {
+              this.stopWebcamStream();
+            } else if (startEl && startEl.srcObject === stream) {
+              startEl.srcObject = null;
+            }
+            acquiredStream = null;
             return false;
           }
+          acquiredStream = null;
 
           const vw = (this.videoEl && this.videoEl.videoWidth) || 640;
           const vh = (this.videoEl && this.videoEl.videoHeight) || 480;
@@ -412,14 +448,24 @@
           this.mode = TRACKER_MODE.WEBCAM;
           this.cameraStatus = CAMERA_STATUS.STREAMING;
           this.cameraError = '';
+          clearPendingAttempt();
           this._emitStatus();
           return true;
         } catch (err) {
           attemptDead = true;
-          stopStreamTracks(acquiredStream);
-          acquiredStream = null;
-          this.stopWebcamStream();
+          clearPendingAttempt();
+          if (acquiredStream) {
+            stopStreamTracks(acquiredStream);
+            if (this._pendingStream === acquiredStream) {
+              this._pendingStream = null;
+            }
+            if (this._mediaStream === acquiredStream) {
+              this._mediaStream = null;
+            }
+            acquiredStream = null;
+          }
           if (myEpoch !== this._sessionEpoch) return false;
+          this.stopWebcamStream();
           const targetFb = this._pendingFallbackMode || fb;
           const name = err && err.name ? err.name : '';
           const message =
@@ -433,13 +479,13 @@
           this._enterFallback(targetFb, message);
           return false;
         } finally {
-          if (this._pendingWebcamPromise === attemptPromise) {
-            this._pendingWebcamPromise = null;
-          }
+          clearPendingAttempt();
         }
       })();
 
-      this._pendingWebcamPromise = attemptPromise;
+      if (!attemptSettled && myEpoch === this._sessionEpoch) {
+        this._pendingWebcamPromise = attemptPromise;
+      }
       return attemptPromise;
     }
 

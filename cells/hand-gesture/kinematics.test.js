@@ -781,6 +781,145 @@ test('HandTrackerController stops tracks on loader failure / stale epoch / teard
     assert.equal(tracker.cameraStatus, T.CAMERA_STATUS.ERROR);
     assert.equal(tracker.mode, T.TRACKER_MODE.SYNTH);
   }
+
+  // Case E (#14.1): Stale-epoch late rejection must NEVER kill a newer active webcam stream
+  {
+    const trackStale = makeMockTrack();
+    const trackLive = makeMockTrack();
+    const vid = makeMockVideo();
+    const eng = new K.KinematicEngine();
+    const rig = new K.SyntheticHandRig();
+    let gumCall = 0;
+    let rejectStaleGum;
+    const tracker = new T.HandTrackerController(eng, rig, vid, {
+      mediaDevices: {
+        getUserMedia: () => {
+          gumCall++;
+          if (gumCall === 1) {
+            return new Promise((_res, rej) => { rejectStaleGum = rej; });
+          }
+          return Promise.resolve({ getTracks: () => [trackLive] });
+        },
+      },
+      loadVision: () => Promise.resolve({ delegateUsed: 'GPU', detectForVideo: () => ({ landmarks: [] }) }),
+    });
+
+    const pAttempt1 = tracker.enableWebcam(T.TRACKER_MODE.IDLE);
+    await tracker.setMode(T.TRACKER_MODE.IDLE);
+    const pAttempt2 = tracker.enableWebcam(T.TRACKER_MODE.IDLE);
+    assert.equal(await pAttempt2, true);
+    assert.equal(tracker.mode, T.TRACKER_MODE.WEBCAM);
+    assert.equal(tracker.cameraStatus, T.CAMERA_STATUS.STREAMING);
+    assert.equal(trackLive.stopped, false);
+
+    // Late rejection from Attempt 1 (epoch 1) after Attempt 2 (epoch 3) is already STREAMING
+    rejectStaleGum(Object.assign(new Error('Stale request timed out'), { name: 'AbortError' }));
+    assert.equal(await pAttempt1, false);
+    assert.equal(trackLive.stopped, false, 'Stale-epoch catch must not stop newer active stream track');
+    assert.ok(vid.srcObject !== null, 'Stale-epoch catch must not clear newer active videoEl.srcObject');
+    assert.equal(tracker.mode, T.TRACKER_MODE.WEBCAM);
+    assert.equal(tracker.cameraStatus, T.CAMERA_STATUS.STREAMING);
+    assert.equal(trackStale.stopped, false);
+  }
+
+  // Case F (#14.2): setVideoElement(wbVideo) mid-play() handoff survives miniVideo AbortError
+  {
+    const trackF = makeMockTrack();
+    let rejectMiniPlay = null;
+    let notifyMiniPlayCalled = null;
+    const miniPlayCalled = new Promise((res) => { notifyMiniPlayCalled = res; });
+
+    const miniVid = makeMockVideo();
+    let currentSrc = null;
+    Object.defineProperty(miniVid, 'srcObject', {
+      get() { return currentSrc; },
+      set(val) {
+        currentSrc = val;
+        if (val === null && rejectMiniPlay) {
+          const rej = rejectMiniPlay;
+          rejectMiniPlay = null;
+          const abortErr = new Error('The play() request was interrupted by a new load request.');
+          abortErr.name = 'AbortError';
+          rej(abortErr);
+        }
+      },
+    });
+    miniVid.play = () => {
+      notifyMiniPlayCalled();
+      return new Promise((_res, rej) => { rejectMiniPlay = rej; });
+    };
+
+    const wbVid = makeMockVideo();
+    const eng = new K.KinematicEngine();
+    const rig = new K.SyntheticHandRig();
+    const tracker = new T.HandTrackerController(eng, rig, miniVid, {
+      mediaDevices: {
+        getUserMedia: () => Promise.resolve({ getTracks: () => [trackF] }),
+      },
+      loadVision: () => Promise.resolve({ delegateUsed: 'GPU', detectForVideo: () => ({ landmarks: [] }) }),
+    });
+
+    const pEnable = tracker.enableWebcam(T.TRACKER_MODE.IDLE);
+    await miniPlayCalled;
+    tracker.setFallbackMode(T.TRACKER_MODE.SYNTH);
+    tracker.setVideoElement(wbVid);
+
+    assert.equal(await pEnable, true, 'enableWebcam must succeed across mid-play() setVideoElement handoff');
+    assert.equal(trackF.stopped, false, 'Stream track must remain live after mid-play() handoff');
+    assert.equal(tracker.mode, T.TRACKER_MODE.WEBCAM);
+    assert.equal(tracker.cameraStatus, T.CAMERA_STATUS.STREAMING);
+    assert.equal(miniVid.srcObject, null);
+    assert.ok(wbVid.srcObject !== null);
+  }
+
+  // Case G (#16.1): isWebcamStarting === false inside onStatusChange on both STREAMING success & permission denial
+  {
+    const trackG = makeMockTrack();
+    const vidG = makeMockVideo();
+    const eng = new K.KinematicEngine();
+    const rig = new K.SyntheticHandRig();
+    let shouldDeny = false;
+    const tracker = new T.HandTrackerController(eng, rig, vidG, {
+      mediaDevices: {
+        getUserMedia: () => {
+          if (shouldDeny) {
+            const err = new Error('Permission denied');
+            err.name = 'NotAllowedError';
+            return Promise.reject(err);
+          }
+          return Promise.resolve({ getTracks: () => [trackG] });
+        },
+      },
+      loadVision: () => Promise.resolve({ delegateUsed: 'GPU', detectForVideo: () => ({ landmarks: [] }) }),
+    });
+
+    const statusLog = [];
+    tracker.onStatusChange((mode, camStatus, camError) => {
+      statusLog.push({
+        mode,
+        camStatus,
+        camError,
+        isWebcamStarting: tracker.isWebcamStarting,
+        isCameraActive: tracker.isCameraActive(),
+      });
+    });
+
+    assert.equal(await tracker.enableWebcam(T.TRACKER_MODE.IDLE), true);
+    const streamSnap = statusLog.find((s) => s.camStatus === T.CAMERA_STATUS.STREAMING);
+    assert.ok(streamSnap, 'Expected STREAMING status callback');
+    assert.equal(streamSnap.isWebcamStarting, false, 'isWebcamStarting must be false during STREAMING onStatusChange');
+    assert.equal(streamSnap.isCameraActive, true);
+
+    await tracker.setMode(T.TRACKER_MODE.IDLE);
+    statusLog.length = 0;
+    shouldDeny = true;
+    assert.equal(await tracker.enableWebcam(T.TRACKER_MODE.SYNTH), false);
+    const errSnap = statusLog.find((s) => s.camStatus === T.CAMERA_STATUS.ERROR);
+    assert.ok(errSnap, 'Expected ERROR status callback on NotAllowedError');
+    assert.equal(errSnap.isWebcamStarting, false, 'isWebcamStarting must be false during ERROR onStatusChange');
+    assert.equal(errSnap.isCameraActive, false, 'isCameraActive must be false during ERROR onStatusChange');
+    assert.equal(errSnap.mode, T.TRACKER_MODE.SYNTH);
+  }
 });
 
 test('Multi-portal hash transitions, popstate+hashchange VT deduplication, AbortError safety, SVG class, and Cell 07 Flick isolation', async () => {
@@ -1111,4 +1250,21 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   }
   assert.equal(faderSlider.getAttribute('aria-valuenow'), faderBefore, 'Cell 07 Flick ↓ must not move Cell 06 fader');
   assert.ok(tapeList.scrollTop > 20, `Expected Cell 07 tape scrollTop > 20 after Flick ↓, got ${tapeList.scrollTop}`);
+
+  // 5. Studio Webcam permission denial updates mode buttons cleanly (Synth pressed, Webcam not stuck pressed)
+  sandbox.navigator.mediaDevices = {
+    getUserMedia: () => {
+      const err = new Error('Denied');
+      err.name = 'NotAllowedError';
+      return Promise.reject(err);
+    },
+  };
+  const webcamSegBtn = findByText(hgPage, 'Webcam');
+  const synthSegBtn = findByText(hgPage, 'Synth');
+  const portalCamBtn = findByText(portalCell, 'Cam');
+  webcamSegBtn.click();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(webcamSegBtn.getAttribute('aria-pressed'), 'false', 'Webcam button must clear aria-pressed after NotAllowedError');
+  assert.equal(synthSegBtn.getAttribute('aria-pressed'), 'true', 'Synth button must be aria-pressed after Studio fallback');
+  assert.equal(portalCamBtn.getAttribute('aria-busy'), 'false', 'Portal Cam button must clear aria-busy after NotAllowedError');
 });

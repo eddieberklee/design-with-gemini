@@ -321,6 +321,11 @@ body:has(> .hg-secondary-page:not([hidden])) > main.grid[hidden],
   color: var(--ui-ink-3);
   white-space: nowrap;
   min-width: 0;
+  overflow: clip;
+}
+
+.hg-cell-foot :focus-visible {
+  outline-offset: 1px;
 }
 
 .hg-cell-foot > :last-child:not(:first-child),
