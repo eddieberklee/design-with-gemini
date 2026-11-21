@@ -471,15 +471,203 @@ async function runTests() {
   assert.equal(svgRes.status, 'warn');
   assert.equal(svgRes.badge, 'NO IMAGE');
 
-  // 15. Export report & Markdown redaction
+  // 15. Export report & Markdown redaction + multi-line / pipe escaping
   const jsonReport = Probes.buildExportReport(batchResults, batchOutcome.catalog, fakeKey);
   const mdReport = Probes.buildMarkdownSummary(batchResults, batchOutcome.catalog, fakeKey);
   assert.equal(jsonReport.includes(fakeKey), false);
   assert.equal(mdReport.includes(fakeKey), false);
   assert.equal(JSON.parse(jsonReport).passed, 18);
 
+  const multilineResults = Object.assign({}, batchResults, {
+    generate: Object.assign({}, batchResults.generate, {
+      summary: 'HTTP 500 · First line\r\nSecond line\nThird | pipe'
+    })
+  });
+  const escapedMd = Probes.buildMarkdownSummary(multilineResults, batchOutcome.catalog, fakeKey);
+  const tableLines = escapedMd.split('\n').filter((l) => l.startsWith('|'));
+  assert.equal(tableLines.length, 2 + Probes.ENDPOINTS.length);
+  const genRow = tableLines.find((l) => l.includes('Generate Content'));
+  assert.ok(genRow.includes('First line Second line Third \\| pipe'));
+
+  // 16. Stereo WAV frame alignment (6 bytes -> 4 bytes) & invalid base64 payload validation
+  const stereoSix = new Uint8Array([1, 2, 3, 4, 5, 6]);
+  const stereoWav = Audio.pcm16leToWavBytes(stereoSix, 24000, 2);
+  assert.equal(stereoWav.byteLength, 44 + 4);
+  assert.equal(new DataView(stereoWav.buffer).getUint32(40, true), 4);
+  assert.throws(() => Audio.base64ToUint8Array('abcde'), /Invalid base64 audio payload/);
+  assert.throws(() => Audio.base64ToUint8Array('!!!BAD!!'), /Invalid base64 audio payload/);
+
+  // 17. Live WebSocket server { error } frame -> fail, ws.send() throw closes socket, & Blob.text() catch
+  let errWsClosed = false;
+  class ServerErrorWs {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 5);
+    }
+    send() {
+      setTimeout(() => {
+        if (this.onmessage) {
+          this.onmessage({
+            data: JSON.stringify({ error: { code: 403, message: 'Permission denied' } })
+          });
+        }
+      }, 5);
+    }
+    close() {
+      errWsClosed = true;
+      this.readyState = 3;
+    }
+  }
+  const wsErrFrameRes = await loadMatrixModules({ WebSocket: ServerErrorWs }).ns.Probes.runSingleProbe('live_ws', {
+    apiKey: fakeKey,
+    catalog: catalog
+  });
+  assert.equal(wsErrFrameRes.status, 'fail');
+  assert.equal(wsErrFrameRes.badge, 'WS ERR 403');
+  assert.equal(errWsClosed, true);
+
+  let wsSendThrowClosedSocket = false;
+  class SendThrowWs {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+      }, 5);
+    }
+    send() {
+      throw new Error('Socket broken');
+    }
+    close() {
+      wsSendThrowClosedSocket = true;
+      this.readyState = 3;
+    }
+  }
+  const wsSendThrowRes = await loadMatrixModules({ WebSocket: SendThrowWs }).ns.Probes.runSingleProbe('live_ws', {
+    apiKey: fakeKey,
+    catalog: catalog
+  });
+  assert.equal(wsSendThrowRes.status, 'fail');
+  assert.equal(wsSendThrowRes.badge, 'WS SEND ERR');
+  assert.equal(wsSendThrowClosedSocket, true);
+
+  if (typeof Blob === 'function') {
+    let badBlobClosed = false;
+    class BadBlobWs {
+      constructor() {
+        this.readyState = 0;
+        setTimeout(() => {
+          this.readyState = 1;
+          if (this.onopen) this.onopen({});
+        }, 5);
+      }
+      send() {
+        const fakeBlob = Object.create(Blob.prototype);
+        fakeBlob.text = () => Promise.reject(new Error('Unreadable blob'));
+        setTimeout(() => {
+          if (this.onmessage) this.onmessage({ data: fakeBlob });
+        }, 5);
+      }
+      close() {
+        badBlobClosed = true;
+        this.readyState = 3;
+      }
+    }
+    const badBlobRes = await loadMatrixModules({ WebSocket: BadBlobWs }).ns.Probes.runSingleProbe('live_ws', {
+      apiKey: fakeKey,
+      catalog: catalog
+    });
+    assert.equal(badBlobRes.status, 'fail');
+    assert.equal(badBlobRes.badge, 'WS READ ERR');
+    assert.equal(badBlobClosed, true);
+  }
+
+  // 18. HTTP 200 HTML proxy responses -> status: 'fail' (INVALID JSON)
+  const htmlEnv = loadMatrixModules({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => '<html><body>502 Proxy HTML</body></html>'
+    })
+  });
+  for (const epId of ['models', 'generate', 'interactions', 'decisions', 'stream']) {
+    const htmlRes = await htmlEnv.ns.Probes.runSingleProbe(epId, {
+      apiKey: fakeKey,
+      catalog: catalog
+    });
+    assert.equal(htmlRes.status, 'fail', epId + ' should fail on HTTP 200 HTML');
+    assert.equal(htmlRes.badge, 'INVALID JSON', epId + ' should report INVALID JSON');
+  }
+
+  // 19. probeStream subword concatenation (no spurious spaces) & reader.cancel() on abort
+  const subwordEnv = loadMatrixModules({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: makeFakeStream([
+        'data: {"candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"parts":[{"text":"lo"}]}}]}\n\n',
+        'data: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}\n\ndata: [DONE]\n\n'
+      ])
+    })
+  });
+  const subwordRes = await subwordEnv.ns.Probes.runSingleProbe('stream', {
+    apiKey: fakeKey,
+    catalog: catalog
+  });
+  assert.equal(subwordRes.status, 'pass');
+  assert.equal(subwordRes.raw.visibleText, 'Hello world');
+
+  let readerCancelled = false;
+  const abortStreamAc = new AbortController();
+  const cancelStreamEnv = loadMatrixModules({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      body: {
+        getReader: () => ({
+          read: () => new Promise(() => {}),
+          cancel: () => {
+            readerCancelled = true;
+            return Promise.resolve();
+          }
+        })
+      }
+    })
+  });
+  const pendingStream = cancelStreamEnv.ns.Probes.runSingleProbe('stream', {
+    apiKey: fakeKey,
+    catalog: catalog,
+    signal: abortStreamAc.signal
+  });
+  setTimeout(() => abortStreamAc.abort(), 10);
+  await assert.rejects(pendingStream, (err) => Boolean(err && err.aborted));
+  assert.equal(readerCancelled, true);
+
+  // 20. probeDecisions guards noul: null / undefined without coercing to p=0.00
+  const nullNoulEnv = loadMatrixModules({
+    fetch: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ answers: { is_healthy: { type: 'noul', noul: null } }, usage: { total_output_tokens: 0 } })
+    })
+  });
+  const nullNoulRes = await nullNoulEnv.ns.Probes.runSingleProbe('decisions', {
+    apiKey: fakeKey,
+    catalog: catalog
+  });
+  assert.equal(nullNoulRes.badge, 'HTTP 200');
+  assert.ok(nullNoulRes.summary.includes('noul = n/a'));
+
   assert.equal(Probes.ENDPOINTS.length, 18);
-  console.log('ALL 15 API MATRIX UNIT & INTEGRATION TESTS PASSED (18 endpoints verified)');
+  console.log('ALL 20 API MATRIX UNIT & INTEGRATION TESTS PASSED (18 endpoints verified)');
 }
 
 runTests().catch((err) => {

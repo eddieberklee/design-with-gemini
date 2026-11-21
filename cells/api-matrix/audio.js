@@ -17,8 +17,21 @@
   function base64ToUint8Array(b64) {
     const normalized = normalizeBase64(b64);
     if (!normalized) return new Uint8Array(0);
+    if (
+      normalized.length % 4 === 1 ||
+      /[^A-Za-z0-9+/=]/.test(normalized) ||
+      /=[^=]/.test(normalized) ||
+      /===/.test(normalized)
+    ) {
+      throw new Error('Invalid base64 audio payload');
+    }
     if (typeof atob === 'function') {
-      const bin = atob(normalized);
+      let bin;
+      try {
+        bin = atob(normalized);
+      } catch (_err) {
+        throw new Error('Invalid base64 audio payload');
+      }
       const len = bin.length;
       const bytes = new Uint8Array(len);
       for (let i = 0; i < len; i++) {
@@ -80,9 +93,11 @@
   function pcm16leToWavBytes(rawBytes, sampleRate, channels) {
     const rate = sampleRate || 24000;
     const ch = channels || 1;
-    const pcm = rawBytes.byteLength % 2 === 0
+    const blockAlign = ch * 2;
+    const rem = rawBytes.byteLength % blockAlign;
+    const pcm = rem === 0
       ? rawBytes
-      : rawBytes.subarray(0, rawBytes.byteLength - 1);
+      : rawBytes.subarray(0, rawBytes.byteLength - rem);
     const dataSize = pcm.byteLength;
     const buf = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buf);

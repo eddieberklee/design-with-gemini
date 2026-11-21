@@ -274,7 +274,7 @@
     return { maxOutputTokens: Math.max(16, minTok) };
   }
 
-  function extractVisibleText(candidate) {
+  function extractVisibleTextRaw(candidate) {
     const parts = candidate && candidate.content && Array.isArray(candidate.content.parts)
       ? candidate.content.parts
       : [];
@@ -285,8 +285,11 @@
       .map(function (p) {
         return p.text;
       })
-      .join('')
-      .trim();
+      .join('');
+  }
+
+  function extractVisibleText(candidate) {
+    return extractVisibleTextRaw(candidate).trim();
   }
 
   // =========================================================================
@@ -974,6 +977,42 @@
     );
   }
 
+  function isNonJsonResponse(res) {
+    return Boolean(
+      !res ||
+      !res.data ||
+      typeof res.data !== 'object' ||
+      Array.isArray(res.data) ||
+      Object.prototype.hasOwnProperty.call(res.data, '_rawText')
+    );
+  }
+
+  function makeInvalidJsonResult(endpointId, modelUsed, curlCmd, res, extra) {
+    const preview = res && res.data && typeof res.data._rawText === 'string'
+      ? res.data._rawText.replace(/\s+/g, ' ').trim().slice(0, 90)
+      : String((res && res.rawText) || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+    return Object.assign(
+      {
+        id: endpointId,
+        status: 'fail',
+        badge: 'INVALID JSON',
+        httpStatus: res ? res.httpStatus : 200,
+        latencyMs: res ? res.latencyMs : 0,
+        modelUsed: modelUsed || null,
+        summary:
+          'HTTP ' +
+          (res ? res.httpStatus : 200) +
+          ' returned non-JSON payload' +
+          (preview ? ': ' + preview : '.'),
+        remediation: 'Check for captive portals, HTML error proxies, or extensions intercepting generativelanguage.googleapis.com.',
+        curl: curlCmd,
+        raw: sanitizePayloadForInspector(res && res.data !== undefined ? res.data : { _rawText: preview }),
+        probedAt: new Date().toISOString()
+      },
+      extra || {}
+    );
+  }
+
   function makeHttpErrorResult(endpointId, modelUsed, curlCmd, res, extra) {
     const info = classifyHttpError(res.httpStatus, res.data, res.rawText, endpointId);
     return Object.assign(
@@ -1029,6 +1068,9 @@
         }
         if (!res.ok) {
           return { errorResult: makeHttpErrorResult('models', null, curl, res) };
+        }
+        if (isNonJsonResponse(res)) {
+          return { errorResult: makeInvalidJsonResult('models', null, curl, res) };
         }
         pageCount += 1;
         const pageModels = Array.isArray(res.data && res.data.models) ? res.data.models : [];
@@ -1120,6 +1162,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('generate', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('generate', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('generate', bare, curl, res);
       const cand = res.data && Array.isArray(res.data.candidates) ? res.data.candidates[0] : null;
       const visible = extractVisibleText(cand);
       const usage = res.data && res.data.usageMetadata ? res.data.usageMetadata : null;
@@ -1199,6 +1242,14 @@
             return resp.text().then(function (text) {
               ctrl.cleanup();
               const totalMs = Math.max(1, Math.round(performance.now() - startedAt));
+              if (!/^data:/m.test(String(text || ''))) {
+                return makeInvalidJsonResult('stream', bare, curl, {
+                  httpStatus: resp.status,
+                  latencyMs: totalMs,
+                  data: { _rawText: String(text || '').slice(0, 1200) },
+                  rawText: String(text || '')
+                });
+              }
               return {
                 id: 'stream',
                 status: 'pass',
@@ -1219,10 +1270,41 @@
           const reader = resp.body.getReader();
           const decoder = new TextDecoder('utf-8');
           let buffer = '';
+          let rawSample = '';
           let chunkCount = 0;
           let firstDataMs = null;
           let visibleText = '';
+          let readerCancelled = false;
           const parsedEvents = [];
+
+          function cancelReader() {
+            if (readerCancelled) return;
+            readerCancelled = true;
+            try {
+              if (reader && typeof reader.cancel === 'function') {
+                Promise.resolve(reader.cancel()).catch(function () {});
+              }
+            } catch (_e) {}
+          }
+
+          let rejectAbort = null;
+          const abortPromise = new Promise(function (_resolve, reject) {
+            rejectAbort = reject;
+          });
+          abortPromise.catch(function () {});
+
+          function onStreamAbort() {
+            cancelReader();
+            const abortErr = new Error('SSE stream aborted');
+            abortErr.name = 'AbortError';
+            if (rejectAbort) rejectAbort(abortErr);
+          }
+
+          if (ctrl.signal.aborted) {
+            onStreamAbort();
+          } else {
+            ctrl.signal.addEventListener('abort', onStreamAbort, { once: true });
+          }
 
           function processBuffer(flush) {
             const blocks = buffer.split(/\r?\n\r?\n/);
@@ -1246,8 +1328,8 @@
                 const obj = JSON.parse(joined);
                 if (parsedEvents.length < 5) parsedEvents.push(obj);
                 const cand = obj && Array.isArray(obj.candidates) ? obj.candidates[0] : null;
-                const txt = extractVisibleText(cand);
-                if (txt) visibleText += (visibleText ? ' ' : '') + txt;
+                const txt = extractVisibleTextRaw(cand);
+                if (txt) visibleText += txt;
               } catch (_err) {
                 // Ignore partial non-JSON lines
               }
@@ -1257,10 +1339,21 @@
           function pump() {
             return reader.read().then(function (step) {
               if (step.done) {
-                buffer += decoder.decode();
+                const tail = decoder.decode();
+                if (tail && rawSample.length < 600) rawSample += tail.slice(0, 600 - rawSample.length);
+                buffer += tail;
                 processBuffer(true);
+                ctrl.signal.removeEventListener('abort', onStreamAbort);
                 ctrl.cleanup();
                 const totalMs = Math.max(1, Math.round(performance.now() - startedAt));
+                if (chunkCount === 0 && /<\s*html|<!doctype/i.test(rawSample)) {
+                  return makeInvalidJsonResult('stream', bare, curl, {
+                    httpStatus: resp.status,
+                    latencyMs: totalMs,
+                    data: { _rawText: rawSample },
+                    rawText: rawSample
+                  });
+                }
                 return {
                   id: 'stream',
                   status: chunkCount > 0 ? 'pass' : 'warn',
@@ -1291,13 +1384,19 @@
                   probedAt: new Date().toISOString()
                 };
               }
-              buffer += decoder.decode(step.value, { stream: true });
+              const chunkStr = decoder.decode(step.value, { stream: true });
+              if (chunkStr && rawSample.length < 600) rawSample += chunkStr.slice(0, 600 - rawSample.length);
+              buffer += chunkStr;
               processBuffer(false);
               return pump();
             });
           }
 
-          return pump();
+          return Promise.race([pump(), abortPromise]).catch(function (err) {
+            ctrl.signal.removeEventListener('abort', onStreamAbort);
+            cancelReader();
+            throw err;
+          });
         })
         .catch(function (err) {
           ctrl.cleanup();
@@ -1351,6 +1450,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('interactions', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('interactions', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('interactions', bare, curl, res);
       const outputs = Array.isArray(res.data && res.data.outputs) ? res.data.outputs : [];
       const textOut = outputs
         .filter(function (o) { return o && o.type === 'text' && typeof o.text === 'string'; })
@@ -1409,8 +1509,17 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('decisions', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('decisions', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('decisions', bare, curl, res);
       const ans = res.data && res.data.answers ? res.data.answers.is_healthy : null;
-      const p = ans && Number.isFinite(Number(ans.noul)) ? Number(ans.noul) : null;
+      const rawNoul = ans ? ans.noul : null;
+      const p =
+        rawNoul !== null &&
+        rawNoul !== undefined &&
+        rawNoul !== '' &&
+        typeof rawNoul !== 'boolean' &&
+        Number.isFinite(Number(rawNoul))
+          ? Number(rawNoul)
+          : null;
       const outTok = res.data && res.data.usage ? res.data.usage.total_output_tokens : 0;
       return {
         id: 'decisions',
@@ -1461,6 +1570,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('grounding', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('grounding', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('grounding', bare, curl, res);
       const cand = res.data && Array.isArray(res.data.candidates) ? res.data.candidates[0] : null;
       const visible = extractVisibleText(cand);
       const meta = cand && cand.groundingMetadata ? cand.groundingMetadata : null;
@@ -1609,8 +1719,9 @@
 
       ws.onopen = function () {
         gotOpen = true;
+        const sock = ws;
         try {
-          ws.send(JSON.stringify(setupFrame));
+          sock.send(JSON.stringify(setupFrame));
         } catch (err) {
           finish({
             id: 'live_ws',
@@ -1626,6 +1737,7 @@
             raw: { error: redactSecrets(String(err), ctx.apiKey) },
             probedAt: new Date().toISOString()
           });
+          try { if (sock) sock.close(); } catch (_e) {}
         }
       };
 
@@ -1636,10 +1748,56 @@
           try {
             msg = JSON.parse(text);
           } catch (_e) {
-            msg = { _raw: text.slice(0, 500) };
+            msg = { _raw: String(text || '').slice(0, 500) };
           }
           const sock = ws;
-          if (msg && Object.prototype.hasOwnProperty.call(msg, 'setupComplete')) {
+          if (!msg || typeof msg !== 'object' || Array.isArray(msg) || Object.prototype.hasOwnProperty.call(msg, '_raw')) {
+            finish({
+              id: 'live_ws',
+              status: 'fail',
+              badge: 'WS BAD FRAME',
+              httpStatus: 0,
+              latencyMs: latencyMs,
+              modelUsed: bare,
+              discoveredModels: matchingNames(ctx.catalog, 'live'),
+              summary: 'Live WebSocket returned non-JSON or malformed frame.',
+              remediation: 'Check WebSocket proxy or inspect Raw Response.',
+              curl: curlNote,
+              raw: sanitizePayloadForInspector({ handshakeMs: latencyMs, firstServerFrame: msg }),
+              probedAt: new Date().toISOString()
+            });
+            try { if (sock) sock.close(1000, 'Malformed frame'); } catch (_e) {}
+            return;
+          }
+          if (msg.error) {
+            const errObj = typeof msg.error === 'object' && msg.error !== null ? msg.error : { message: String(msg.error) };
+            const errCode = typeof errObj.code === 'number' ? errObj.code : 0;
+            const errMsg = redactSecrets(String(errObj.message || errObj.status || 'WebSocket server error frame'), ctx.apiKey);
+            const badKey = isInvalidKeyError(errMsg, msg);
+            finish({
+              id: 'live_ws',
+              status: 'fail',
+              badge: badKey ? 'INVALID KEY' : errCode ? 'WS ERR ' + errCode : 'WS ERROR',
+              httpStatus: errCode || 0,
+              latencyMs: latencyMs,
+              modelUsed: bare,
+              discoveredModels: matchingNames(ctx.catalog, 'live'),
+              summary: 'Live WebSocket error' + (errCode ? ' (' + errCode + ')' : '') + ': ' + errMsg.slice(0, 110),
+              remediation: badKey
+                ? 'Check your Google AI Studio Gemini API key and save it again.'
+                : 'Inspect Raw Response for Live API setup or permission error details.',
+              curl: curlNote,
+              raw: sanitizePayloadForInspector({
+                handshakeMs: latencyMs,
+                model: withModelsPrefix(bare),
+                firstServerFrame: msg
+              }),
+              probedAt: new Date().toISOString()
+            });
+            try { if (sock) sock.close(1000, 'Server error'); } catch (_e) {}
+            return;
+          }
+          if (Object.prototype.hasOwnProperty.call(msg, 'setupComplete')) {
             finish({
               id: 'live_ws',
               status: 'pass',
@@ -1681,7 +1839,24 @@
         if (evt.data instanceof ArrayBuffer) {
           handleText(new TextDecoder('utf-8').decode(evt.data));
         } else if (typeof Blob === 'function' && evt.data instanceof Blob) {
-          evt.data.text().then(handleText);
+          evt.data.text().then(handleText).catch(function (err) {
+            const sock = ws;
+            finish({
+              id: 'live_ws',
+              status: 'fail',
+              badge: 'WS READ ERR',
+              httpStatus: 0,
+              latencyMs: Math.max(1, Math.round(performance.now() - startedAt)),
+              modelUsed: bare,
+              discoveredModels: matchingNames(ctx.catalog, 'live'),
+              summary: 'Failed to decode binary WebSocket frame.',
+              remediation: 'Retry the probe.',
+              curl: curlNote,
+              raw: { error: redactSecrets(String(err), ctx.apiKey) },
+              probedAt: new Date().toISOString()
+            });
+            try { if (sock) sock.close(); } catch (_e) {}
+          });
         } else {
           handleText(String(evt.data || ''));
         }
@@ -1790,6 +1965,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('tts', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('tts', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('tts', bare, curl, res);
 
       const cand = res.data && Array.isArray(res.data.candidates) ? res.data.candidates[0] : null;
       const parts = cand && cand.content && Array.isArray(cand.content.parts) ? cand.content.parts : [];
@@ -1882,6 +2058,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('audio_in', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('audio_in', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('audio_in', bare, curl, res);
       const cand = res.data && Array.isArray(res.data.candidates) ? res.data.candidates[0] : null;
       const visible = extractVisibleText(cand);
       const transcribeNote = transcribeList.length
@@ -1951,6 +2128,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult(cfg.id, bare, curl, res);
       if (!res.ok) return makeHttpErrorResult(cfg.id, bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult(cfg.id, bare, curl, res);
       const methods = Array.isArray(res.data && res.data.supportedGenerationMethods)
         ? res.data.supportedGenerationMethods
         : [];
@@ -2044,6 +2222,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('image_gen', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('image_gen', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('image_gen', bare, curl, res);
 
       let mimeType = '';
       let b64 = '';
@@ -2132,6 +2311,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('embeddings', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('embeddings', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('embeddings', bare, curl, res);
       const vals = res.data && res.data.embedding && Array.isArray(res.data.embedding.values)
         ? res.data.embedding.values
         : [];
@@ -2177,6 +2357,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('count_tokens', bare, curl, res);
       if (!res.ok) return makeHttpErrorResult('count_tokens', bare, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('count_tokens', bare, curl, res);
       const total = res.data && typeof res.data.totalTokens === 'number' ? res.data.totalTokens : null;
       return {
         id: 'count_tokens',
@@ -2214,6 +2395,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult(cfg.id, null, curl, res);
       if (!res.ok) return makeHttpErrorResult(cfg.id, null, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult(cfg.id, null, curl, res);
       // Protobuf JSON omits empty arrays ({} means 0 items).
       let items = [];
       for (let i = 0; i < cfg.arrayKeys.length; i++) {
@@ -2289,6 +2471,7 @@
     }).then(function (res) {
       if (res.networkError || res.timedOut) return makeNetworkResult('openai', null, curl, res);
       if (!res.ok) return makeHttpErrorResult('openai', null, curl, res);
+      if (isNonJsonResponse(res)) return makeInvalidJsonResult('openai', null, curl, res);
       const list = Array.isArray(res.data && res.data.data) ? res.data.data : [];
       return {
         id: 'openai',
@@ -2561,6 +2744,13 @@
     return redactSecrets(JSON.stringify(summary, null, 2), activeKey);
   }
 
+  function escapeMarkdownCell(str) {
+    return String(str || '')
+      .replace(/\r?\n|\r/g, ' ')
+      .replace(/\|/g, '\\|')
+      .trim();
+  }
+
   function buildMarkdownSummary(resultsMap, catalog, activeKey) {
     const lines = [
       '# Gemini API Matrix Status Report',
@@ -2573,11 +2763,11 @@
     ];
     ENDPOINTS.forEach(function (ep) {
       const r = resultsMap[ep.id];
-      const st = r ? r.status.toUpperCase() + ' (' + r.badge + ')' : 'IDLE';
-      const code = r && r.httpStatus ? String(r.httpStatus) : '—';
+      const st = r ? escapeMarkdownCell(r.status.toUpperCase() + ' (' + r.badge + ')') : 'IDLE';
+      const code = r && r.httpStatus ? escapeMarkdownCell(String(r.httpStatus)) : '—';
       const lat = r && r.latencyMs ? r.latencyMs + ' ms' : '—';
-      const mod = r && r.modelUsed ? '`' + r.modelUsed + '`' : '—';
-      const sum = r ? r.summary.replace(/\|/g, '\\|') : 'Not probed';
+      const mod = r && r.modelUsed ? '`' + escapeMarkdownCell(r.modelUsed) + '`' : '—';
+      const sum = r ? escapeMarkdownCell(r.summary) : 'Not probed';
       lines.push('| **' + ep.name + '** | `' + ep.protocol + '` | ' + st + ' | `' + code + '` | ' + lat + ' | ' + mod + ' | ' + sum + ' |');
     });
     return redactSecrets(lines.join('\n'), activeKey);

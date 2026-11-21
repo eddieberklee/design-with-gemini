@@ -430,6 +430,13 @@
   .am-card-footer { padding: 3px 6px; font-size: 8.5px; }
 }
 
+@container am-card (max-width: 215px) {
+  .am-open-cue,
+  .am-footer-extra {
+    display: none;
+  }
+}
+
 /* ==========================================================================
    2. FULL-VIEWPORT SECONDARY GRID (<dialog class="am-dialog">)
    ========================================================================== */
@@ -593,7 +600,6 @@
 
 .am-btn:focus-visible,
 .am-filter-pill:focus-visible,
-.am-api-card:focus-visible,
 .am-input:focus-visible,
 .am-tab-btn:focus-visible {
   outline: 2px solid var(--am-focus);

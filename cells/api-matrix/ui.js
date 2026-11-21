@@ -58,25 +58,50 @@
     while (node && node.firstChild) node.removeChild(node.firstChild);
   }
 
-  function copyToClipboard(text) {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      return navigator.clipboard.writeText(text);
-    }
+  function fallbackCopyText(text, containerEl) {
     return new Promise(function (resolve, reject) {
+      const host = containerEl || document.body;
+      if (!host) {
+        reject(new Error('No DOM container available for clipboard copy.'));
+        return;
+      }
+      const prevFocus = document.activeElement;
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '0';
+      ta.style.left = '0';
+      ta.style.opacity = '0';
+      ta.style.pointerEvents = 'none';
+      host.appendChild(ta);
       try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
+        ta.focus();
         ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
+        const ok = typeof document.execCommand === 'function' && document.execCommand('copy');
+        if (!ok) {
+          reject(new Error('Clipboard copy command was rejected.'));
+          return;
+        }
         resolve();
       } catch (err) {
         reject(err);
+      } finally {
+        if (ta.parentNode) ta.parentNode.removeChild(ta);
+        if (prevFocus && prevFocus !== ta && typeof prevFocus.focus === 'function') {
+          try { prevFocus.focus(); } catch (_e) {}
+        }
       }
     });
+  }
+
+  function copyToClipboard(text, containerEl) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return navigator.clipboard.writeText(text).catch(function () {
+        return fallbackCopyText(text, containerEl);
+      });
+    }
+    return fallbackCopyText(text, containerEl);
   }
 
   function statusSymbol(status) {
@@ -88,8 +113,18 @@
   }
 
   function mountApiMatrixCell(rootEl) {
-    if (!rootEl || rootEl.dataset.amMounted === 'true') return;
+    if (!rootEl) return undefined;
+    if (typeof rootEl._amUnmount === 'function') {
+      rootEl._amUnmount();
+    }
+    const priorDialog = document.getElementById('am-dialog');
+    if (priorDialog && typeof priorDialog._amOwnerUnmount === 'function') {
+      priorDialog._amOwnerUnmount();
+    }
     rootEl.dataset.amMounted = 'true';
+
+    let unmounted = false;
+    let announceTimer = null;
 
     const app = {
       results: Object.create(null),
@@ -114,6 +149,7 @@
       drawerTab: 'curl', // 'curl' | 'raw'
       modelSearch: '',
       openedFromGrid: false,
+      closingViaHistory: false,
       closingProgrammatically: false,
       drawerReturnTarget: null, // { type: 'endpoint', id } | { type: 'models' }
       activeAudioEl: null
@@ -128,9 +164,12 @@
     rootEl.appendChild(liveRegion);
 
     function announce(msg) {
+      if (unmounted) return;
+      if (announceTimer !== null) clearTimeout(announceTimer);
       liveRegion.textContent = '';
-      setTimeout(function () {
-        liveRegion.textContent = msg;
+      announceTimer = setTimeout(function () {
+        announceTimer = null;
+        if (!unmounted) liveRegion.textContent = msg;
       }, 20);
     }
 
@@ -400,8 +439,16 @@
         ]
       );
 
-      clearNode(rootEl);
-      rootEl.appendChild(liveRegion);
+      if (unmounted) return;
+      let child = rootEl.firstChild;
+      while (child) {
+        const next = child.nextSibling;
+        if (child !== liveRegion) rootEl.removeChild(child);
+        child = next;
+      }
+      if (liveRegion.parentNode !== rootEl) {
+        rootEl.insertBefore(liveRegion, rootEl.firstChild);
+      }
       rootEl.appendChild(el('div', { className: 'am-scanline', 'aria-hidden': 'true' }));
       rootEl.appendChild(trigger);
       syncRunningClass();
@@ -454,6 +501,7 @@
         textContent: hasKey ? 'Key: ' + KeyStore.mask(KeyStore.get()) : '+ API Key',
         onClick: function () {
           app.showKeyEditor = !app.showKeyEditor;
+          if (!app.showKeyEditor) app.keyVisible = false;
           app.keyPromptNotice = '';
           renderKeybar();
           if (app.showKeyEditor && refs.keyInput) refs.keyInput.focus();
@@ -483,7 +531,7 @@
         title: 'Copy redacted Markdown status report',
         onClick: function () {
           const md = Probes.buildMarkdownSummary(app.results, app.catalog, KeyStore.get());
-          copyToClipboard(md)
+          copyToClipboard(md, dialog.open ? dialog : document.body)
             .then(function () {
               copyMdBtn.textContent = 'Copied ✓';
               setTimeout(function () { copyMdBtn.textContent = 'Copy MD'; }, 1500);
@@ -580,6 +628,7 @@
                   cancelAllRuns();
                   KeyStore.clear();
                   app.showKeyEditor = true;
+                  app.keyVisible = false;
                   app.keyPromptNotice = 'Key cleared from browser storage.';
                   renderAll();
                 }
@@ -666,6 +715,7 @@
                   textContent: 'Cancel',
                   onClick: function () {
                     app.showKeyEditor = false;
+                    app.keyVisible = false;
                     app.keyPromptNotice = '';
                     renderKeybar();
                   }
@@ -1126,27 +1176,64 @@
       }
 
       // Isolated Tab + Code Section (switching tabs never interrupts audio playback)
-      const codeSection = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+      const tabEntries = [
+        ['curl', 'Redacted cURL'],
+        ['raw', 'Raw Response']
+      ];
+      const codeWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+      const tabs = el('div', {
+        className: 'am-tabs',
+        role: 'tablist',
+        'aria-label': 'Inspector payload format',
+        onKeydown: function (e) {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+          e.preventDefault();
+          e.stopPropagation();
+          const ids = tabEntries.map(function (entry) { return entry[0]; });
+          const curIdx = Math.max(0, ids.indexOf(app.drawerTab));
+          let nextIdx = curIdx;
+          if (e.key === 'ArrowRight') nextIdx = (curIdx + 1) % ids.length;
+          else if (e.key === 'ArrowLeft') nextIdx = (curIdx - 1 + ids.length) % ids.length;
+          else if (e.key === 'Home') nextIdx = 0;
+          else if (e.key === 'End') nextIdx = ids.length - 1;
+          const nextTab = ids[nextIdx];
+          app.drawerTab = nextTab;
+          renderDrawerCodeSection(nextTab);
+        }
+      });
+      const codeSection = el('div', {
+        id: 'am-tabpanel-code',
+        role: 'tabpanel',
+        style: { display: 'flex', flexDirection: 'column', gap: '10px' }
+      });
+      codeWrap.appendChild(tabs);
+      codeWrap.appendChild(codeSection);
 
       function renderDrawerCodeSection(focusTabId) {
+        clearNode(tabs);
         clearNode(codeSection);
-        const tabs = el('div', { className: 'am-tabs', role: 'tablist' }, [
-          ['curl', 'Redacted cURL'],
-          ['raw', 'Raw Response']
-        ].map(function (entry) {
-          return el('button', {
-            type: 'button',
-            role: 'tab',
-            className: 'am-tab-btn',
-            dataset: { tabId: entry[0] },
-            'aria-selected': String(app.drawerTab === entry[0]),
-            textContent: entry[1],
-            onClick: function () {
-              app.drawerTab = entry[0];
-              renderDrawerCodeSection(entry[0]);
-            }
-          });
-        }));
+        codeSection.setAttribute('aria-labelledby', 'am-tab-' + app.drawerTab);
+
+        tabEntries.forEach(function (entry) {
+          const isActive = app.drawerTab === entry[0];
+          tabs.appendChild(
+            el('button', {
+              type: 'button',
+              id: 'am-tab-' + entry[0],
+              role: 'tab',
+              className: 'am-tab-btn',
+              dataset: { tabId: entry[0] },
+              'aria-selected': String(isActive),
+              'aria-controls': 'am-tabpanel-code',
+              tabindex: isActive ? '0' : '-1',
+              textContent: entry[1],
+              onClick: function () {
+                app.drawerTab = entry[0];
+                renderDrawerCodeSection(entry[0]);
+              }
+            })
+          );
+        });
 
         const codeText =
           app.drawerTab === 'curl'
@@ -1158,7 +1245,7 @@
           className: 'am-btn am-btn--sm',
           textContent: app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
-            copyToClipboard(codeText)
+            copyToClipboard(codeText, dialog.open ? dialog : document.body)
               .then(function () {
                 copyBtn.textContent = 'Copied ✓';
                 setTimeout(function () {
@@ -1174,7 +1261,6 @@
           }
         });
 
-        codeSection.appendChild(tabs);
         codeSection.appendChild(
           el('div', { className: 'am-code-bar' }, [
             el('span', {
@@ -1187,13 +1273,13 @@
         codeSection.appendChild(el('pre', { className: 'am-pre', textContent: codeText }));
 
         if (focusTabId) {
-          const tabEl = codeSection.querySelector('[data-tab-id="' + focusTabId + '"]');
+          const tabEl = tabs.querySelector('[data-tab-id="' + focusTabId + '"]');
           if (tabEl) tabEl.focus();
         }
       }
 
       renderDrawerCodeSection(null);
-      body.appendChild(codeSection);
+      body.appendChild(codeWrap);
 
       refs.drawer.appendChild(head);
       refs.drawer.appendChild(body);
@@ -1589,7 +1675,10 @@
     function openSecondaryGrid(opts) {
       const fromDeepLink = Boolean(opts && opts.fromDeepLink);
       app.openedFromGrid = !fromDeepLink && location.hash !== '#api-matrix';
+      app.closingViaHistory = false;
+      app.closingProgrammatically = false;
       app.showKeyEditor = !KeyStore.get();
+      app.keyVisible = false;
       app.keyPromptNotice = '';
 
       if (!refs.topbar) buildDialogShell();
@@ -1606,6 +1695,9 @@
 
     function closeSecondaryGridInternal() {
       stopActiveAudio();
+      app.closingViaHistory = false;
+      app.keyVisible = false;
+      if (refs.keyInput) refs.keyInput.type = 'password';
       app.drawerMode = null;
       app.drawerReturnTarget = null;
       if (refs.mainWrap) refs.mainWrap.inert = false;
@@ -1621,8 +1713,10 @@
     }
 
     function closeSecondaryGrid() {
+      if (app.closingViaHistory) return;
       if (app.openedFromGrid && location.hash === '#api-matrix' && history && typeof history.back === 'function') {
         app.openedFromGrid = false;
+        app.closingViaHistory = true;
         history.back();
         return;
       }
@@ -1651,7 +1745,11 @@
         app.closingProgrammatically = false;
         return;
       }
+      if (unmounted) return;
       stopActiveAudio();
+      app.closingViaHistory = false;
+      app.keyVisible = false;
+      if (refs.keyInput) refs.keyInput.type = 'password';
       app.drawerMode = null;
       app.drawerReturnTarget = null;
       if (refs.mainWrap) refs.mainWrap.inert = false;
@@ -1667,6 +1765,7 @@
 
     dialog.addEventListener('keydown', function (e) {
       if (app.drawerMode !== 'endpoint') return;
+      if (e.target && typeof e.target.closest === 'function' && e.target.closest('[role="tablist"]')) return;
       const tag = e.target && e.target.tagName ? e.target.tagName.toLowerCase() : '';
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'audio' || tag === 'video') return;
       const filtered = getFilteredEndpoints();
@@ -1687,6 +1786,8 @@
     });
 
     function syncHashState() {
+      if (unmounted) return;
+      app.closingViaHistory = false;
       if (location.hash === '#api-matrix') {
         if (!dialog.open) openSecondaryGrid({ fromDeepLink: true });
       } else if (dialog.open) {
@@ -1694,19 +1795,63 @@
       }
     }
 
+    function onWindowFocus() {
+      if (!unmounted && !dialog.open) renderPrimaryCell();
+    }
+
     global.addEventListener('hashchange', syncHashState);
     global.addEventListener('popstate', syncHashState);
     global.addEventListener('gemini-key-changed', renderAll);
     global.addEventListener('storage', renderAll);
-    global.addEventListener('focus', function () {
-      if (!dialog.open) renderPrimaryCell();
-    });
+    global.addEventListener('focus', onWindowFocus);
     global.addEventListener('beforeunload', revokeAllMediaUrls);
+
+    function unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      app.runSeq += 1;
+      if (announceTimer !== null) {
+        clearTimeout(announceTimer);
+        announceTimer = null;
+      }
+      if (app.batchAbort) {
+        try { app.batchAbort.abort(); } catch (_e) {}
+        app.batchAbort = null;
+      }
+      Object.keys(app.singleAborts).forEach(function (id) {
+        try { app.singleAborts[id].abort(); } catch (_e) {}
+      });
+      app.singleAborts = Object.create(null);
+      stopActiveAudio();
+      revokeAllMediaUrls();
+      global.removeEventListener('hashchange', syncHashState);
+      global.removeEventListener('popstate', syncHashState);
+      global.removeEventListener('gemini-key-changed', renderAll);
+      global.removeEventListener('storage', renderAll);
+      global.removeEventListener('focus', onWindowFocus);
+      global.removeEventListener('beforeunload', revokeAllMediaUrls);
+      if (dialog.open) {
+        app.closingProgrammatically = true;
+        try { dialog.close(); } catch (_e) {}
+      }
+      if (dialog.parentNode) {
+        dialog.parentNode.removeChild(dialog);
+      }
+      clearNode(rootEl);
+      rootEl.classList.remove('is-running');
+      delete rootEl.dataset.amMounted;
+      delete rootEl._amUnmount;
+      delete dialog._amOwnerUnmount;
+    }
+
+    rootEl._amUnmount = unmount;
+    dialog._amOwnerUnmount = unmount;
 
     renderPrimaryCell();
     if (location.hash === '#api-matrix') {
       openSecondaryGrid({ fromDeepLink: true });
     }
+    return unmount;
   }
 
   function bootstrap() {
