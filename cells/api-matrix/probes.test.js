@@ -666,8 +666,65 @@ async function runTests() {
   assert.equal(nullNoulRes.badge, 'HTTP 200');
   assert.ok(nullNoulRes.summary.includes('noul = n/a'));
 
+  // 21. validateApiKey rejects values fetch() cannot send as a header (no request, no fake NETWORK ERR)
+  assert.equal(typeof Probes.validateApiKey, 'function');
+  assert.equal(Probes.validateApiKey('   ').ok, false);
+  assert.equal(Probes.validateApiKey('AIza✓bad').ok, false);
+  assert.equal(Probes.validateApiKey('AIza bad key').ok, false);
+  assert.equal(Probes.validateApiKey('  ' + fakeKey + '\n').key, fakeKey);
+  assert.equal(Probes.validateApiKey(fakeKey).ok, true);
+  // Non-AIza tokens stay allowed (the server decides validity)
+  assert.equal(Probes.validateApiKey(nonAizaKey).ok, true);
+  assert.equal(Probes.validateApiKey(weirdKey).ok, true);
+
+  // 22. Stage 0 halt on an unreachable host reports haltReason 'network', not a rejected key
+  const offlineEnv = loadMatrixModules({
+    fetch: async () => { throw new TypeError('Failed to fetch'); }
+  });
+  const offlineOutcome = await offlineEnv.ns.Probes.runBatch({ apiKey: fakeKey, onResult: () => {} });
+  assert.equal(offlineOutcome.haltedOnAuth, true);
+  assert.equal(offlineOutcome.haltReason, 'network');
+  assert.equal(haltOutcome.haltReason, 'auth');
+  assert.equal(batchOutcome.haltReason, null);
+
+  // 23. KeyStore keeps a memory-only key when storage writes throw (quota / private mode),
+  // and a Cell #1 clear still propagates (no stale key resurrection)
+  function throwingWriteStorage() {
+    return {
+      getItem: () => null,
+      setItem: () => { throw new Error('QuotaExceededError'); },
+      removeItem: () => {}
+    };
+  }
+  const quotaEnv = loadMatrixModules({ sessionStorage: throwingWriteStorage(), localStorage: throwingWriteStorage() });
+  assert.equal(quotaEnv.ns.KeyStore.set(fakeKey, false), 'memory');
+  assert.equal(quotaEnv.ns.KeyStore.get(), fakeKey);
+  assert.equal(quotaEnv.ns.KeyStore.getStorageType(), 'memory');
+  assert.equal(quotaEnv.ns.KeyStore.isStorageRestricted(), true);
+  quotaEnv.ns.KeyStore.clear();
+  assert.equal(quotaEnv.ns.KeyStore.get(), '');
+
+  const quotaDecEnv = loadMatrixModules(
+    { sessionStorage: throwingWriteStorage(), localStorage: throwingWriteStorage() },
+    { withDecisions: true }
+  );
+  quotaDecEnv.ns.KeyStore.set(fakeKey, true);
+  assert.equal(quotaDecEnv.ns.KeyStore.get(), fakeKey);
+  quotaDecEnv.sandbox.GeminiDecisions.Client.KeyStore.clear();
+  assert.equal(quotaDecEnv.ns.KeyStore.get(), '');
+  // Normal storage path is unchanged: a sibling clear empties the key
+  const normalEnv = loadMatrixModules({}, { withDecisions: true });
+  normalEnv.ns.KeyStore.set(fakeKey, true);
+  assert.equal(normalEnv.ns.KeyStore.getStorageType(), 'local');
+  normalEnv.sandbox.GeminiDecisions.Client.KeyStore.clear();
+  assert.equal(normalEnv.ns.KeyStore.get(), '');
+
+  // 24. mask never reveals most of a short value
+  assert.equal(KeyStore.mask('123456789').includes('1234'), false);
+  assert.equal(KeyStore.mask(fakeKey), 'AIza••••7890');
+
   assert.equal(Probes.ENDPOINTS.length, 18);
-  console.log('ALL 20 API MATRIX UNIT & INTEGRATION TESTS PASSED (18 endpoints verified)');
+  console.log('ALL 24 API MATRIX UNIT & INTEGRATION TESTS PASSED (18 endpoints verified)');
 }
 
 runTests().catch((err) => {

@@ -13,6 +13,9 @@
 
   let memoryKey = '';
   let storageRestricted = false;
+  // True when the last KeyStore.set could not write sessionStorage/localStorage (quota, private mode)
+  // and the key lives only in memory; get() must then not read "empty storage" as a clear.
+  let memoryFallback = false;
 
   function safeStorageGet(storeName, key) {
     try {
@@ -61,22 +64,23 @@
         memoryKey = l;
         return l;
       }
-      // If browser storage is writable and both stores are empty, a clear happened elsewhere.
-      if (!storageRestricted) {
+      // If browser storage is readable, both stores are empty and our last save did reach storage,
+      // a clear happened elsewhere.
+      if (!storageRestricted && !memoryFallback) {
         memoryKey = '';
         return '';
       }
-      if (
+      const decisionsKs =
         global.GeminiDecisions &&
         global.GeminiDecisions.Client &&
-        global.GeminiDecisions.Client.KeyStore &&
-        typeof global.GeminiDecisions.Client.KeyStore.get === 'function'
-      ) {
-        const fromDecisions = global.GeminiDecisions.Client.KeyStore.get();
-        if (fromDecisions) {
-          memoryKey = fromDecisions;
-          return fromDecisions;
-        }
+        global.GeminiDecisions.Client.KeyStore;
+      if (decisionsKs && typeof decisionsKs.get === 'function') {
+        // Cell #1 keeps the same key in its closure; its clear() empties it, so it is the
+        // cross-cell source of truth while storage cannot hold the key.
+        let fromDecisions = '';
+        try { fromDecisions = decisionsKs.get() || ''; } catch (_err) {}
+        memoryKey = fromDecisions;
+        return fromDecisions;
       }
       return memoryKey || '';
     },
@@ -102,6 +106,7 @@
           mode = safeStorageSet('sessionStorage', SESSION_KEY, cleaned) ? 'session' : 'memory';
         }
       }
+      memoryFallback = mode === 'memory';
 
       // Keep sibling cells' closure caches in sync so all cells stay live without reloading.
       ['GeminiDecisions', 'GeminiProsody'].forEach(function (nsName) {
@@ -127,14 +132,33 @@
     mask: function (key) {
       const k = String(key || '').trim();
       if (!k) return '';
-      if (k.length <= 8) return '••••' + k.slice(-2);
+      // Never reveal more than a quarter of a short value (a 9-char value used to show 8 chars).
+      if (k.length < 16) return '••••' + k.slice(-2);
       return k.slice(0, 4) + '••••' + k.slice(-4);
     },
 
     isStorageRestricted: function () {
-      return storageRestricted;
+      return storageRestricted || memoryFallback;
     }
   };
+
+  // Rejects input that can never be sent as an HTTP header value: fetch() throws
+  // "String contains non ISO-8859-1 code point" before any request leaves the browser,
+  // which used to surface as a misleading NETWORK ERR / "Key rejected" halt.
+  // Format (AIza prefix, length) is left to the server, which answers 400 API_KEY_INVALID.
+  function validateApiKey(rawKey) {
+    const key = String(rawKey == null ? '' : rawKey).trim();
+    if (!key) {
+      return { ok: false, key: '', error: 'Paste a Gemini API key (AIza...) first.' };
+    }
+    if (/\s/.test(key)) {
+      return { ok: false, key: key, error: 'API key contains spaces or line breaks. Paste the key only.' };
+    }
+    if (/[^\x21-\x7E]/.test(key)) {
+      return { ok: false, key: key, error: 'API key contains non-ASCII characters and cannot be sent in a request header.' };
+    }
+    return { ok: true, key: key, error: '' };
+  }
 
   function stripModelsPrefix(id) {
     return String(id || '').trim().replace(/^models\//i, '');
@@ -2666,14 +2690,20 @@
     // Stage 0: Blocking gate — verify key & discover models before firing 17 other probes.
     return executeId('models', false).then(function (modelsRes) {
       if (signal && signal.aborted) throw { aborted: true };
-      const authFailed =
+      const keyRejected =
         modelsRes.httpStatus === 401 ||
         modelsRes.httpStatus === 403 ||
-        modelsRes.badge === 'INVALID KEY' ||
-        modelsRes.badge === 'NETWORK ERR';
+        modelsRes.badge === 'INVALID KEY';
+      const unreachable = modelsRes.badge === 'NETWORK ERR';
 
-      if (authFailed) {
-        return { haltedOnAuth: true, catalog: catalog, modelsResult: modelsRes };
+      if (keyRejected || unreachable) {
+        // haltedOnAuth is kept for existing callers; haltReason tells the UI which message is true.
+        return {
+          haltedOnAuth: true,
+          haltReason: keyRejected ? 'auth' : 'network',
+          catalog: catalog,
+          modelsResult: modelsRes
+        };
       }
 
       const stage1Ids = ENDPOINTS.filter(function (e) {
@@ -2705,7 +2735,7 @@
           signal
         );
       }).then(function () {
-        return { haltedOnAuth: false, catalog: catalog, modelsResult: modelsRes };
+        return { haltedOnAuth: false, haltReason: null, catalog: catalog, modelsResult: modelsRes };
       });
     });
   }
@@ -2781,6 +2811,7 @@
     stripModelsPrefix: stripModelsPrefix,
     withModelsPrefix: withModelsPrefix,
     redactSecrets: redactSecrets,
+    validateApiKey: validateApiKey,
     sanitizePayloadForInspector: sanitizePayloadForInspector,
     buildSafeTextGenConfig: buildSafeTextGenConfig,
     extractVisibleText: extractVisibleText,

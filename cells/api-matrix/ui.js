@@ -155,6 +155,9 @@
       activeAudioEl: null
     };
 
+    // Storage keys shared with cells/decisions and cells/prosody (read-only here; see probes.js KeyStore).
+    const SHARED_KEY_NAMES = ['dc_gemini_api_key_session', 'dc_gemini_api_key_local'];
+
     const liveRegion = el('div', {
       className: 'am-sr-only',
       role: 'status',
@@ -277,6 +280,70 @@
 
     const refs = {};
 
+    // -------------------------------------------------------------------------
+    // Focus preservation across re-renders. Every render function rebuilds its
+    // controls, which used to drop keyboard focus to <body> on each probe update,
+    // filter click, Stop, Save or window focus. Focusable controls carry a stable
+    // data-am-focus key (and optional data-am-focus-fallback); after a render we
+    // restore focus only when it fell to body/dialog, never over a deliberate move.
+    // -------------------------------------------------------------------------
+    let renderDepth = 0;
+
+    function focusWasLost() {
+      const a = document.activeElement;
+      return !a || a === document.body || a === document.documentElement || a === dialog || !a.isConnected;
+    }
+
+    function snapshotFocus() {
+      const a = document.activeElement;
+      if (!a || !a.dataset || !a.dataset.amFocus) return null;
+      if (!dialog.contains(a) && !rootEl.contains(a)) return null;
+      return {
+        key: a.dataset.amFocus,
+        fallback: a.dataset.amFocusFallback || null,
+        selStart: typeof a.selectionStart === 'number' ? a.selectionStart : null,
+        selEnd: typeof a.selectionEnd === 'number' ? a.selectionEnd : null
+      };
+    }
+
+    function findFocusable(key) {
+      if (!key) return null;
+      const scope = dialog.open ? dialog : rootEl;
+      const nodes = scope.querySelectorAll('[data-am-focus]');
+      for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        if (n.dataset.amFocus === key && !n.disabled && !n.closest('[inert]')) return n;
+      }
+      return null;
+    }
+
+    function restoreFocus(snap) {
+      if (!snap || unmounted || !focusWasLost()) return;
+      let target = findFocusable(snap.key) || findFocusable(snap.fallback);
+      if (!target && app.drawerMode) target = findFocusable('drawer-title');
+      if (!target) return;
+      try {
+        target.focus({ preventScroll: true });
+      } catch (_e) {
+        target.focus();
+      }
+      if (snap.selStart !== null && typeof target.setSelectionRange === 'function') {
+        try { target.setSelectionRange(snap.selStart, snap.selEnd); } catch (_e) {}
+      }
+    }
+
+    function preserveFocus(fn) {
+      if (renderDepth > 0) return fn();
+      const snap = snapshotFocus();
+      renderDepth += 1;
+      try {
+        return fn();
+      } finally {
+        renderDepth -= 1;
+        restoreFocus(snap);
+      }
+    }
+
     function buildDialogShell() {
       clearNode(dialog);
 
@@ -392,6 +459,7 @@
         {
           type: 'button',
           className: 'am-cell-trigger',
+          dataset: { amFocus: 'trigger' },
           'aria-haspopup': 'dialog',
           'aria-controls': 'am-dialog',
           'aria-label': ariaSummary,
@@ -468,6 +536,7 @@
       const backBtn = el('button', {
         type: 'button',
         className: 'am-btn',
+        dataset: { amFocus: 'back' },
         textContent: '← Back to Grid',
         onClick: function () {
           closeSecondaryGrid();
@@ -487,7 +556,7 @@
       const modelsBtn = el('button', {
         type: 'button',
         className: 'am-btn',
-        dataset: { action: 'models' },
+        dataset: { action: 'models', amFocus: 'models' },
         textContent: app.catalog.models.length ? app.catalog.models.length + ' Models' : 'Models (0)',
         title: 'Browse models discovered from GET /v1beta/models',
         onClick: function () {
@@ -498,9 +567,12 @@
       const keyToggleBtn = el('button', {
         type: 'button',
         className: 'am-btn',
+        dataset: { amFocus: 'key-toggle' },
         textContent: hasKey ? 'Key: ' + KeyStore.mask(KeyStore.get()) : '+ API Key',
         onClick: function () {
-          app.showKeyEditor = !app.showKeyEditor;
+          // With no key the editor is the only keybar state, so this control always opens it
+          // (a plain toggle made the first click a no-op).
+          app.showKeyEditor = KeyStore.get() ? !app.showKeyEditor : true;
           if (!app.showKeyEditor) app.keyVisible = false;
           app.keyPromptNotice = '';
           renderKeybar();
@@ -512,12 +584,14 @@
         ? el('button', {
             type: 'button',
             className: 'am-btn am-btn--stop',
+            dataset: { amFocus: 'run' },
             textContent: 'Stop (' + app.batchCompleted + '/' + app.batchTotal + ')',
             onClick: cancelAllRuns
           })
         : el('button', {
             type: 'button',
             className: 'am-btn am-btn--primary',
+            dataset: { amFocus: 'run' },
             textContent: 'Run All Probes',
             onClick: function () {
               startBatchRun();
@@ -527,6 +601,7 @@
       const copyMdBtn = el('button', {
         type: 'button',
         className: 'am-btn',
+        dataset: { amFocus: 'copy-md' },
         textContent: 'Copy MD',
         title: 'Copy redacted Markdown status report',
         onClick: function () {
@@ -546,6 +621,7 @@
       const exportJsonBtn = el('button', {
         type: 'button',
         className: 'am-btn',
+        dataset: { amFocus: 'export' },
         textContent: 'Export JSON',
         title: 'Download redacted JSON report',
         onClick: function () {
@@ -586,8 +662,17 @@
 
     function renderKeybar() {
       if (!refs.keybar) return;
+      // Keep unsaved typing when the editor stays open across a re-render (another cell's
+      // gemini-key-changed / storage event, a failed save, or a probe prompt).
+      // Only text the user changed counts as a draft; an untouched field re-reads the store so an
+      // external clear/change is not overwritten by the stale key that was rendered into it.
+      const draft = refs.keyInput && app.showKeyEditor && refs.keyInput.value !== refs.keyInputRendered
+        ? refs.keyInput.value
+        : null;
+      const draftPersist = draft !== null && refs.persistCb ? refs.persistCb.checked : null;
       clearNode(refs.keybar);
       refs.keyInput = null;
+      refs.persistCb = null;
 
       const currentKey = KeyStore.get();
       const storageType = KeyStore.getStorageType();
@@ -613,6 +698,7 @@
               el('button', {
                 type: 'button',
                 className: 'am-btn am-btn--sm',
+                dataset: { amFocus: 'key-change' },
                 textContent: 'Change Key',
                 onClick: function () {
                   app.showKeyEditor = true;
@@ -631,6 +717,7 @@
                   app.keyVisible = false;
                   app.keyPromptNotice = 'Key cleared from browser storage.';
                   renderAll();
+                  if (refs.keyInput) refs.keyInput.focus();
                 }
               })
             ])
@@ -640,7 +727,8 @@
         const keyInput = el('input', {
           type: app.keyVisible ? 'text' : 'password',
           className: 'am-input',
-          value: currentKey,
+          dataset: { amFocus: 'key-input', amFocusFallback: 'key-change' },
+          value: draft !== null ? draft : currentKey,
           placeholder: 'Paste Google AI Studio Gemini API key (AIza...)',
           autocomplete: 'off',
           spellcheck: 'false',
@@ -649,21 +737,24 @@
           'aria-label': 'Google AI Studio Gemini API key'
         });
         refs.keyInput = keyInput;
+        refs.keyInputRendered = keyInput.value;
 
         const persistCb = el('input', {
           type: 'checkbox',
-          checked: storageType === 'local'
+          dataset: { amFocus: 'key-persist' },
+          checked: draftPersist !== null ? draftPersist : storageType === 'local'
         });
+        refs.persistCb = persistCb;
 
         function saveCurrentKey(andRun) {
-          const val = keyInput.value.trim();
-          if (!val) {
-            app.keyPromptNotice = 'Paste a Gemini API key (AIza...) first.';
+          const check = Probes.validateApiKey(keyInput.value);
+          if (!check.ok) {
+            app.keyPromptNotice = check.error;
             renderKeybar();
             if (refs.keyInput) refs.keyInput.focus();
             return;
           }
-          KeyStore.set(val, persistCb.checked);
+          KeyStore.set(check.key, persistCb.checked);
           app.showKeyEditor = false;
           app.keyVisible = false;
           app.keyPromptNotice = '';
@@ -674,6 +765,7 @@
         const showToggleBtn = el('button', {
           type: 'button',
           className: 'am-btn am-btn--sm',
+          dataset: { amFocus: 'key-show' },
           textContent: app.keyVisible ? 'Hide' : 'Show',
           onClick: function () {
             app.keyVisible = !app.keyVisible;
@@ -698,6 +790,7 @@
             el('button', {
               type: 'button',
               className: 'am-btn',
+              dataset: { amFocus: 'key-save', amFocusFallback: 'key-change' },
               textContent: 'Save Key',
               onClick: function () {
                 saveCurrentKey(false);
@@ -706,18 +799,20 @@
             el('button', {
               type: 'submit',
               className: 'am-btn am-btn--live',
+              dataset: { amFocus: 'key-saverun', amFocusFallback: 'key-change' },
               textContent: 'Save & Run All'
             }),
             currentKey
               ? el('button', {
                   type: 'button',
                   className: 'am-btn am-btn--ghost am-btn--sm',
+                  dataset: { amFocus: 'key-cancel', amFocusFallback: 'key-change' },
                   textContent: 'Cancel',
                   onClick: function () {
                     app.showKeyEditor = false;
                     app.keyVisible = false;
                     app.keyPromptNotice = '';
-                    renderKeybar();
+                    preserveFocus(renderKeybar);
                   }
                 })
               : null
@@ -772,11 +867,14 @@
             {
               type: 'button',
               className: 'am-filter-pill',
+              dataset: { amFocus: 'filter:' + f.id },
               'aria-pressed': String(app.filter === f.id),
               onClick: function () {
                 app.filter = f.id;
-                renderFilterBar();
-                renderSecondaryGridCards();
+                preserveFocus(function () {
+                  renderFilterBar();
+                  renderSecondaryGridCards();
+                });
               }
             },
             [f.label, el('span', { className: 'am-filter-count', textContent: String(count) })]
@@ -786,6 +884,7 @@
 
       const groundingCb = el('input', {
         type: 'checkbox',
+        dataset: { amFocus: 'grounding' },
         checked: app.includeGrounding,
         onChange: function (e) {
           app.includeGrounding = e.target.checked;
@@ -800,6 +899,7 @@
         el('button', {
           type: 'button',
           className: 'am-btn am-btn--sm',
+          dataset: { amFocus: 'reset' },
           textContent: 'Reset Results',
           onClick: function () {
             cancelAllRuns();
@@ -830,11 +930,14 @@
             el('button', {
               type: 'button',
               className: 'am-btn',
+              dataset: { amFocus: 'show-all', amFocusFallback: 'filter:all' },
               textContent: 'Show All ' + Probes.ENDPOINTS.length,
               onClick: function () {
                 app.filter = 'all';
-                renderFilterBar();
-                renderSecondaryGridCards();
+                preserveFocus(function () {
+                  renderFilterBar();
+                  renderSecondaryGridCards();
+                });
               }
             })
           ])
@@ -927,6 +1030,7 @@
                 el('button', {
                   type: 'button',
                   className: 'am-btn am-btn--sm',
+                  dataset: { amFocus: 'test:' + ep.id, amFocusFallback: 'inspect:' + ep.id },
                   disabled: isProbing || app.isBatchRunning,
                   textContent: isProbing ? '…' : 'Test',
                   'aria-label': 'Test ' + ep.name,
@@ -938,6 +1042,7 @@
                 el('button', {
                   type: 'button',
                   className: 'am-btn am-btn--sm am-btn--ghost am-inspect-btn',
+                  dataset: { amFocus: 'inspect:' + ep.id },
                   textContent: 'Inspect →',
                   'aria-label': 'Inspect ' + ep.name,
                   onClick: function (e) {
@@ -963,7 +1068,18 @@
     function renderDrawer(opts) {
       if (!refs.scrim || !refs.drawer) return;
       const focusNav = opts && opts.focusNav ? opts.focusNav : null;
-      stopActiveAudio();
+      const viewKey = app.drawerMode === 'models'
+        ? 'models'
+        : app.drawerMode === 'endpoint'
+          ? 'endpoint:' + app.selectedEndpointId
+          : '';
+      // A re-render of the same view (probe progress, key/storage events) keeps the reader's
+      // scroll position and any playing TTS audio; switching views resets both.
+      const sameView = Boolean(viewKey) && refs.drawer.dataset.amView === viewKey;
+      const prevBody = refs.drawer.querySelector('.am-drawer-body');
+      const keepScroll = sameView && prevBody ? prevBody.scrollTop : 0;
+      if (!sameView) stopActiveAudio();
+      refs.drawer.dataset.amView = viewKey;
 
       if (!app.drawerMode) {
         refs.scrim.hidden = true;
@@ -976,8 +1092,14 @@
       if (refs.mainWrap) refs.mainWrap.inert = true;
       clearNode(refs.drawer);
 
+      function restoreDrawerScroll() {
+        const nextBody = refs.drawer.querySelector('.am-drawer-body');
+        if (nextBody && keepScroll > 0) nextBody.scrollTop = keepScroll;
+      }
+
       if (app.drawerMode === 'models') {
         renderModelsDrawerContent();
+        restoreDrawerScroll();
         return;
       }
 
@@ -999,7 +1121,7 @@
       const prevBtn = el('button', {
         type: 'button',
         className: 'am-btn am-btn--sm',
-        dataset: { nav: 'prev' },
+        dataset: { nav: 'prev', amFocus: 'nav-prev', amFocusFallback: 'nav-next' },
         disabled: !prevEp,
         'aria-label': 'Previous endpoint',
         textContent: '←',
@@ -1016,7 +1138,7 @@
       const nextBtn = el('button', {
         type: 'button',
         className: 'am-btn am-btn--sm',
-        dataset: { nav: 'next' },
+        dataset: { nav: 'next', amFocus: 'nav-next', amFocusFallback: 'nav-prev' },
         disabled: !nextEp,
         'aria-label': 'Next endpoint',
         textContent: '→',
@@ -1033,7 +1155,7 @@
       const head = el('div', { className: 'am-drawer-head' }, [
         el('div', { className: 'am-drawer-title-group' }, [
           el('span', { className: 'am-tag', textContent: ep.code }),
-          el('h2', { id: 'am-drawer-title', className: 'am-drawer-title', tabindex: '-1', textContent: ep.name })
+          el('h2', { id: 'am-drawer-title', className: 'am-drawer-title', tabindex: '-1', dataset: { amFocus: 'drawer-title' }, textContent: ep.name })
         ]),
         el('div', { className: 'am-drawer-nav' }, [
           prevBtn,
@@ -1041,6 +1163,7 @@
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--primary',
+            dataset: { amFocus: 'retest' },
             disabled: isProbing || app.isBatchRunning,
             textContent: isProbing ? 'Running…' : 'Re-test',
             onClick: function () {
@@ -1050,6 +1173,7 @@
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--ghost',
+            dataset: { amFocus: 'drawer-close' },
             'aria-label': 'Close Inspector',
             textContent: '×',
             onClick: closeDrawer
@@ -1084,6 +1208,7 @@
               el('button', {
                 type: 'button',
                 className: 'am-btn am-btn--sm am-btn--primary',
+                dataset: { amFocus: 'livegen' },
                 disabled: isProbing || app.isBatchRunning,
                 textContent: isProbing ? 'Generating…' : 'Run Live Image Gen',
                 onClick: function () {
@@ -1104,7 +1229,14 @@
       // Live TTS Audio Playback Stage
       if (res && res.audioMedia && app.objectUrls[ep.id]) {
         const audioUrl = app.objectUrls[ep.id];
-        const audioEl = el('audio', { controls: true, preload: 'auto', src: audioUrl });
+        // Re-attach the same <audio> on a same-view re-render so playback is not cut off.
+        let audioEl = app.activeAudioEl && app.activeAudioEl.getAttribute('src') === audioUrl
+          ? app.activeAudioEl
+          : null;
+        if (!audioEl) {
+          stopActiveAudio();
+          audioEl = el('audio', { controls: true, preload: 'auto', src: audioUrl });
+        }
         app.activeAudioEl = audioEl;
         body.appendChild(
           el('div', { className: 'am-media-stage' }, [
@@ -1112,6 +1244,7 @@
               el('span', { className: 'am-meta-label', textContent: 'Live Synthesized Audio (' + res.audioMedia.sourceMimeType + ' → WAV)' }),
               el('a', {
                 className: 'am-btn am-btn--sm',
+                dataset: { amFocus: 'download' },
                 href: audioUrl,
                 download: 'gemini-tts-probe.wav',
                 style: { textDecoration: 'none' },
@@ -1222,7 +1355,7 @@
               id: 'am-tab-' + entry[0],
               role: 'tab',
               className: 'am-tab-btn',
-              dataset: { tabId: entry[0] },
+              dataset: { tabId: entry[0], amFocus: 'tab:' + entry[0] },
               'aria-selected': String(isActive),
               'aria-controls': 'am-tabpanel-code',
               tabindex: isActive ? '0' : '-1',
@@ -1243,6 +1376,7 @@
         const copyBtn = el('button', {
           type: 'button',
           className: 'am-btn am-btn--sm',
+          dataset: { amFocus: 'copy-code' },
           textContent: app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
             copyToClipboard(codeText, dialog.open ? dialog : document.body)
@@ -1281,8 +1415,11 @@
       renderDrawerCodeSection(null);
       body.appendChild(codeWrap);
 
+      if (app.activeAudioEl && !body.contains(app.activeAudioEl)) stopActiveAudio();
+
       refs.drawer.appendChild(head);
       refs.drawer.appendChild(body);
+      restoreDrawerScroll();
 
       if (focusNav === 'prev') {
         if (!prevBtn.disabled) prevBtn.focus();
@@ -1308,6 +1445,7 @@
             id: 'am-drawer-title',
             className: 'am-drawer-title',
             tabindex: '-1',
+            dataset: { amFocus: 'drawer-title' },
             textContent: 'Discovered Models (' + models.length + ')'
           })
         ]),
@@ -1315,6 +1453,7 @@
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--primary',
+            dataset: { amFocus: 'models-refresh' },
             disabled: Boolean(app.probing.models) || app.isBatchRunning,
             textContent: app.probing.models ? 'Loading…' : 'Refresh',
             onClick: function () {
@@ -1324,6 +1463,7 @@
           el('button', {
             type: 'button',
             className: 'am-btn am-btn--sm am-btn--ghost',
+            dataset: { amFocus: 'drawer-close' },
             'aria-label': 'Close Models Browser',
             textContent: '×',
             onClick: closeDrawer
@@ -1335,6 +1475,7 @@
       const searchInput = el('input', {
         type: 'search',
         className: 'am-input',
+        dataset: { amFocus: 'models-search' },
         style: { maxWidth: 'none' },
         value: app.modelSearch,
         placeholder: 'Filter models by ID or method (e.g. tts, live, veo, embedContent)…',
@@ -1403,42 +1544,58 @@
     }
 
     function renderProgressUpdate(changedId) {
-      renderPrimaryCell();
-      if (dialog.open) {
-        renderTopbar();
-        renderFilterBar();
-        renderSecondaryGridCards();
-        if (app.drawerMode === 'endpoint' && (!changedId || app.selectedEndpointId === changedId)) {
-          renderDrawer();
-        } else if (app.drawerMode === 'models' && changedId === 'models') {
-          const prevSearch = refs.drawer && refs.drawer.querySelector('input[type="search"]');
-          const wasFocused = prevSearch && document.activeElement === prevSearch;
-          const selStart = wasFocused ? prevSearch.selectionStart : null;
-          renderDrawer();
-          if (wasFocused) {
-            const nextSearch = refs.drawer && refs.drawer.querySelector('input[type="search"]');
-            if (nextSearch) {
-              nextSearch.focus();
-              if (typeof selStart === 'number') {
-                try { nextSearch.setSelectionRange(selStart, selStart); } catch (_e) {}
-              }
-            }
+      preserveFocus(function () {
+        renderPrimaryCell();
+        if (dialog.open) {
+          renderTopbar();
+          renderFilterBar();
+          renderSecondaryGridCards();
+          // changedId null = batch start/stop/finish: both drawers must refresh their
+          // disabled Re-test / Refresh buttons (Refresh used to stay disabled after a batch).
+          if (app.drawerMode === 'endpoint' && (!changedId || app.selectedEndpointId === changedId)) {
+            renderDrawer();
+          } else if (app.drawerMode === 'models' && (!changedId || changedId === 'models')) {
+            renderDrawer();
           }
         }
-      }
-      syncRunningClass();
+        syncRunningClass();
+      });
+    }
+
+    function renderSecondarySections() {
+      renderTopbar();
+      renderKeybar();
+      renderFilterBar();
+      renderSecondaryGridCards();
+      // Always: with drawerMode null this hides the scrim. A dialog closed with a drawer open
+      // (browser Back, forced Escape) used to reopen with a stale drawer over an inert grid.
+      renderDrawer();
     }
 
     function renderAll() {
-      renderPrimaryCell();
-      if (dialog.open) {
-        renderTopbar();
-        renderKeybar();
-        renderFilterBar();
+      preserveFocus(function () {
+        renderPrimaryCell();
+        if (dialog.open) renderSecondarySections();
+        syncRunningClass();
+      });
+    }
+
+    function onStorage(e) {
+      // file:// pages share one localStorage origin; only react to the shared Gemini key.
+      if (!e || e.key === null || SHARED_KEY_NAMES.indexOf(e.key) >= 0) renderAll();
+    }
+
+    function endpointLabel(id) {
+      const def = getEndpointDef(id);
+      return def ? def.name : id;
+    }
+
+    function renderStatusNote(id) {
+      if (!dialog.open) return;
+      preserveFocus(function () {
         renderSecondaryGridCards();
-        if (app.drawerMode) renderDrawer();
-      }
-      syncRunningClass();
+        if (app.drawerMode === 'endpoint' && app.selectedEndpointId === id) renderDrawer();
+      });
     }
 
     // =========================================================================
@@ -1446,13 +1603,20 @@
     // =========================================================================
 
     function requireKeyOrPrompt() {
-      const key = KeyStore.get();
-      if (key) return key;
+      const stored = KeyStore.get();
+      // Decisions/Prosody write the same store, so a stored key is re-validated here too.
+      const check = Probes.validateApiKey(stored);
+      if (check.ok) return check.key;
+      // The key editor sits under the inert grid shell; with a drawer open the prompt was
+      // invisible and the Re-test / Run Live Image Gen / Refresh buttons looked dead.
+      if (app.drawerMode) closeDrawer({ restoreFocus: false });
       app.showKeyEditor = true;
-      app.keyPromptNotice = 'Paste your Google AI Studio Gemini API key first to run live tests.';
+      app.keyPromptNotice = stored
+        ? check.error
+        : 'Paste your Google AI Studio Gemini API key first to run live tests.';
       renderKeybar();
       if (refs.keyInput) refs.keyInput.focus();
-      announce('API key required before running probes.');
+      announce(stored ? check.error : 'API key required before running probes.');
       return '';
     }
 
@@ -1495,10 +1659,7 @@
         onStatusNote: function (note) {
           if (seq !== app.runSeq) return;
           app.statusNotes[endpointId] = note;
-          if (dialog.open) {
-            renderSecondaryGridCards();
-            if (app.drawerMode === 'endpoint' && app.selectedEndpointId === endpointId) renderDrawer();
-          }
+          renderStatusNote(endpointId);
         }
       })
         .then(function (result) {
@@ -1508,7 +1669,7 @@
           delete app.statusNotes[endpointId];
           storeProbeResult(endpointId, result);
           renderProgressUpdate(endpointId);
-          announce(endpointId + ' probe finished: ' + result.badge + '.');
+          announce(endpointLabel(endpointId) + ' probe finished: ' + result.badge + '.');
         })
         .catch(function (err) {
           if (seq !== app.runSeq) return;
@@ -1573,10 +1734,7 @@
         onStatusNote: function (id, note) {
           if (seq !== app.runSeq) return;
           app.statusNotes[id] = note;
-          if (dialog.open) {
-            renderSecondaryGridCards();
-            if (app.drawerMode === 'endpoint' && app.selectedEndpointId === id) renderDrawer();
-          }
+          renderStatusNote(id);
         },
         onResult: function (id, result) {
           if (seq !== app.runSeq) return;
@@ -1598,8 +1756,12 @@
           app.batchProbing = Object.create(null);
           if (outcome && outcome.haltedOnAuth) {
             app.showKeyEditor = true;
-            app.keyPromptNotice = 'Key rejected by /v1beta/models — halted remaining probes to avoid redundant failures.';
-            renderKeybar();
+            app.keyPromptNotice = outcome.haltReason === 'network'
+              ? 'Could not reach generativelanguage.googleapis.com (' +
+                ((outcome.modelsResult && outcome.modelsResult.summary) || 'network error') +
+                ') — halted remaining probes.'
+              : 'Key rejected by /v1beta/models — halted remaining probes to avoid redundant failures.';
+            preserveFocus(renderKeybar);
           }
           renderProgressUpdate(null);
           const c = getCounts();
@@ -1620,7 +1782,7 @@
           }
           app.showKeyEditor = true;
           app.keyPromptNotice = 'Probe sweep failed unexpectedly: ' + Probes.redactSecrets(err && err.message ? err.message : String(err), apiKey);
-          renderKeybar();
+          preserveFocus(renderKeybar);
           renderProgressUpdate(null);
           announce('Probe sweep failed unexpectedly.');
         });
@@ -1648,7 +1810,8 @@
       if (titleEl) titleEl.focus();
     }
 
-    function closeDrawer() {
+    function closeDrawer(opts) {
+      const restore = !(opts && opts.restoreFocus === false);
       const target = app.drawerReturnTarget;
       stopActiveAudio();
       app.drawerMode = null;
@@ -1666,9 +1829,12 @@
           if (modelsBtn) modelsBtn.focus();
         }
       }
+      if (!restore) return;
       focusTarget();
       if (typeof requestAnimationFrame === 'function') {
-        requestAnimationFrame(focusTarget);
+        requestAnimationFrame(function () {
+          if (!unmounted && focusWasLost()) focusTarget();
+        });
       }
     }
 
@@ -1682,7 +1848,13 @@
       app.keyPromptNotice = '';
 
       if (!refs.topbar) buildDialogShell();
-      if (!dialog.open) dialog.showModal();
+      if (!dialog.open) {
+        refs.keyInput = null; // never carry unsaved key text from a previous open into this one
+        // Render before showModal so the dialog's initial focus lands on a real control
+        // (it used to land on the empty dialog / <body>).
+        renderSecondarySections();
+        dialog.showModal();
+      }
 
       if (!fromDeepLink && location.hash !== '#api-matrix' && history && typeof history.pushState === 'function') {
         try {
@@ -1691,6 +1863,12 @@
       }
 
       renderAll();
+      // Explicit initial focus: below 640px .am-shell is a scroll container, which Chrome's
+      // dialog focusing steps pick ahead of the Back button.
+      const initialFocus = app.showKeyEditor && refs.keyInput ? refs.keyInput : findFocusable('back');
+      if (initialFocus && !initialFocus.contains(document.activeElement)) {
+        try { initialFocus.focus({ preventScroll: true }); } catch (_e) { initialFocus.focus(); }
+      }
     }
 
     function closeSecondaryGridInternal() {
@@ -1700,7 +1878,7 @@
       if (refs.keyInput) refs.keyInput.type = 'password';
       app.drawerMode = null;
       app.drawerReturnTarget = null;
-      if (refs.mainWrap) refs.mainWrap.inert = false;
+      renderDrawer(); // hides the scrim and un-inerts the grid shell
       if (dialog.open) {
         app.closingProgrammatically = true;
         dialog.close();
@@ -1712,12 +1890,16 @@
       }
     }
 
-    function closeSecondaryGrid() {
-      if (app.closingViaHistory) return;
+    function closeSecondaryGrid(opts) {
+      const immediate = Boolean(opts && opts.immediate);
+      if (app.closingViaHistory && !immediate) return;
       if (app.openedFromGrid && location.hash === '#api-matrix' && history && typeof history.back === 'function') {
         app.openedFromGrid = false;
         app.closingViaHistory = true;
         history.back();
+        // popstate -> syncHashState closes the dialog; when the browser is closing it right now
+        // (non-cancelable cancel) run the close path here so focus and state are not left behind.
+        if (immediate) closeSecondaryGridInternal();
         return;
       }
       app.openedFromGrid = false;
@@ -1731,6 +1913,13 @@
 
     // 2-step Escape stack: Drawer first, then Secondary Grid.
     dialog.addEventListener('cancel', function (e) {
+      if (!e.cancelable) {
+        // Chrome's close-watcher abuse guard: with no user activation since the last Escape the
+        // cancel cannot be prevented and the dialog closes anyway. Only closing the drawer here
+        // left #api-matrix in the URL and focus on <body>; run the full close path instead.
+        closeSecondaryGrid({ immediate: true });
+        return;
+      }
       e.preventDefault();
       if (app.drawerMode) {
         closeDrawer();
@@ -1752,7 +1941,7 @@
       if (refs.keyInput) refs.keyInput.type = 'password';
       app.drawerMode = null;
       app.drawerReturnTarget = null;
-      if (refs.mainWrap) refs.mainWrap.inert = false;
+      renderDrawer();
       if (location.hash === '#api-matrix' && history && typeof history.replaceState === 'function') {
         try { history.replaceState(null, '', location.pathname + location.search); } catch (_e) {}
       }
@@ -1796,13 +1985,13 @@
     }
 
     function onWindowFocus() {
-      if (!unmounted && !dialog.open) renderPrimaryCell();
+      if (!unmounted && !dialog.open) preserveFocus(renderPrimaryCell);
     }
 
     global.addEventListener('hashchange', syncHashState);
     global.addEventListener('popstate', syncHashState);
     global.addEventListener('gemini-key-changed', renderAll);
-    global.addEventListener('storage', renderAll);
+    global.addEventListener('storage', onStorage);
     global.addEventListener('focus', onWindowFocus);
     global.addEventListener('beforeunload', revokeAllMediaUrls);
 
@@ -1827,7 +2016,7 @@
       global.removeEventListener('hashchange', syncHashState);
       global.removeEventListener('popstate', syncHashState);
       global.removeEventListener('gemini-key-changed', renderAll);
-      global.removeEventListener('storage', renderAll);
+      global.removeEventListener('storage', onStorage);
       global.removeEventListener('focus', onWindowFocus);
       global.removeEventListener('beforeunload', revokeAllMediaUrls);
       if (dialog.open) {
