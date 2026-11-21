@@ -39,6 +39,11 @@ Cell 04 turns a MacBook's stereo speakers (`~30 cm` physical baseline across the
 - **Far-Zone Noise Floor Estimation (`ChirpSonarEngine._processFrame`)**: Noise floor samples both `4..55 cm` and quiet outer lags (`lagMax + 24 .. lagMax + 120`) using `min(nearMedian, farMedian)` so a broad near-field hand echo cannot inflate the noise floor and suppress its own SNR.
 - **Zero `innerHTML` & Strict 4:3 Lock (`chirp-sonar.js:h`, `chirp-sonar.css:.cs-stage`)**: All DOM updates use `textContent` / `dataset`; `.cs-stage` uses `position: absolute; inset: 0;` and `@container` breakpoints at `310px`, `235px`, and `180px` so the cell never blows out secondary grid row heights.
 - **Bus Coordination**: Subscribes to `bus.subscribeAudio` and ignores frames whenever `pkt.txMode !== 'chirp'` or while a local `Sim` playback is running; `stopSim()` always restores `engine.setAutoAlignDirectPath(true)` for live hardware alignment, `resetClutter()` clears partial `_frameFill` buffers, and `handleSecondaryClose()` stops simulation timers and cancels any pending `rafId` on `lg-secondary-close`.
+- **No Frames ⇒ Explicit Not-Live Readout (`chirp-sonar.js:renderNotLive`)**: once sonar stops being live (SONAR off → `txMode 'off'`, ARM ARRAY disarm, page close → bus `idle`) or a Sim ends while sonar is off, no further frames arrive, so `renderNotLive()` replaces `LISTENING` / `TRACKING` and the range readout with the last gesture (or `STANDBY`) and `--.-`.
+- **Hidden Tab (`chirp-sonar.js:mountChirpSonarCell` audio subscriber)**: the bus mutes TX and suspends its AudioContext while `document.hidden`. Any block that still arrives while hidden (async suspend, `processDuplexFrame` injection) carries `txMode: 'chirp'` but no chirp; it is dropped (no FFTs) and `engine.resetClutter()` runs on the first visible block after such a drop, so the direct path returning is relearned instead of showing as a phantom echo. A running Sim stops at its next tick when the tab hides.
+- **Below 40 kHz (`chirp-sonar.js:applyFrameToUi`)**: frames with `ultrasonicSupported === false` show `NO ULTRASOUND` (`16k mic < 40k`) instead of a permanent `CALIBRATING`; the status pill shows `LOW SR`.
+- **Status Pill Error Text (`chirp-sonar.js:updateStatusPill`)**: a bus error shows `SIM ONLY` (same wording as the nav bar) with the full bus message in `data-tip`, which `ui/tooltip.js` displays. Do not use `title` here: the tooltip copies a title into `data-tip` on first show, so a later-removed title would leave a stale error tip.
+- **Narrow Cells Hide Zero**: `@container (max-width: 310px)` hides `.cs-mini-btn--zero`, so at a `390px` page (`177px` cell) clutter re-zero is only reachable by toggling SONAR off/on.
 
 ---
 
@@ -46,7 +51,8 @@ Cell 04 turns a MacBook's stereo speakers (`~30 cm` physical baseline across the
 
 - **Syntax check**:
   `node --check cells/left-grille/chirp-sonar.js`
-- **Unit & synthesized 48 kHz acoustic physics test suite**:
+- **Hidden tabs**: in a background/hidden tab the Sim buttons stop at the first interval tick (by design, see Hidden Tab above); drive them in a visible tab, or override `document.hidden` when automating.
+- **Unit & synthesized 48 kHz acoustic physics test suite (14 tests, incl. not-live readout, hidden-tab skip, sub-40k label)**:
   `timeout 60 node --test cells/left-grille/chirp-sonar.test.js`
 - **Interactive verification**:
   Open the Left Grille secondary grid (`#left-grille`), inspect **Cell 04 (`18–20kHz Chirp Sonar`)**, click `Sim Push`, `Sim Pull`, and `Sim Wave` (alternating `→`/`←`) to verify live matched-filter waterfall trajectories and gesture readouts, or click `SONAR` on a 48 kHz MacBook to run live contactless ultrasonic sonar.

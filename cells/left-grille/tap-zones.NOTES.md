@@ -49,12 +49,15 @@ SharedAcousticBus (512-sample blocks, 48 kHz)
 - **Isolated Simulation Detector (`tap-zones.js:runSimulatedZoneTap`)**: Clicking a zone on the SVG runs the synthesized 48 kHz waveform through a fresh `TapZoneDetector` paired with the live `TapZoneClassifier` (sharing calibrated centroids) so clicking never perturbs the live microphone's adaptive noise floor or IIR biquad state.
 - **Zero `innerHTML` & Safe `localStorage` (`tap-zones.js:h`, `svgEl`, `loadStoredCalibration`)**: Every DOM/SVG element uses `createElement`/`createElementNS` + `textContent`; corrupt or restricted `localStorage` (`dwg.tapZonesCal.v1`) falls back cleanly to `FACTORY_CENTROIDS`.
 - **Sustained Noise / Fan Recovery (`tap-zones.js:TapZoneDetector._onMicroFrame`)**: Continuous non-tap noise lasting `> 550 ms` smoothly adapts `noiseFloorRms` upward inside `SUSTAINED_WAIT` so a laptop fan spinning up cannot permanently latch out tap detection.
+- **Hidden Tab Costs Nothing (`tap-zones.js:mountTapZonesCell` audio subscriber)**: the bus suspends its AudioContext while hidden (`shared-bus.js:_applyVisibilitySuspend`), and the subscriber additionally drops any block that still arrives while `document.hidden` (suspend is async; `processDuplexFrame` injection) and calls `engine.reset()` on the first visible block after such a drop, because the adaptive floor, pre-roll and clock anchor are stale after the gap.
+- **`[CAL 4Z]` Implicit Arm Is Scoped (`tap-zones.js:toggleCalibration` / `releaseCalArm`)**: Opening calibration on an `idle`/`error` bus calls `bus.requestArm()` so physical taps can be captured. That arm belongs to the calibration session: Cancel/Done, Escape, Reset and 4/4 completion call `bus.stopAll({ dispatchClose: false })`. Ownership is dropped (mic stays on) if the bus goes idle/error, another cell changes the TX mode (e.g. chirp sonar), or the user clicks `[ARM]`. A bus that was already live is never disarmed by CAL.
+- **Sim Clicks During CAL Persist Synthetic Centroids**: clicking SVG zones while `[CAL 4Z]` is open captures the synthesized waveform's features and saves them to `dwg.tapZonesCal.v1` like a real tap. Use `Reset` to return to factory centroids.
 
 ---
 
 ## 4. How to Run & Verify
 
-- **Syntax & unit tests (DSP, 4/4 accuracy, speech veto, ultrasonic immunity, calibration, Slot 2 contract)**:
+- **Syntax & unit tests (11: DSP, 4/4 accuracy, speech veto, ultrasonic immunity, calibration, Slot 2 contract, CAL arm release, hidden-tab skip)**:
   ```bash
   node --check cells/left-grille/tap-zones.js && timeout 60 node --test cells/left-grille/tap-zones.test.js
   ```

@@ -73,6 +73,10 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  function isDocHidden() {
+    return typeof document !== 'undefined' && Boolean(document) && document.hidden === true;
+  }
+
   function median(arr) {
     if (!arr || !arr.length) return 0;
     const sorted = Array.from(arr).sort((a, b) => a - b);
@@ -1539,6 +1543,7 @@
       const live = isSonarLive();
       sonarBtn.dataset.active = live ? 'true' : 'false';
       sonarBtn.setAttribute('aria-pressed', live ? 'true' : 'false');
+      if (typeof statusPill.removeAttribute === 'function') statusPill.removeAttribute('data-tip');
 
       if (simActive) {
         const tag =
@@ -1559,7 +1564,11 @@
         return;
       }
       if (busState.state === 'error') {
-        statusPill.textContent = busState.error ? String(busState.error).slice(0, 22) : 'MIC ERROR';
+        // Short label (same wording as the nav bar); the full bus message is the pill's tip.
+        // data-tip, not title: ui/tooltip.js copies a title into data-tip on first show, so a
+        // removed title would leave a stale error tip behind.
+        statusPill.textContent = 'SIM ONLY';
+        statusPill.setAttribute('data-tip', busState.error ? String(busState.error) : 'Mic error');
         statusPill.dataset.warn = 'true';
         return;
       }
@@ -1640,15 +1649,15 @@
         const g = frame.gestureEvent;
         gestureText.textContent = g.label;
         gestureText.dataset.kind = g.type;
-        if (g.type === 'push' || g.type === 'pull') {
-          const sign = g.deltaCm > 0 ? '+' : '';
-          gestureMeta.textContent = `${sign}${g.deltaCm.toFixed(0)}cm · ${g.confidence}%`;
-        } else {
-          gestureMeta.textContent = `Δt ${g.dtLRMs >= 0 ? '+' : ''}${g.dtLRMs}ms · ${g.confidence}%`;
-        }
+        gestureMeta.textContent = gestureMetaText(g);
         announce(`Chirp sonar detected ${g.label}`);
       } else if (now > gestureHoldUntil) {
-        if (frame.handPresent && Number.isFinite(frame.rangeCm)) {
+        if (frame.ultrasonicSupported === false) {
+          // Mic runs below 40 kHz (e.g. Bluetooth HFP): the bus mutes TX, so no echo can arrive.
+          gestureText.textContent = 'NO ULTRASOUND';
+          gestureText.dataset.kind = 'idle';
+          gestureMeta.textContent = `${Math.round((frame.sampleRate || 0) / 1000)}k mic < 40k`;
+        } else if (frame.handPresent && Number.isFinite(frame.rangeCm)) {
           gestureText.textContent = 'TRACKING';
           gestureText.dataset.kind = 'tracking';
           gestureMeta.textContent = `SNR ${frame.snr.toFixed(1)}x`;
@@ -1657,13 +1666,38 @@
           gestureText.dataset.kind = 'idle';
           gestureMeta.textContent = frame.warmedUp ? '18–20.5k Active' : 'Locking clutter';
         } else {
-          gestureText.textContent = activeGestureState ? activeGestureState.label : 'STANDBY';
-          gestureText.dataset.kind = activeGestureState ? activeGestureState.type : 'idle';
-          if (!activeGestureState) gestureMeta.textContent = 'Push · Pull · Wave';
+          renderIdleGesture();
         }
       }
 
       scheduleDraw();
+    }
+
+    function gestureMetaText(g) {
+      if (g.type === 'push' || g.type === 'pull') {
+        const sign = g.deltaCm > 0 ? '+' : '';
+        return `${sign}${g.deltaCm.toFixed(0)}cm · ${g.confidence}%`;
+      }
+      return `Δt ${g.dtLRMs >= 0 ? '+' : ''}${g.dtLRMs}ms · ${g.confidence}%`;
+    }
+
+    function renderIdleGesture() {
+      gestureText.textContent = activeGestureState ? activeGestureState.label : 'STANDBY';
+      gestureText.dataset.kind = activeGestureState ? activeGestureState.type : 'idle';
+      gestureMeta.textContent = activeGestureState
+        ? gestureMetaText(activeGestureState)
+        : 'Push · Pull · Wave';
+    }
+
+    // No frames arrive once sonar is off (TX mode changed, bus idle/closed, Sim ended), so the
+    // live LISTENING / TRACKING text and range readout must be cleared explicitly.
+    function renderNotLive() {
+      gestureHoldUntil = 0;
+      renderIdleGesture();
+      rangeVal.textContent = '--.-';
+      balFillL.style.width = '0%';
+      balFillR.style.width = '0%';
+      balNeedle.style.left = '50%';
     }
 
     function stopSim() {
@@ -1671,9 +1705,11 @@
         clearInterval(simTimer);
         simTimer = null;
       }
+      const wasSim = simActive;
       simActive = false;
       simKind = null;
       engine.setAutoAlignDirectPath(true);
+      if (wasSim && !isSonarLive()) renderNotLive();
       updateStatusPill();
     }
 
@@ -1712,6 +1748,11 @@
       // Stream active gesture + tail at real-time 48 kHz sonar cadence (~21.3 ms / chirp)
       simTimer = setInterval(() => {
         if (!simActive) return;
+        if (isDocHidden()) {
+          // A Sim is a one-shot demo: drop it when the tab hides rather than replaying late.
+          stopSim();
+          return;
+        }
         for (let step = 0; step < 2; step++) {
           if (cursor >= synth.samples.length) {
             stopSim();
@@ -1869,6 +1910,10 @@
     let unsubAudio = null;
     let unsubState = null;
 
+    // Set when frames were dropped while the tab was hidden. The bus mutes TX while hidden, so
+    // the clutter model must be relearned from scratch once frames flow again.
+    let skippedWhileHidden = false;
+
     if (bus && typeof bus.onStateChange === 'function') {
       unsubState = bus.onStateChange((next) => {
         const wasLive = isSonarLive();
@@ -1877,6 +1922,8 @@
         if (nowLive && !wasLive && !simActive) {
           engine.setAutoAlignDirectPath(true);
           engine.resetClutter();
+        } else if (wasLive && !nowLive && !simActive) {
+          renderNotLive();
         }
         updateStatusPill();
       });
@@ -1885,6 +1932,14 @@
     if (bus && typeof bus.subscribeAudio === 'function') {
       unsubAudio = bus.subscribeAudio((pkt) => {
         if (simActive || !pkt || pkt.txMode !== 'chirp') return;
+        if (isDocHidden()) {
+          skippedWhileHidden = true;
+          return;
+        }
+        if (skippedWhileHidden) {
+          skippedWhileHidden = false;
+          engine.resetClutter();
+        }
         const res = engine.processBlock(pkt.samples, pkt.sampleRate, pkt.timeSec);
         if (res) applyFrameToUi(res);
       });

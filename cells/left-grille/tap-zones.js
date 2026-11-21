@@ -1807,6 +1807,13 @@
     let calActive = false;
     let calStepIdx = 0;
     let calCaptured = {};
+    // True while the shared bus is armed only because [CAL 4Z] armed it from idle/error. The
+    // implicit arm is scoped to the calibration session and released when it ends, unless the
+    // bus was disarmed, failed, or taken over (TX mode change, explicit ARM click) meanwhile.
+    let calOwnsArm = false;
+    let calArmTxMode = 'off';
+    // Set when mic frames were dropped while the tab was hidden (engine restarts on resume).
+    let skippedWhileHidden = false;
 
     // Screen-reader live region
     const srLive = h('div', {
@@ -1981,6 +1988,14 @@
 
     function updateBusUi(st) {
       busState = Object.assign({ state: 'idle', sampleRate: 48000, txMode: 'off', error: '' }, st || {});
+      if (
+        calOwnsArm &&
+        (busState.state === 'idle' ||
+          busState.state === 'error' ||
+          (busState.state === 'listening' && busState.txMode !== calArmTxMode))
+      ) {
+        calOwnsArm = false;
+      }
       const isListening = busState.state === 'listening' && !localPaused;
       const isRequesting = busState.state === 'requesting';
 
@@ -1998,6 +2013,8 @@
     }
 
     async function handleArmClick() {
+      // An explicit ARM / PAUSE click means the user now wants the mic on its own terms.
+      calOwnsArm = false;
       if (!bus || typeof bus.requestArm !== 'function') {
         updateStatusLine('SIM ONLY', false);
         return;
@@ -2046,9 +2063,15 @@
       calActive = true;
       calStepIdx = 0;
       calCaptured = {};
-      if (bus && busState.state !== 'listening' && typeof bus.requestArm === 'function') {
+      if (
+        bus &&
+        (busState.state === 'idle' || busState.state === 'error') &&
+        typeof bus.requestArm === 'function'
+      ) {
         // Attempt arming mic seamlessly, while keeping SVG tap-cal working if mic isn't granted
-        bus.requestArm().catch(() => {});
+        calOwnsArm = true;
+        calArmTxMode = busState.txMode || 'off';
+        Promise.resolve(bus.requestArm()).catch(() => {});
       }
       localPaused = false;
       renderCalPrompt();
@@ -2058,9 +2081,22 @@
       announce(`Calibration started. Tap ${ZONES[ZONE_ORDER[0]].label}.`);
     }
 
+    function releaseCalArm() {
+      if (!calOwnsArm) return;
+      calOwnsArm = false;
+      if (
+        bus &&
+        typeof bus.stopAll === 'function' &&
+        (busState.state === 'listening' || busState.state === 'requesting')
+      ) {
+        Promise.resolve(bus.stopAll({ dispatchClose: false })).catch(() => {});
+      }
+    }
+
     function cancelCalibration(restoreFocus = false) {
       calActive = false;
       calCaptured = {};
+      releaseCalArm();
       renderCalPrompt();
       if (restoreFocus && typeof calBtn.focus === 'function') {
         calBtn.focus();
@@ -2072,6 +2108,7 @@
       saveStoredCalibration(null);
       calActive = false;
       calCaptured = {};
+      releaseCalArm();
       renderCalPrompt();
       if (typeof calBtn.focus === 'function') {
         calBtn.focus();
@@ -2091,6 +2128,7 @@
         if (saved) saveStoredCalibration(saved);
         calActive = false;
         calCaptured = {};
+        releaseCalArm();
         renderCalPrompt();
         if (typeof calBtn.focus === 'function') {
           calBtn.focus();
@@ -2248,6 +2286,15 @@
     if (bus && typeof bus.subscribeAudio === 'function') {
       unsubAudio = bus.subscribeAudio(({ samples, sampleRate, timeSec }) => {
         if (localPaused || !samples) return;
+        if (typeof document !== 'undefined' && document && document.hidden === true) {
+          skippedWhileHidden = true;
+          return;
+        }
+        if (skippedWhileHidden) {
+          // Adaptive floor, pre-roll and clock anchor are stale after the gap.
+          skippedWhileHidden = false;
+          engine.reset();
+        }
         const events = engine.processBlock(samples, sampleRate, timeSec);
         if (events.length > 0) {
           handleEngineEvents(events, 'MIC');

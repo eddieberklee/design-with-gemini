@@ -18,7 +18,7 @@
 | :--- | :--- |
 | `cells/left-grille/nail-pad.js` (`LeftGrilleNailPad`) | `BiquadFilter`, `NailPadClassifier`, 48 kHz physical waveform synthesizers (`synthesizeSoftPadTap`, `synthesizeNailTap`, `synthesizeNailScratch`, `synthesizeVoicedSpeech`), `localStorage` calibration (`dwg.nailPadCal.v1`), and Secondary Slot 3 DOM UI (`mountNailPadCell`). |
 | `cells/left-grille/nail-pad.css` | Strictly scoped styles (`.np-cell`, `.np-stage`) with `position: absolute; inset: 0` 4:3 cell lock, Swiss/Braun palette (`#0052cc` Cobalt for Soft Pad, `#047857` Emerald for Nail Tap, `#c93700` Vermilion for Nail Scratch), and `@container` breakpoints down to `150px`. |
-| `cells/left-grille/nail-pad.test.js` | 9-test verification suite covering `soft-pad`, `nail-tap`, `nail-scratch`, voiced speech rejection, `18–21 kHz` sonar immunity, multi-gesture streaming, `44.1k`/`96k` + `NaN` resilience, `localStorage` calibration, and DOM mount wiring. |
+| `cells/left-grille/nail-pad.test.js` | 13-test suite covering `soft-pad`, `nail-tap`, `nail-scratch`, voiced speech rejection, `18–21 kHz` sonar immunity, multi-gesture streaming, `44.1k`/`96k` + `NaN` resilience, fan step-up, `localStorage` calibration, DOM mount wiring, Trim/ARM lifecycle, `VOICE VETO` label recovery, and hidden-tab frame skipping. |
 
 ---
 
@@ -40,10 +40,15 @@
 - **Ultrasonic Isolation (`nail-pad.js:MAX_PASSBAND_HZ`)**: Never inspect FFT bins above `15.5 kHz` or bypass the time-domain notch/LPF cascade, as Cell 01 and sibling sonar cells transmit `18.375–21.375 kHz` carriers on the shared bus.
 - **Zero Dynamic `innerHTML` (`nail-pad.js:h` / `svgEl`)**: All DOM and SVG nodes are constructed via `document.createElement` / `document.createElementNS` and `textContent`.
 - **4:3 Row-Height Invariant (`nail-pad.css:.np-stage`)**: `.np-stage` must keep `position: absolute; inset: 0` inside `.np-cell` so internal controls and the calibration trim overlay never stretch the grid row height.
+- **Status Pill Has One Source (`nail-pad.js:mountNailPadCell` / `baseStatusText`)**: `LIVE · 48k` / `SIM READY` / `03 · <16kHz` derive from the last bus state. `VOICE VETO` is an override that is cleared back to `baseStatusText()` once the classifier's `vetoReason` clears; a finished Sim also restores it (so a denied mic still reads `SIM READY`, never `LIVE`).
+- **Hidden Tab Costs Nothing (`nail-pad.js:attachBus` audio subscriber)**: the bus suspends its AudioContext while hidden; any mic block that still arrives while `document.hidden` (async suspend, `processDuplexFrame` injection) is dropped and `classifier.reset()` runs on the first visible block after such a drop. A running Sim interval stops at its next tick once the tab is hidden.
+- **`[ARM]` Disarms the Whole Shared Bus**: when the bus is live, `[LIVE]` calls `bus.stopAll({ dispatchClose: false })`, which also stops chirp sonar TX and the other passive cells (tap-zones instead pauses locally). Test 11 pins this behaviour.
+- **Narrow Cells Hide Trim**: below `185px` container width (`390px` page, `177px` cell) `.np-btn--trim` is `display: none`, so the trim popover is unreachable at phone width.
 
 ---
 
 ## 4. How to Run & Verify
 
+- **Hidden tabs**: a Sim (`Pad` / `Nail` / `Scratch`, tactile well) stops at its first interval tick while `document.hidden`; drive it in a visible tab, or override `document.hidden` when automating.
 - **Syntax & Unit Test Suite**:
   `node --check cells/left-grille/nail-pad.js && timeout 60 node --test cells/left-grille/nail-pad.test.js`

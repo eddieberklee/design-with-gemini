@@ -557,3 +557,110 @@ test('11. UI lifecycle: [Trim] Escape + focus handoff, [LIVE] disarm toggle, idl
     globalThis.window = prevWin;
   }
 });
+
+function mountNailPadWithMockDom(run) {
+  class Node {
+    constructor(tag) {
+      this.tagName = tag.toUpperCase();
+      this.className = '';
+      this.textContent = '';
+      this.hidden = false;
+      this.style = {};
+      this.dataset = {};
+      this.attrs = {};
+      this.children = [];
+      this.listeners = {};
+      this.classList = { add: (c) => (this.className = `${this.className} ${c}`.trim()) };
+    }
+    get firstChild() {
+      return this.children[0] || null;
+    }
+    appendChild(c) {
+      this.children.push(c);
+      return c;
+    }
+    removeChild(c) {
+      this.children.splice(this.children.indexOf(c), 1);
+    }
+    setAttribute(k, v) {
+      this.attrs[k] = String(v);
+    }
+    addEventListener(t, fn) {
+      this.listeners[t] = fn;
+    }
+  }
+  const find = (n, cls) => {
+    if (n.className && n.className.split(' ').includes(cls)) return n;
+    for (const c of n.children || []) {
+      const hit = find(c, cls);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  const prevDoc = globalThis.document;
+  const doc = {
+    hidden: false,
+    head: new Node('head'),
+    querySelector: () => true,
+    createElement: (t) => new Node(t),
+    createElementNS: (_ns, t) => new Node(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t), children: [] })
+  };
+  globalThis.document = doc;
+  let audioSub = null;
+  const bus = {
+    state: 'listening',
+    subscribeAudio(fn) {
+      audioSub = fn;
+      return () => {};
+    },
+    onStateChange(fn) {
+      fn({ state: 'listening', sampleRate: 48000 });
+      return () => {};
+    }
+  };
+  try {
+    const cellEl = new Node('section');
+    const mounted = mountNailPadCell(cellEl, bus);
+    run({
+      mounted,
+      doc,
+      status: () => find(cellEl, 'np-status'),
+      feed(samples) {
+        for (let o = 0; o < samples.length; o += 512) {
+          audioSub({ samples: samples.subarray(o, o + 512), sampleRate: 48000, timeSec: o / 48000 });
+        }
+      }
+    });
+    mounted.destroy();
+  } finally {
+    globalThis.document = prevDoc;
+  }
+}
+
+test('12. Status pill drops VOICE VETO and returns to the live bus label once the veto clears', () => {
+  mountNailPadWithMockDom((t) => {
+    assert.equal(t.status().textContent, 'LIVE · 48k');
+    t.feed(synthesizeVoicedSpeech({ sampleRate: 48000, durationMs: 240, f0Hz: 148, seed: 5 }));
+    assert.equal(t.status().textContent, 'VOICE VETO');
+    t.feed(synthesizeNailTap({ sampleRate: 48000, seed: 9 }));
+    assert.equal(t.mounted.classifier.lastEvent.gesture, 'nail-tap');
+    assert.equal(t.status().dataset.veto, 'false');
+    assert.equal(t.status().textContent, 'LIVE · 48k', 'stale VOICE VETO label after the veto cleared');
+  });
+});
+
+test('13. Mic frames are skipped while the tab is hidden and the classifier restarts on resume', () => {
+  mountNailPadWithMockDom((t) => {
+    t.feed(synthesizeSoftPadTap({ sampleRate: 48000, seed: 3 }));
+    const q = t.mounted.classifier.quantaProcessed;
+    assert.ok(q > 0);
+    t.doc.hidden = true;
+    t.feed(synthesizeNailTap({ sampleRate: 48000, seed: 4 }));
+    assert.equal(t.mounted.classifier.quantaProcessed, q, 'no DSP work while hidden');
+    assert.equal(t.mounted.classifier.lastEvent.gesture, 'soft-pad');
+    t.doc.hidden = false;
+    t.feed(new Float32Array(512));
+    assert.equal(t.mounted.classifier.quantaProcessed, 4, 'classifier restarts after resume');
+  });
+});

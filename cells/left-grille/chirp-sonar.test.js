@@ -486,6 +486,173 @@ test('mountChirpSonarCell restores autoAlignDirectPath on stopSim/[Zero] and can
   }
 });
 
+function withMockChirpDom(run) {
+  const { mountChirpSonarCell } = require('./chirp-sonar.js');
+  function makeNode(tag) {
+    const attrs = new Map();
+    const listeners = new Map();
+    const classes = new Set();
+    return {
+      tagName: tag.toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      textContent: '',
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      set className(v) {
+        classes.clear();
+        String(v || '').split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      classList: { add: (...cs) => cs.forEach((c) => classes.add(c)), contains: (c) => classes.has(c) },
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        this.children.splice(this.children.indexOf(c), 1);
+        return c;
+      },
+      setAttribute: (k, v) => attrs.set(k, String(v)),
+      getAttribute: (k) => (attrs.has(k) ? attrs.get(k) : null),
+      removeAttribute: (k) => attrs.delete(k),
+      addEventListener(type, fn) {
+        if (!listeners.has(type)) listeners.set(type, []);
+        listeners.get(type).push(fn);
+      },
+      click() {
+        (listeners.get('click') || []).forEach((fn) => fn({ type: 'click' }));
+      },
+      getContext: () => null,
+      getBoundingClientRect: () => ({ width: 240, height: 120 })
+    };
+  }
+  const find = (root, cls) => {
+    let hit = null;
+    (function walk(n) {
+      if (!n || hit) return;
+      if (n.classList && n.classList.contains(cls)) hit = n;
+      (n.children || []).forEach(walk);
+    })(root);
+    return hit;
+  };
+  const prev = {
+    document: global.document,
+    raf: global.requestAnimationFrame,
+    add: global.addEventListener,
+    rem: global.removeEventListener
+  };
+  const doc = {
+    hidden: false,
+    createElement: (t) => makeNode(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) })
+  };
+  global.document = doc;
+  global.requestAnimationFrame = () => 1;
+  global.addEventListener = () => {};
+  global.removeEventListener = () => {};
+  let stateCb = null;
+  let audioCb = null;
+  const bus = {
+    registerTxGenerator() {},
+    setTxMode() {},
+    subscribeAudio(fn) {
+      audioCb = fn;
+      return () => {};
+    },
+    onStateChange(fn) {
+      stateCb = fn;
+      fn({ state: 'listening', sampleRate: 48000, txMode: 'chirp' });
+      return () => {};
+    }
+  };
+  try {
+    const cellEl = makeNode('section');
+    const handle = mountChirpSonarCell(cellEl, bus);
+    run({
+      handle,
+      doc,
+      setState: (s) => stateCb(s),
+      feed(samples, sampleRate) {
+        for (let o = 0; o < samples.length; o += 512) {
+          audioCb({ samples: samples.subarray(o, o + 512), sampleRate, timeSec: o / sampleRate, txMode: 'chirp' });
+        }
+      },
+      gesture: () => find(cellEl, 'cs-gesture-val').textContent,
+      range: () => find(cellEl, 'cs-range-num').textContent,
+      sonarBtn: () => find(cellEl, 'cs-btn--sonar')
+    });
+    handle.destroy();
+  } finally {
+    global.document = prev.document;
+    global.requestAnimationFrame = prev.raf;
+    global.addEventListener = prev.add;
+    global.removeEventListener = prev.rem;
+  }
+}
+
+test('mountChirpSonarCell clears live LISTENING/TRACKING text and range once sonar stops being live', () => {
+  const target = () =>
+    synthesizeGestureSignal('static-target', {
+      sampleRate: 48000,
+      targetRangeCm: 24,
+      directLag: 120,
+      warmupFrames: 8,
+      gestureFrames: 10,
+      tailFrames: 0
+    }).samples;
+
+  for (const stop of [
+    { state: 'listening', sampleRate: 48000, txMode: 'off' }, // SONAR toggled off
+    { state: 'idle', sampleRate: 48000, txMode: 'off' } // array disarmed / page closed
+  ]) {
+    withMockChirpDom((t) => {
+      t.feed(target(), 48000);
+      assert.equal(t.gesture(), 'TRACKING', 'precondition: live echo is tracked');
+      assert.notEqual(t.range(), '--.-');
+      t.setState(stop);
+      assert.equal(t.sonarBtn().dataset.active, 'false');
+      assert.equal(t.gesture(), 'STANDBY', `stale live text after ${JSON.stringify(stop)}`);
+      assert.equal(t.range(), '--.-', `stale range after ${JSON.stringify(stop)}`);
+    });
+  }
+});
+
+test('mountChirpSonarCell skips frames while the tab is hidden and relearns clutter on resume', () => {
+  withMockChirpDom((t) => {
+    const s = synthesizeGestureSignal('clutter-only', {
+      sampleRate: 48000,
+      directLag: 120,
+      warmupFrames: 12,
+      gestureFrames: 0,
+      tailFrames: 0
+    }).samples;
+    t.feed(s, 48000);
+    const learned = t.handle.engine.framesProcessed;
+    assert.ok(learned >= 10);
+
+    t.doc.hidden = true;
+    t.feed(new Float32Array(1024 * 8), 48000); // TX is muted by the bus while hidden
+    assert.equal(t.handle.engine.framesProcessed, learned, 'no DSP work while hidden');
+
+    t.doc.hidden = false;
+    t.feed(s.subarray(0, 1024 * 2), 48000);
+    assert.equal(t.handle.engine.framesProcessed, 2, 'clutter model restarts after resume');
+  });
+});
+
+test('mountChirpSonarCell reports NO ULTRASOUND instead of CALIBRATING on a < 40 kHz mic', () => {
+  withMockChirpDom((t) => {
+    t.setState({ state: 'listening', sampleRate: 16000, txMode: 'chirp' });
+    t.feed(new Float32Array(2048), 16000);
+    assert.equal(t.gesture(), 'NO ULTRASOUND');
+  });
+});
+
 test('Browser slot 4 registration (pending + live registerCell) and zero innerHTML hygiene', () => {
   const srcPath = path.join(__dirname, 'chirp-sonar.js');
   const src = fs.readFileSync(srcPath, 'utf8');

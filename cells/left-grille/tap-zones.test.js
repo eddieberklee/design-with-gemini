@@ -737,3 +737,182 @@ test('mountTapZonesCell [CAL 4Z] capture-phase Escape cancel, focus handoff/rest
     global.window = prevWin;
   }
 });
+
+function withTapZonesMount(initialState, run) {
+  function el(tag) {
+    const attrs = {};
+    const listeners = {};
+    const classes = new Set();
+    return {
+      tagName: tag.toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      textContent: '',
+      set className(v) {
+        classes.clear();
+        String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        contains: (c) => classes.has(c)
+      },
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      },
+      removeChild(c) {
+        this.children.splice(this.children.indexOf(c), 1);
+        return c;
+      },
+      setAttribute(k, v) {
+        attrs[k] = String(v);
+        if (k === 'class') this.className = v;
+      },
+      getAttribute: (k) => (k in attrs ? attrs[k] : null),
+      addEventListener(t, fn) {
+        (listeners[t] = listeners[t] || []).push(fn);
+      },
+      dispatch(t) {
+        (listeners[t] || []).forEach((fn) => fn({ preventDefault() {}, stopPropagation() {} }));
+      },
+      focus() {},
+      getBoundingClientRect: () => ({ width: 320, height: 240 })
+    };
+  }
+  const findAll = (n, pred, acc = []) => {
+    if (pred(n)) acc.push(n);
+    (n.children || []).forEach((c) => findAll(c, pred, acc));
+    return acc;
+  };
+  const prevDoc = global.document;
+  const prevWin = global.window;
+  const doc = {
+    hidden: false,
+    createElement: el,
+    createElementNS: (_ns, t) => el(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t), children: [] }),
+    addEventListener() {},
+    removeEventListener() {}
+  };
+  global.document = doc;
+  global.window = { addEventListener() {}, removeEventListener() {} };
+  const stateFns = new Set();
+  let audioCb = null;
+  const bus = {
+    snap: Object.assign({ sampleRate: 48000, txMode: 'off', error: '' }, initialState),
+    stopCalls: [],
+    armCalls: 0,
+    emit(patch) {
+      Object.assign(this.snap, patch);
+      stateFns.forEach((fn) => fn(Object.assign({}, this.snap)));
+    },
+    subscribeAudio(fn) {
+      audioCb = fn;
+      return () => {};
+    },
+    onStateChange(fn) {
+      stateFns.add(fn);
+      fn(Object.assign({}, this.snap));
+      return () => stateFns.delete(fn);
+    },
+    requestArm() {
+      this.armCalls++;
+      this.emit({ state: 'requesting' });
+      this.emit({ state: 'listening' });
+      return Promise.resolve(true);
+    },
+    stopAll(opts) {
+      this.stopCalls.push(opts);
+      this.emit({ state: 'idle', txMode: 'off' });
+      return Promise.resolve();
+    }
+  };
+  try {
+    const cellEl = el('section');
+    const handle = TapZones.mountTapZonesCell(cellEl, bus);
+    const q = (cls) => findAll(cellEl, (n) => n.classList && n.classList.contains(cls))[0];
+    run({
+      bus,
+      doc,
+      handle,
+      calBtn: q('tz-btn--cal'),
+      armBtn: q('tz-btn--arm'),
+      cancelBtn: findAll(q('tz-cal-bar'), (n) => n.tagName === 'BUTTON')[1],
+      zones: findAll(cellEl, (n) => n.getAttribute && n.getAttribute('data-zone')),
+      feed(samples) {
+        for (let o = 0; o < samples.length; o += 512) {
+          audioCb({ samples: samples.subarray(o, o + 512), sampleRate: 48000, timeSec: o / 48000 });
+        }
+      }
+    });
+    handle.destroy();
+  } finally {
+    global.document = prevDoc;
+    global.window = prevWin;
+  }
+}
+
+test('[CAL 4Z] releases the mic it armed from idle when calibration is cancelled or completed', () => {
+  // Cancel releases the implicit arm
+  withTapZonesMount({ state: 'idle' }, (t) => {
+    t.calBtn.dispatch('click');
+    assert.equal(t.bus.armCalls, 1);
+    assert.equal(t.bus.snap.state, 'listening');
+    t.cancelBtn.dispatch('click');
+    assert.deepEqual(t.bus.stopCalls, [{ dispatchClose: false }], 'Cancel must release the mic CAL acquired');
+    assert.equal(t.bus.snap.state, 'idle');
+  });
+
+  // Completing all 4 zones also releases it
+  withTapZonesMount({ state: 'idle' }, (t) => {
+    t.calBtn.dispatch('click');
+    t.zones.forEach((z) => z.dispatch('click'));
+    assert.equal(t.bus.stopCalls.length, 1, 'Completed calibration must release the mic CAL acquired');
+  });
+
+  // A bus that was already live is never disarmed by CAL
+  withTapZonesMount({ state: 'listening' }, (t) => {
+    t.calBtn.dispatch('click');
+    assert.equal(t.bus.armCalls, 0);
+    t.cancelBtn.dispatch('click');
+    assert.equal(t.bus.stopCalls.length, 0);
+  });
+
+  // Another cell taking over TX (chirp sonar) or an explicit ARM click hands ownership away
+  withTapZonesMount({ state: 'idle' }, (t) => {
+    t.calBtn.dispatch('click');
+    t.bus.emit({ txMode: 'chirp' });
+    t.cancelBtn.dispatch('click');
+    assert.equal(t.bus.stopCalls.length, 0, 'must not kill sonar another cell started');
+  });
+  withTapZonesMount({ state: 'idle' }, (t) => {
+    t.calBtn.dispatch('click');
+    t.armBtn.dispatch('click'); // PAUSE
+    t.armBtn.dispatch('click'); // LIVE
+    t.cancelBtn.dispatch('click');
+    assert.equal(t.bus.stopCalls.length, 0, 'explicit ARM click keeps the mic on');
+  });
+});
+
+test('Tap detection skips mic frames while the tab is hidden and restarts the detector on resume', () => {
+  withTapZonesMount({ state: 'listening' }, (t) => {
+    t.feed(TapZones.synthesizeZoneTap('top-left', { sampleRate: 48000, seed: 1 }));
+    const before = t.handle.engine.detector.totalSamples;
+    assert.ok(before > 0);
+    t.doc.hidden = true;
+    t.feed(TapZones.synthesizeZoneTap('right-palm', { sampleRate: 48000, seed: 2 }));
+    assert.equal(t.handle.engine.detector.totalSamples, before, 'no DSP work while hidden');
+    t.doc.hidden = false;
+    t.feed(new Float32Array(512));
+    assert.equal(t.handle.engine.detector.totalSamples, 512, 'detector restarts after resume');
+  });
+});

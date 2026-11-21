@@ -39,6 +39,10 @@
     return v < lo ? lo : v > hi ? hi : v;
   }
 
+  function isDocHidden() {
+    return typeof document !== 'undefined' && Boolean(document) && document.hidden === true;
+  }
+
   function lerp(a, b, t) {
     return a + (b - a) * t;
   }
@@ -1731,8 +1735,10 @@
       if (tel.vetoReason === 'voice') {
         statusPill.dataset.veto = 'true';
         statusPill.textContent = 'VOICE VETO';
-      } else if (simTimer === null) {
+      } else if (simTimer === null && statusPill.dataset.veto === 'true') {
+        // Veto cleared (next burst started or committed): restore the bus status label.
         statusPill.dataset.veto = 'false';
+        statusPill.textContent = baseStatusText();
       }
 
       if (tel.active || !classifier.lastEvent) {
@@ -1843,12 +1849,12 @@
       const chunkSize = 512;
       let offset = 0;
       simTimer = setInterval(() => {
-        if (offset >= samples.length) {
+        if (offset >= samples.length || isDocHidden()) {
+          // Finished, or the tab hid mid-Sim (a one-shot demo is dropped, not replayed late).
           clearInterval(simTimer);
           simTimer = null;
-          const b = getBus();
-          const armed = b && b.state === 'listening';
-          statusPill.textContent = armed ? 'LIVE · <16kHz' : '03 · <16kHz';
+          statusPill.dataset.veto = 'false';
+          statusPill.textContent = baseStatusText();
           return;
         }
         const slice = samples.subarray(offset, Math.min(samples.length, offset + chunkSize));
@@ -1863,12 +1869,30 @@
     // -------------------------------------------------------------------------
     let unsubAudio = null;
     let unsubState = null;
+    // Set when mic frames were dropped while the tab was hidden; the adaptive floor and burst
+    // state are stale after the gap, so the classifier restarts on the first visible frame.
+    let skippedWhileHidden = false;
+
+    function baseStatusText() {
+      const st = busState && busState.state;
+      if (st === 'listening') return `LIVE · ${Math.round((busState.sampleRate || 48000) / 1000)}k`;
+      if (st === 'error') return 'SIM READY';
+      return '03 · <16kHz';
+    }
 
     function attachBus(b) {
       if (!b) return;
       if (typeof b.subscribeAudio === 'function' && !unsubAudio) {
         unsubAudio = b.subscribeAudio((pkt) => {
           if (simTimer !== null || !pkt || !pkt.samples) return;
+          if (isDocHidden()) {
+            skippedWhileHidden = true;
+            return;
+          }
+          if (skippedWhileHidden) {
+            skippedWhileHidden = false;
+            classifier.reset();
+          }
           classifier.processSamples(pkt.samples, pkt.sampleRate || 48000, pkt.timeSec);
         });
       }
@@ -1886,12 +1910,7 @@
             st.state === 'requesting' ? 'ARM…' : st.state === 'listening' ? 'LIVE' : 'ARM';
           if (simTimer === null) {
             statusPill.dataset.veto = 'false';
-            statusPill.textContent =
-              st.state === 'listening'
-                ? `LIVE · ${Math.round((st.sampleRate || 48000) / 1000)}k`
-                : st.state === 'error'
-                ? 'SIM READY'
-                : '03 · <16kHz';
+            statusPill.textContent = baseStatusText();
           }
         });
       }
