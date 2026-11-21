@@ -42,7 +42,15 @@
   -webkit-font-smoothing: antialiased;
 }
 
-.s3-mono {
+.cell--stick-s3 button,
+.s3-dialog button,
+.s3-dialog input {
+  font-family: inherit;
+}
+
+.s3-mono,
+.cell--stick-s3 .s3-mono,
+.s3-dialog .s3-mono {
   font-family: var(--s3-mono);
   font-variant-numeric: tabular-nums;
 }
@@ -65,7 +73,7 @@
 
 .cell--stick-s3 {
   --s3-live-hex: #D5C8C0;
-  --s3-reticle-ink: #080808;
+  --s3-reticle-ink: #000000;
   --s3-reticle-stroke: rgba(8, 8, 8, 0.62);
   --s3-reticle-halo: rgba(255, 255, 255, 0.42);
   --s3-dome-well: rgba(255, 255, 255, 0.16);
@@ -86,10 +94,16 @@
 
 .cell--stick-s3 button:focus-visible,
 .s3-dialog button:focus-visible,
-.s3-dialog input:focus-visible,
-.s3-dome-pad:focus-visible {
+.s3-dialog input:focus-visible {
   outline: 2px solid var(--s3-focus);
   outline-offset: 2px;
+}
+
+.s3-dome-pad:focus-visible,
+.s3-micro:focus-visible {
+  outline: 2px solid var(--s3-focus);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--s3-paper-solid);
 }
 
 /* ---------- Top Floating Swiss Paper Capsule ---------- */
@@ -378,12 +392,14 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .s3-hex-copy {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  flex-shrink: 0;
   border: 0;
   background: transparent;
   padding: 2px 4px;
@@ -476,10 +492,16 @@
   transform: scale(1.14);
 }
 
-/* Micro Specimen Badge (only visible when Cell 03 shrinks grid <= 229px) */
+/* Micro Specimen Badge (only visible when Cell 03 shrinks grid <= 235px) */
 .s3-micro {
   display: none;
   flex: 1;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
   align-items: center;
   justify-content: center;
 }
@@ -494,12 +516,15 @@
   color: var(--s3-ink);
 }
 
-/* ---------- 4-Tier @container Queries (140px .. 960px resilience) ---------- */
+/* ---------- 5-Tier @container Queries (140px .. 960px resilience) ---------- */
 
-@container s3-card (max-width: 430px) {
+@container s3-card (max-width: 500px) {
   .s3-axes-inline {
     display: none;
   }
+}
+
+@container s3-card (max-width: 440px) {
   .s3-mode-group {
     display: none;
   }
@@ -508,7 +533,7 @@
   }
 }
 
-@container s3-card (max-width: 335px) {
+@container s3-card (max-width: 375px) {
   .s3-index,
   .s3-open-label,
   .s3-oklch-spec,
@@ -525,14 +550,23 @@
 }
 
 @container s3-card (max-width: 235px) {
+  .s3-brand,
   .s3-stage,
   .s3-hud-bottom,
-  .s3-mode-cycle,
-  .s3-title {
+  .s3-mode-cycle {
     display: none;
+  }
+  .s3-hud-top {
+    justify-content: flex-end;
   }
   .s3-micro {
     display: flex;
+  }
+}
+
+@container s3-card (max-width: 195px) {
+  .s3-status-pill {
+    display: none;
   }
 }
 

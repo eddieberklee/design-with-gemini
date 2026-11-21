@@ -4,6 +4,7 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <string.h>
 #include "color_math.h"
 
 using namespace sticks3_color;
@@ -15,10 +16,20 @@ static constexpr const char* BLE_NOTIFY_UUID   = "beb5483e-36e1-4688-b7f5-ea0736
 static constexpr const char* BLE_COMMAND_UUID  = "beb5483e-36e1-4688-b7f5-ea07361b26a9";
 
 static M5Canvas canvas(&M5.Display);
+static BLEServer* gBleServer = nullptr;
 static BLECharacteristic* gNotifyChar = nullptr;
-static volatile bool gBleConnected = false;
+static bool gBleConnected = false;
 
-// Live sensor + instrument state
+// Cross-core spinlock & staging ringbuffer for Bluedroid Core 0 -> Arduino loop() Core 1 handoff
+static portMUX_TYPE gBleMux = portMUX_INITIALIZER_UNLOCKED;
+static bool gBlePendingConnEvent = false;
+static bool gBlePendingConnState = false;
+static constexpr size_t BLE_CMD_QUEUE_CAP = 4;
+static char gBleCmdQueue[BLE_CMD_QUEUE_CAP][192];
+static uint8_t gBleCmdHead = 0;
+static uint8_t gBleCmdCount = 0;
+
+// Live sensor + instrument state (exclusively owned by Core 1 loop())
 static float gSmoothAx = 0.0f;
 static float gSmoothAy = 0.0f;
 static float gSmoothAz = 1.0f;
@@ -41,14 +52,28 @@ static uint32_t gLastSerialMs = 0;
 static uint32_t gLastBleMs = 0;
 static uint32_t gLastUiMs = 0;
 static uint32_t gBannerUntilMs = 0;
+static int gCachedBatPct = -1;
 static char gBannerText[20] = "";
 static char gPendingEvent[12] = "";
 static char gSerialCmdBuf[192];
 static size_t gSerialCmdLen = 0;
+static bool gSerialDiscardLine = false;
 
 static void showBanner(const char* msg, uint32_t durationMs = 900) {
   snprintf(gBannerText, sizeof(gBannerText), "%s", msg);
   gBannerUntilMs = millis() + durationMs;
+}
+
+static void setPendingEvent(const char* ev) {
+  if (!ev || !ev[0]) return;
+  // Preserve "swatch" against lower-priority events in the same tick (unless unholding to "live")
+  if (strcmp(gPendingEvent, "swatch") == 0 && strcmp(ev, "live") != 0) {
+    return;
+  }
+  if (strcmp(ev, "pong") == 0 && gPendingEvent[0] != '\0') {
+    return;
+  }
+  snprintf(gPendingEvent, sizeof(gPendingEvent), "%s", ev);
 }
 
 static void playClick(uint16_t freqHz, uint16_t durMs = 14) {
@@ -61,7 +86,7 @@ static void playClick(uint16_t freqHz, uint16_t durMs = 14) {
 static void triggerTare() {
   gTareX = gSmoothAx;
   gTareY = gSmoothAy;
-  snprintf(gPendingEvent, sizeof(gPendingEvent), "tare");
+  setPendingEvent("tare");
   showBanner("ZERO TARED");
   playClick(1320, 22);
 }
@@ -70,11 +95,11 @@ static void setHoldState(bool nextHold, bool fromHardware) {
   gHold = nextHold;
   if (gHold) {
     gHeldColor = gCurrentColor;
-    snprintf(gPendingEvent, sizeof(gPendingEvent), fromHardware ? "swatch" : "hold");
+    setPendingEvent(fromHardware ? "swatch" : "hold");
     showBanner("COLOR HELD");
     playClick(1046, 16);
   } else {
-    snprintf(gPendingEvent, sizeof(gPendingEvent), "live");
+    setPendingEvent("live");
     showBanner("LIVE IMU");
     playClick(784, 14);
   }
@@ -82,7 +107,7 @@ static void setHoldState(bool nextHold, bool fromHardware) {
 
 static void setModeState(uint8_t nextMode) {
   gMode = nextMode % MODE_COUNT;
-  snprintf(gPendingEvent, sizeof(gPendingEvent), "mode");
+  setPendingEvent("mode");
   char msg[20];
   snprintf(msg, sizeof(msg), "MODE %s", modeShortName(gMode));
   showBanner(msg);
@@ -130,19 +155,23 @@ static void handleHostCommand(const char* line) {
   }
 
   if (strstr(line, "\"ping\"") || strstr(line, "\"status\"")) {
-    snprintf(gPendingEvent, sizeof(gPendingEvent), "pong");
+    setPendingEvent("pong");
   }
 }
 
 class StickBleServerCallbacks : public BLEServerCallbacks {
   void onConnect(BLEServer* pServer) override {
     (void)pServer;
-    gBleConnected = true;
-    showBanner("BLE LINKED");
+    portENTER_CRITICAL(&gBleMux);
+    gBlePendingConnState = true;
+    gBlePendingConnEvent = true;
+    portEXIT_CRITICAL(&gBleMux);
   }
   void onDisconnect(BLEServer* pServer) override {
-    gBleConnected = false;
-    showBanner("BLE IDLE");
+    portENTER_CRITICAL(&gBleMux);
+    gBlePendingConnState = false;
+    gBlePendingConnEvent = true;
+    portEXIT_CRITICAL(&gBleMux);
     if (pServer) {
       pServer->startAdvertising();
     }
@@ -153,18 +182,76 @@ class StickBleCmdCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* pCharacteristic) override {
     if (!pCharacteristic) return;
     auto val = pCharacteristic->getValue();
-    if (val.length() > 0) {
-      handleHostCommand(val.c_str());
+    const size_t n = val.length();
+    if (n == 0) return;
+    const char* src = val.c_str();
+    const size_t copyLen = n < (sizeof(gBleCmdQueue[0]) - 1) ? n : (sizeof(gBleCmdQueue[0]) - 1);
+
+    portENTER_CRITICAL(&gBleMux);
+    if (gBleCmdCount < BLE_CMD_QUEUE_CAP) {
+      const uint8_t slot = (uint8_t)((gBleCmdHead + gBleCmdCount) % BLE_CMD_QUEUE_CAP);
+      memcpy(gBleCmdQueue[slot], src, copyLen);
+      gBleCmdQueue[slot][copyLen] = '\0';
+      ++gBleCmdCount;
+    } else {
+      const uint8_t slot = (uint8_t)((gBleCmdHead + BLE_CMD_QUEUE_CAP - 1) % BLE_CMD_QUEUE_CAP);
+      memcpy(gBleCmdQueue[slot], src, copyLen);
+      gBleCmdQueue[slot][copyLen] = '\0';
     }
+    portEXIT_CRITICAL(&gBleMux);
   }
 };
 
+static void drainBleEvents() {
+  bool hasConnEvent = false;
+  bool connState = false;
+  portENTER_CRITICAL(&gBleMux);
+  if (gBlePendingConnEvent) {
+    hasConnEvent = true;
+    connState = gBlePendingConnState;
+    gBlePendingConnEvent = false;
+  }
+  portEXIT_CRITICAL(&gBleMux);
+
+  if (hasConnEvent) {
+    gBleConnected = connState;
+    showBanner(connState ? "BLE LINKED" : "BLE IDLE");
+  }
+
+  char cmdBuf[192];
+  while (true) {
+    bool hasCmd = false;
+    portENTER_CRITICAL(&gBleMux);
+    if (gBleCmdCount > 0) {
+      memcpy(cmdBuf, gBleCmdQueue[gBleCmdHead], sizeof(cmdBuf));
+      gBleCmdHead = (uint8_t)((gBleCmdHead + 1) % BLE_CMD_QUEUE_CAP);
+      --gBleCmdCount;
+      hasCmd = true;
+    }
+    portEXIT_CRITICAL(&gBleMux);
+
+    if (!hasCmd) break;
+    char* cursor = cmdBuf;
+    while (*cursor != '\0') {
+      while (*cursor == '\r' || *cursor == '\n' || *cursor == ' ') ++cursor;
+      if (*cursor == '\0') break;
+      char* nl = cursor;
+      while (*nl != '\0' && *nl != '\r' && *nl != '\n') ++nl;
+      const char saved = *nl;
+      *nl = '\0';
+      handleHostCommand(cursor);
+      cursor = (saved == '\0') ? nl : (nl + 1);
+    }
+  }
+}
+
 static void setupBle() {
   BLEDevice::init(BLE_DEVICE_NAME);
-  BLEServer* server = BLEDevice::createServer();
-  server->setCallbacks(new StickBleServerCallbacks());
+  BLEDevice::setMTU(247);
+  gBleServer = BLEDevice::createServer();
+  gBleServer->setCallbacks(new StickBleServerCallbacks());
 
-  BLEService* service = server->createService(BLE_SERVICE_UUID);
+  BLEService* service = gBleServer->createService(BLE_SERVICE_UUID);
   gNotifyChar = service->createCharacteristic(
       BLE_NOTIFY_UUID,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
@@ -189,15 +276,21 @@ static void pollSerialCommands() {
     const int ch = Serial.read();
     if (ch < 0) break;
     if (ch == '\n' || ch == '\r') {
-      if (gSerialCmdLen > 0) {
+      if (gSerialDiscardLine) {
+        gSerialDiscardLine = false;
+        gSerialCmdLen = 0;
+      } else if (gSerialCmdLen > 0) {
         gSerialCmdBuf[gSerialCmdLen] = '\0';
         handleHostCommand(gSerialCmdBuf);
         gSerialCmdLen = 0;
       }
+    } else if (gSerialDiscardLine) {
+      // Discard remainder of overflowed line until newline
     } else if (gSerialCmdLen + 1 < sizeof(gSerialCmdBuf)) {
       gSerialCmdBuf[gSerialCmdLen++] = (char)ch;
     } else {
       gSerialCmdLen = 0;
+      gSerialDiscardLine = true;
     }
   }
 }
@@ -230,8 +323,9 @@ static void renderInstrumentScreen(const RgbColor& activeColor, float tx, float 
   const uint16_t bgDark = 0x1082u;     // #101010 instrument obsidian
   const uint16_t cardBorder = 0x39E7u; // subtle hairline
   const uint16_t swatch565 = canvas.color565(activeColor.r, activeColor.g, activeColor.b);
-  const bool lightSwatch = relativeLuminance(activeColor.r, activeColor.g, activeColor.b) > 0.34f;
-  const uint16_t swatchInk = lightSwatch ? 0x1082u : 0xFFFFu;
+  // IEC 61966-2-1 crossover (0.1791) with pure black 0x0000u vs pure white 0xFFFFu guarantees >= 4.58:1 WCAG AA
+  const bool lightSwatch = relativeLuminance(activeColor.r, activeColor.g, activeColor.b) > 0.1791f;
+  const uint16_t swatchInk = lightSwatch ? 0x0000u : 0xFFFFu;
 
   canvas.fillScreen(bgDark);
 
@@ -293,12 +387,16 @@ static void renderInstrumentScreen(const RgbColor& activeColor, float tx, float 
   canvas.setCursor(cardX + cardW - 42, cardY + cardH - 15);
   canvas.printf("L%02d", (int)roundf(activeColor.l * 100.0f));
 
-  // Transient action banner overlay if active
-  if (millis() < gBannerUntilMs && gBannerText[0] != '\0') {
-    canvas.fillRoundRect(cardX + 10, cy - 9, cardW - 20, 18, 4, 0x0000u);
-    canvas.setTextColor(0xFFFFu);
-    canvas.setCursor(cardX + 16, cy - 4);
-    canvas.print(gBannerText);
+  // Transient action banner overlay if active (49.7-day wrap-safe signed comparison)
+  if (gBannerText[0] != '\0') {
+    if ((int32_t)(millis() - gBannerUntilMs) < 0) {
+      canvas.fillRoundRect(cardX + 10, cy - 9, cardW - 20, 18, 4, 0x0000u);
+      canvas.setTextColor(0xFFFFu);
+      canvas.setCursor(cardX + 16, cy - 4);
+      canvas.print(gBannerText);
+    } else {
+      gBannerText[0] = '\0';
+    }
   }
 
   // 3. 3-Axis Accelerometer Telemetry Bars (y=148..194)
@@ -350,6 +448,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  drainBleEvents();
   pollSerialCommands();
 
   // Button A (KEY1, GPIO 11): Short press = Freeze/Swatch, Long press (600ms) = Zero Tare
@@ -369,18 +468,28 @@ void loop() {
     setModeState((gMode + 1) % MODE_COUNT);
   }
 
-  // Sample 6-axis BMI270 IMU
+  // Sample 6-axis BMI270 IMU with strict NaN/Inf guards before EMA update
   if (M5.Imu.update()) {
     const auto imu = M5.Imu.getImuData();
     const float alpha = 0.24f;  // crisp low-latency EMA filter
-    gSmoothAx += alpha * (imu.accel.x - gSmoothAx);
-    gSmoothAy += alpha * (imu.accel.y - gSmoothAy);
-    gSmoothAz += alpha * (imu.accel.z - gSmoothAz);
-    gRawGx = imu.gyro.x;
-    gRawGy = imu.gyro.y;
-    gRawGz = imu.gyro.z;
+    if (isfinite(imu.accel.x) && isfinite(imu.accel.y) && isfinite(imu.accel.z)) {
+      gSmoothAx += alpha * (imu.accel.x - gSmoothAx);
+      gSmoothAy += alpha * (imu.accel.y - gSmoothAy);
+      gSmoothAz += alpha * (imu.accel.z - gSmoothAz);
+    }
+    if (isfinite(imu.gyro.x) && isfinite(imu.gyro.y) && isfinite(imu.gyro.z)) {
+      gRawGx = imu.gyro.x;
+      gRawGy = imu.gyro.y;
+      gRawGz = imu.gyro.z;
+    }
+    if (!isfinite(gSmoothAx)) gSmoothAx = 0.0f;
+    if (!isfinite(gSmoothAy)) gSmoothAy = 0.0f;
+    if (!isfinite(gSmoothAz)) gSmoothAz = 1.0f;
 
-    const float magG = hypotf(hypotf(imu.accel.x, imu.accel.y), imu.accel.z);
+    const float axSample = isfinite(imu.accel.x) ? imu.accel.x : gSmoothAx;
+    const float aySample = isfinite(imu.accel.y) ? imu.accel.y : gSmoothAy;
+    const float azSample = isfinite(imu.accel.z) ? imu.accel.z : gSmoothAz;
+    const float magG = hypotf(hypotf(axSample, aySample), azSample);
     const float linShock = fabsf(magG - 1.0f);
     const float gyroNorm = hypotf(hypotf(gRawGx, gRawGy), gRawGz) / 420.0f;
     const float instantKin = clampf(linShock * 1.35f + gyroNorm * 0.35f, 0.0f, 1.0f);
@@ -397,27 +506,33 @@ void loop() {
   const RgbColor& displayed = gHold ? gHeldColor : gCurrentColor;
 
   const uint32_t now = millis();
+  const bool hasEvent = (gPendingEvent[0] != '\0');
+  const bool emitSerialNow = hasEvent || (now - gLastSerialMs >= 20);
+  const bool renderUiNow = (now - gLastUiMs >= 20);
+
+  if (emitSerialNow || renderUiNow) {
+    gCachedBatPct = M5.Power.getBatteryLevel();
+  }
 
   // Emit 50 Hz JSON line telemetry over USB-Serial/JTAG (or immediately on button event)
-  const bool hasEvent = (gPendingEvent[0] != '\0');
-  if (hasEvent || (now - gLastSerialMs >= 20)) {
+  if (emitSerialNow) {
     gLastSerialMs = now;
     ++gSeq;
 
     const float rollDeg  = atan2f(tx, hypotf(ty, gSmoothAz)) * (180.0f / 3.14159265f);
     const float pitchDeg = atan2f(ty, hypotf(tx, gSmoothAz)) * (180.0f / 3.14159265f);
-    const int batPct = M5.Power.getBatteryLevel();
+    const int batPct = gCachedBatPct;
     char hexBuf[8];
     formatHex(displayed.r, displayed.g, displayed.b, hexBuf);
 
-    char jsonLine[240];
+    char jsonLine[256];
     const int len = snprintf(
         jsonLine,
         sizeof(jsonLine),
         "{\"t\":\"s3\",\"seq\":%lu,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,"
         "\"tx\":%.3f,\"ty\":%.3f,\"gx\":%.1f,\"gy\":%.1f,\"gz\":%.1f,"
         "\"r\":%.1f,\"p\":%.1f,\"kin\":%.3f,\"m\":%u,\"h\":%u,"
-        "\"hex\":\"%s\",\"bat\":%d,\"ev\":\"%s\"}",
+        "\"hex\":\"%s\",\"bat\":%d,\"ev\":\"%s\"}\n",
         (unsigned long)gSeq,
         gSmoothAx, gSmoothAy, gSmoothAz,
         tx, ty,
@@ -430,22 +545,42 @@ void loop() {
         batPct,
         gPendingEvent);
 
-    Serial.println(jsonLine);
+    if (len > 0) {
+      size_t sendLen = (size_t)len < (sizeof(jsonLine) - 1) ? (size_t)len : (sizeof(jsonLine) - 1);
+      if (jsonLine[sendLen - 1] != '\n') {
+        jsonLine[sendLen - 1] = '\n';
+        jsonLine[sendLen] = '\0';
+      }
+      Serial.write((const uint8_t*)jsonLine, sendLen);
 
-    // Also push over BLE GATT Notify at ~30 Hz when connected wirelessly
-    if (gBleConnected && gNotifyChar && (hasEvent || (now - gLastBleMs >= 33))) {
-      gLastBleMs = now;
-      gNotifyChar->setValue((uint8_t*)jsonLine, (size_t)len);
-      gNotifyChar->notify();
+      // Push over BLE GATT Notify at ~30 Hz (newline-delimited; chunks cleanly if peer MTU < 247)
+      if (gBleConnected && gNotifyChar && (hasEvent || (now - gLastBleMs >= 33))) {
+        gLastBleMs = now;
+        size_t peerMax = 244;
+        if (gBleServer) {
+          const uint16_t mtu = gBleServer->getPeerMTU(gBleServer->getConnId());
+          if (mtu > 3) {
+            peerMax = (size_t)(mtu - 3);
+          }
+        }
+        if (peerMax < 20) peerMax = 20;
+        size_t offset = 0;
+        while (offset < sendLen) {
+          const size_t chunkLen = (sendLen - offset) < peerMax ? (sendLen - offset) : peerMax;
+          gNotifyChar->setValue((uint8_t*)(jsonLine + offset), chunkLen);
+          gNotifyChar->notify();
+          offset += chunkLen;
+        }
+      }
     }
 
     gPendingEvent[0] = '\0';
   }
 
   // Refresh 135x240 LCD sprite at ~50 FPS
-  if (now - gLastUiMs >= 20) {
+  if (renderUiNow) {
     gLastUiMs = now;
-    renderInstrumentScreen(displayed, tx, ty, M5.Power.getBatteryLevel());
+    renderInstrumentScreen(displayed, tx, ty, gCachedBatPct);
   }
 
   delay(2);

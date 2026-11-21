@@ -47,6 +47,7 @@ import os, sys, glob, time, select, termios
 preferred = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != "auto" else ""
 fd = -1
 current_port = ""
+MAX_BUF = 4096
 
 def find_port():
     if preferred and os.path.exists(preferred):
@@ -66,24 +67,84 @@ def open_serial(port_path):
     termios.tcsetattr(f, termios.TCSANOW, attrs)
     return f
 
+def write_serial_line(write_fd, payload):
+    view = memoryview(payload)
+    sent = 0
+    tries = 0
+    while sent < len(view) and tries < 8:
+        try:
+            n = os.write(write_fd, view[sent:])
+            if n <= 0:
+                break
+            sent += n
+        except BlockingIOError:
+            tries += 1
+            time.sleep(0.004)
+
 sys.stdout.reconfigure(line_buffering=True)
 os.set_blocking(sys.stdin.fileno(), False)
 rx_buf = b""
+rx_discard = False
 stdin_buf = b""
+stdin_discard = False
+
+def drain_stdin(write_fd):
+    global stdin_buf, stdin_discard
+    try:
+        chunk = os.read(sys.stdin.fileno(), 1024)
+        if not chunk:
+            sys.exit(0)
+        stdin_buf += chunk
+        while b"\\n" in stdin_buf:
+            line, stdin_buf = stdin_buf.split(b"\\n", 1)
+            if stdin_discard:
+                stdin_discard = False
+                continue
+            if write_fd >= 0 and line.strip():
+                write_serial_line(write_fd, line.strip() + b"\\n")
+        if len(stdin_buf) > MAX_BUF:
+            stdin_buf = b""
+            stdin_discard = True
+    except BlockingIOError:
+        pass
 
 while True:
     if fd < 0:
+        try:
+            r_idle, _, _ = select.select([sys.stdin.fileno()], [], [], 0.0)
+            if sys.stdin.fileno() in r_idle:
+                drain_stdin(-1)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
         p = find_port()
         if not p:
-            time.sleep(0.8)
+            try:
+                r_wait, _, _ = select.select([sys.stdin.fileno()], [], [], 0.8)
+                if sys.stdin.fileno() in r_wait:
+                    drain_stdin(-1)
+            except SystemExit:
+                raise
+            except Exception:
+                time.sleep(0.8)
             continue
         try:
             fd = open_serial(p)
             current_port = p
+            rx_buf = b""
+            rx_discard = False
             print('{"t":"bridge_port","connected":true,"port":"' + p + '"}', flush=True)
-        except Exception as e:
+        except Exception:
             fd = -1
-            time.sleep(0.8)
+            try:
+                r_wait, _, _ = select.select([sys.stdin.fileno()], [], [], 0.8)
+                if sys.stdin.fileno() in r_wait:
+                    drain_stdin(-1)
+            except SystemExit:
+                raise
+            except Exception:
+                time.sleep(0.8)
             continue
 
     try:
@@ -93,20 +154,22 @@ while True:
 
     if sys.stdin.fileno() in rlist:
         try:
-            chunk = os.read(sys.stdin.fileno(), 1024)
-            if not chunk:
-                break
-            stdin_buf += chunk
-            while b"\\n" in stdin_buf:
-                line, stdin_buf = stdin_buf.split(b"\\n", 1)
-                if fd >= 0 and line.strip():
-                    os.write(fd, line.strip() + b"\\n")
-        except BlockingIOError:
-            pass
+            drain_stdin(fd)
+        except SystemExit:
+            raise
         except Exception:
-            pass
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            fd = -1
+            print('{"t":"bridge_port","connected":false,"port":"' + current_port + '"}', flush=True)
+            current_port = ""
+            rx_buf = b""
+            rx_discard = False
+            continue
 
-    if fd in rlist:
+    if fd >= 0 and fd in rlist:
         try:
             data = os.read(fd, 2048)
             if not data:
@@ -114,9 +177,15 @@ while True:
             rx_buf += data
             while b"\\n" in rx_buf:
                 raw_line, rx_buf = rx_buf.split(b"\\n", 1)
+                if rx_discard:
+                    rx_discard = False
+                    continue
                 txt = raw_line.decode("utf-8", errors="ignore").strip()
                 if txt.startswith("{") and txt.endswith("}"):
                     print(txt, flush=True)
+            if len(rx_buf) > MAX_BUF:
+                rx_buf = b""
+                rx_discard = True
         except BlockingIOError:
             pass
         except Exception:
@@ -128,11 +197,20 @@ while True:
             print('{"t":"bridge_port","connected":false,"port":"' + current_port + '"}', flush=True)
             current_port = ""
             rx_buf = b""
+            rx_discard = False
             time.sleep(0.5)
 `;
 
-function encodeWsFrame(payloadText, opcode = 0x1) {
-  const payload = Buffer.from(payloadText, 'utf8');
+const ALLOWED_ORIGIN_RE = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
+
+function isAllowedOrigin(originHeader) {
+  if (originHeader === undefined || originHeader === '') return true;
+  if (originHeader === 'null') return true;
+  return ALLOWED_ORIGIN_RE.test(String(originHeader));
+}
+
+function encodeWsRawFrame(payloadBuf, opcode = 0x1) {
+  const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(String(payloadBuf), 'utf8');
   const len = payload.length;
   let header;
   if (len < 126) {
@@ -151,16 +229,25 @@ function encodeWsFrame(payloadText, opcode = 0x1) {
   return Buffer.concat([header, payload]);
 }
 
+function encodeWsFrame(payloadText, opcode = 0x1) {
+  return encodeWsRawFrame(Buffer.from(payloadText, 'utf8'), opcode);
+}
+
 function parseWsFrames(buffer) {
   const frames = [];
   let offset = 0;
   while (offset + 2 <= buffer.length) {
     const b0 = buffer[offset];
     const b1 = buffer[offset + 1];
+    const fin = (b0 & 0x80) !== 0;
     const opcode = b0 & 0x0f;
     const masked = (b1 & 0x80) !== 0;
     let payloadLen = b1 & 0x7f;
     let pos = offset + 2;
+
+    if (opcode >= 0x8 && (!fin || payloadLen > 125)) {
+      return { frames, remainder: Buffer.alloc(0), protocolError: true };
+    }
 
     if (payloadLen === 126) {
       if (pos + 2 > buffer.length) break;
@@ -191,7 +278,7 @@ function parseWsFrames(buffer) {
     }
 
     offset = pos + payloadLen;
-    frames.push({ opcode, payload });
+    frames.push({ fin, opcode, payload });
   }
   return { frames, remainder: buffer.subarray(offset), protocolError: false };
 }
@@ -206,24 +293,26 @@ export function createStickBridgeServer(options = {}) {
   const sseClients = new Set();
 
   let pyProc = null;
+  let workerRestartTimer = null;
   let serialReleased = false;
   let serialConnected = false;
   let activeSerialPort = '';
   let lastPacket = null;
   let lastPacketAtMs = 0;
   let stdoutRemainder = '';
+  let closed = false;
 
   function broadcastJson(obj) {
     const line = JSON.stringify(obj);
     const wsFrame = encodeWsFrame(line, 0x1);
     for (const sock of wsClients) {
-      if (!sock.destroyed) {
+      if (!sock.destroyed && sock.writableLength < 65536) {
         try { sock.write(wsFrame); } catch (_e) {}
       }
     }
     const sseChunk = `data: ${line}\n\n`;
     for (const res of sseClients) {
-      if (!res.writableEnded) {
+      if (!res.writableEnded && !res.destroyed && res.writableLength < 65536) {
         try { res.write(sseChunk); } catch (_e) {}
       }
     }
@@ -239,21 +328,11 @@ export function createStickBridgeServer(options = {}) {
     });
   }
 
-  function ingestRawSerialLine(line) {
+  function ingestTelemetryLine(line) {
     const trimmed = String(line || '').trim();
-    if (!trimmed) return;
-    try {
-      const meta = JSON.parse(trimmed);
-      if (meta && meta.t === 'bridge_port') {
-        serialConnected = Boolean(meta.connected);
-        activeSerialPort = meta.port || '';
-        broadcastStatus();
-        return;
-      }
-    } catch (_e) {}
-
+    if (!trimmed) return false;
     const parsed = ColorEngine.parseTelemetryLine(trimmed);
-    if (!parsed) return;
+    if (!parsed) return false;
     serialConnected = true;
     lastPacket = parsed;
     lastPacketAtMs = Date.now();
@@ -277,6 +356,23 @@ export function createStickBridgeServer(options = {}) {
       bat: parsed.battery,
       ev: parsed.event
     });
+    return true;
+  }
+
+  function ingestRawSerialLine(line) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) return;
+    try {
+      const meta = JSON.parse(trimmed);
+      if (meta && meta.t === 'bridge_port') {
+        serialConnected = Boolean(meta.connected);
+        activeSerialPort = typeof meta.port === 'string' ? meta.port : '';
+        broadcastStatus();
+        return;
+      }
+    } catch (_e) {}
+
+    ingestTelemetryLine(trimmed);
   }
 
   function sendSerialCommand(cmdObj) {
@@ -294,16 +390,26 @@ export function createStickBridgeServer(options = {}) {
   }
 
   function startSerialWorker() {
-    if (!enableSerial || serialReleased || pyProc) return;
+    if (!enableSerial || serialReleased || closed || pyProc) return;
+    if (workerRestartTimer) {
+      clearTimeout(workerRestartTimer);
+      workerRestartTimer = null;
+    }
+    stdoutRemainder = '';
     const pythonBin = process.env.PYTHON3 || '/opt/homebrew/bin/python3';
     const fallbackBin = fs.existsSync(pythonBin) ? pythonBin : 'python3';
 
-    pyProc = spawn(fallbackBin, ['-u', '-c', PY_SERIAL_HELPER, serialTarget], {
+    const proc = spawn(fallbackBin, ['-u', '-c', PY_SERIAL_HELPER, serialTarget], {
       stdio: ['pipe', 'pipe', 'ignore']
     });
+    pyProc = proc;
 
-    pyProc.stdout.on('data', (chunk) => {
+    proc.stdout.on('data', (chunk) => {
+      if (pyProc !== proc) return;
       stdoutRemainder += chunk.toString('utf8');
+      if (stdoutRemainder.length > 65536) {
+        stdoutRemainder = '';
+      }
       let nl = stdoutRemainder.indexOf('\n');
       while (nl !== -1) {
         const line = stdoutRemainder.slice(0, nl);
@@ -313,174 +419,328 @@ export function createStickBridgeServer(options = {}) {
       }
     });
 
-    pyProc.on('exit', () => {
+    proc.on('error', () => {
+      if (pyProc !== proc) return;
       pyProc = null;
+      stdoutRemainder = '';
+      serialConnected = false;
+      activeSerialPort = '';
+      broadcastStatus();
+    });
+
+    proc.on('exit', () => {
+      if (pyProc !== proc) return;
+      pyProc = null;
+      stdoutRemainder = '';
       serialConnected = false;
       activeSerialPort = '';
       broadcastStatus();
       if (!serialReleased && !closed) {
-        setTimeout(startSerialWorker, 1200).unref();
+        workerRestartTimer = setTimeout(() => {
+          workerRestartTimer = null;
+          startSerialWorker();
+        }, 1200);
+        workerRestartTimer.unref();
       }
     });
   }
 
-  function stopSerialWorker() {
-    if (pyProc) {
-      const p = pyProc;
-      pyProc = null;
-      try { p.kill('SIGTERM'); } catch (_e) {}
+  async function stopSerialWorker() {
+    if (workerRestartTimer) {
+      clearTimeout(workerRestartTimer);
+      workerRestartTimer = null;
     }
+    stdoutRemainder = '';
+    const proc = pyProc;
+    pyProc = null;
     serialConnected = false;
     activeSerialPort = '';
     broadcastStatus();
+
+    if (!proc) return;
+    if (proc.exitCode !== null || proc.signalCode !== null) return;
+
+    await new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(killTimer);
+        resolve();
+      };
+      proc.once('exit', done);
+      proc.once('error', done);
+      const killTimer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch (_e) {}
+        setTimeout(done, 50).unref();
+      }, 400);
+      killTimer.unref();
+      try {
+        proc.kill('SIGTERM');
+      } catch (_e) {
+        done();
+      }
+    });
   }
 
-  function setCors(res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  function setCors(req, res) {
+    const origin = req.headers.origin;
+    if (origin && isAllowedOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    } else if (!origin) {
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    }
   }
 
-  function readJsonBody(req) {
-    return new Promise((resolve) => {
-      let body = '';
-      req.on('data', (c) => {
-        if (body.length < 16384) body += c.toString('utf8');
+  function readJsonBody(req, maxBytes = 16384) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let total = 0;
+      let tooLarge = false;
+
+      req.on('data', (chunk) => {
+        if (tooLarge) return;
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk), 'utf8');
+        total += buf.length;
+        if (total > maxBytes) {
+          tooLarge = true;
+          const err = new Error('Payload Too Large');
+          err.statusCode = 413;
+          reject(err);
+          return;
+        }
+        chunks.push(buf);
       });
       req.on('end', () => {
-        try { resolve(JSON.parse(body || '{}')); } catch (_e) { resolve({}); }
+        if (tooLarge) return;
+        if (total === 0) {
+          resolve({});
+          return;
+        }
+        try {
+          const raw = Buffer.concat(chunks, total).toString('utf8');
+          const parsed = JSON.parse(raw);
+          resolve(parsed && typeof parsed === 'object' ? parsed : {});
+        } catch (_e) {
+          const err = new Error('Invalid JSON');
+          err.statusCode = 400;
+          reject(err);
+        }
       });
-      req.on('error', () => resolve({}));
+      req.on('error', (err) => {
+        if (!tooLarge) reject(err);
+      });
     });
   }
 
   const server = http.createServer(async (req, res) => {
-    setCors(res);
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const urlObj = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-    const pathname = urlObj.pathname;
-
-    if (pathname === '/api/stick-s3/status' && req.method === 'GET') {
-      const fresh = lastPacketAtMs > 0 && Date.now() - lastPacketAtMs < 3500;
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({
-        ok: true,
-        serialConnected: serialConnected && fresh,
-        portOpen: serialConnected,
-        serialReleased,
-        port: activeSerialPort,
-        clients: wsClients.size + sseClients.size,
-        lastPacketAtMs,
-        lastPacket
-      }));
-      return;
-    }
-
-    if (pathname === '/api/stick-s3/stream' && req.method === 'GET') {
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream; charset=utf-8',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive'
-      });
-      res.write(`data: ${JSON.stringify({
-        t: 'bridge_status',
-        serialConnected,
-        serialReleased,
-        port: activeSerialPort,
-        lastPacketAtMs
-      })}\n\n`);
-      if (lastPacket && Date.now() - lastPacketAtMs < 3500) {
-        res.write(`data: ${JSON.stringify({
-          t: 's3',
-          seq: lastPacket.seq,
-          ax: lastPacket.ax,
-          ay: lastPacket.ay,
-          az: lastPacket.az,
-          tx: lastPacket.tx,
-          ty: lastPacket.ty,
-          r: lastPacket.roll,
-          p: lastPacket.pitch,
-          kin: lastPacket.kin,
-          m: lastPacket.mode,
-          h: lastPacket.hold ? 1 : 0,
-          hex: lastPacket.color.hex,
-          bat: lastPacket.battery,
-          ev: ''
-        })}\n\n`);
-      }
-      sseClients.add(res);
-      req.on('close', () => sseClients.delete(res));
-      return;
-    }
-
-    if (pathname === '/api/stick-s3/cmd' && req.method === 'POST') {
-      const body = await readJsonBody(req);
-      const sent = sendSerialCommand(body);
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, sent }));
-      return;
-    }
-
-    if (pathname === '/api/stick-s3/ingest' && req.method === 'POST') {
-      // Used by automated integration tests or external relays
-      const body = await readJsonBody(req);
-      ingestRawSerialLine(JSON.stringify(body));
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-
-    if (pathname === '/api/stick-s3/release' && req.method === 'POST') {
-      serialReleased = true;
-      stopSerialWorker();
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, released: true }));
-      return;
-    }
-
-    if (pathname === '/api/stick-s3/claim' && req.method === 'POST') {
-      serialReleased = false;
-      startSerialWorker();
-      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, released: false }));
-      return;
-    }
-
-    // Serve repository static files cleanly when opened via http://127.0.0.1:8791/
-    const rel = pathname === '/' ? '/index.html' : pathname;
-    const resolved = path.resolve(REPO_ROOT, '.' + decodeURIComponent(rel));
-    if (!resolved.startsWith(REPO_ROOT + path.sep) && resolved !== path.join(REPO_ROOT, 'index.html')) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
-    }
     try {
-      const stat = fs.statSync(resolved);
-      if (stat.isFile()) {
-        const ext = path.extname(resolved).toLowerCase();
-        res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
-        fs.createReadStream(resolved).pipe(res);
+      if (!isAllowedOrigin(req.headers.origin)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden');
         return;
       }
-    } catch (_e) {}
 
-    res.writeHead(404);
-    res.end('Not found');
+      setCors(req, res);
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
+      let urlObj;
+      try {
+        urlObj = new URL(req.url || '/', 'http://127.0.0.1');
+      } catch (_urlErr) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Bad Request');
+        return;
+      }
+      const pathname = urlObj.pathname;
+
+      if (pathname === '/api/stick-s3/status' && req.method === 'GET') {
+        const fresh = lastPacketAtMs > 0 && Date.now() - lastPacketAtMs < 3500;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({
+          ok: true,
+          serialConnected: serialConnected && fresh,
+          portOpen: serialConnected,
+          serialReleased,
+          port: activeSerialPort,
+          clients: wsClients.size + sseClients.size,
+          lastPacketAtMs,
+          lastPacket
+        }));
+        return;
+      }
+
+      if (pathname === '/api/stick-s3/stream' && req.method === 'GET') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          'Connection': 'keep-alive'
+        });
+        res.write(`data: ${JSON.stringify({
+          t: 'bridge_status',
+          serialConnected,
+          serialReleased,
+          port: activeSerialPort,
+          lastPacketAtMs
+        })}\n\n`);
+        if (lastPacket && Date.now() - lastPacketAtMs < 3500) {
+          res.write(`data: ${JSON.stringify({
+            t: 's3',
+            seq: lastPacket.seq,
+            ax: lastPacket.ax,
+            ay: lastPacket.ay,
+            az: lastPacket.az,
+            tx: lastPacket.tx,
+            ty: lastPacket.ty,
+            gx: lastPacket.gx,
+            gy: lastPacket.gy,
+            gz: lastPacket.gz,
+            r: lastPacket.roll,
+            p: lastPacket.pitch,
+            kin: lastPacket.kin,
+            m: lastPacket.mode,
+            h: lastPacket.hold ? 1 : 0,
+            hex: lastPacket.color.hex,
+            bat: lastPacket.battery,
+            ev: ''
+          })}\n\n`);
+        }
+        sseClients.add(res);
+        req.on('close', () => sseClients.delete(res));
+        return;
+      }
+
+      if (pathname === '/api/stick-s3/cmd' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const sent = sendSerialCommand(body);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, sent }));
+        return;
+      }
+
+      if (pathname === '/api/stick-s3/ingest' && req.method === 'POST') {
+        // External HTTP callers may only ingest validated telemetry packets, never bridge_port metadata
+        const body = await readJsonBody(req);
+        const accepted = ingestTelemetryLine(JSON.stringify(body));
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, accepted }));
+        return;
+      }
+
+      if (pathname === '/api/stick-s3/release' && req.method === 'POST') {
+        serialReleased = true;
+        await stopSerialWorker();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, released: true }));
+        return;
+      }
+
+      if (pathname === '/api/stick-s3/claim' && req.method === 'POST') {
+        serialReleased = false;
+        startSerialWorker();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, released: false }));
+        return;
+      }
+
+      // Serve repository static files cleanly when opened via http://127.0.0.1:8791/
+      const rel = pathname === '/' ? '/index.html' : pathname;
+      let decodedRel;
+      try {
+        decodedRel = decodeURIComponent(rel);
+      } catch (_uriErr) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Bad Request');
+        return;
+      }
+      if (decodedRel.indexOf('\0') !== -1) {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Bad Request');
+        return;
+      }
+
+      const resolved = path.resolve(REPO_ROOT, '.' + decodedRel);
+      if (!resolved.startsWith(REPO_ROOT + path.sep) && resolved !== path.join(REPO_ROOT, 'index.html')) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden');
+        return;
+      }
+      try {
+        const stat = fs.statSync(resolved);
+        if (stat.isFile()) {
+          const ext = path.extname(resolved).toLowerCase();
+          const stream = fs.createReadStream(resolved);
+          stream.on('error', () => {
+            if (!res.headersSent) {
+              res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+              res.end('Internal Server Error');
+            } else {
+              res.destroy();
+            }
+          });
+          res.on('close', () => stream.destroy());
+          res.writeHead(200, { 'Content-Type': MIME_TYPES[ext] || 'application/octet-stream' });
+          stream.pipe(res);
+          return;
+        }
+      } catch (_e) {}
+
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found');
+    } catch (err) {
+      const code = err && typeof err.statusCode === 'number' ? err.statusCode : 500;
+      if (code === 413) {
+        req.resume();
+      }
+      if (!res.headersSent) {
+        res.writeHead(code, {
+          'Content-Type': 'application/json; charset=utf-8',
+          ...(code === 413 ? { Connection: 'close' } : {})
+        });
+        res.end(JSON.stringify({
+          ok: false,
+          error: code === 413 ? 'Payload Too Large' : (code === 400 ? 'Bad Request' : 'Internal Server Error')
+        }));
+      } else if (!res.writableEnded) {
+        res.end();
+      }
+    }
   });
 
-  server.on('upgrade', (req, socket) => {
-    const urlObj = new URL(req.url || '/', 'http://localhost');
+  server.on('upgrade', (req, socket, head) => {
+    if (!isAllowedOrigin(req.headers.origin)) {
+      try {
+        socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      } catch (_e) {}
+      socket.destroy();
+      return;
+    }
+
+    let urlObj;
+    try {
+      urlObj = new URL(req.url || '/', 'http://127.0.0.1');
+    } catch (_urlErr) {
+      try {
+        socket.write('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+      } catch (_e) {}
+      socket.destroy();
+      return;
+    }
+
     if (urlObj.pathname !== '/ws') {
       socket.destroy();
       return;
     }
     const key = req.headers['sec-websocket-key'];
-    if (!key) {
+    if (!key || typeof key !== 'string') {
       socket.destroy();
       return;
     }
@@ -506,8 +766,26 @@ export function createStickBridgeServer(options = {}) {
     })));
 
     let rxBuf = Buffer.alloc(0);
-    socket.on('data', (chunk) => {
-      rxBuf = Buffer.concat([rxBuf, chunk]);
+    let fragOpcode = 0;
+    let fragChunks = [];
+    let fragLen = 0;
+
+    function processDataMessage(opcode, payloadBuf) {
+      if (opcode === 0x1) {
+        try {
+          const cmd = JSON.parse(payloadBuf.toString('utf8'));
+          sendSerialCommand(cmd);
+        } catch (_e) {}
+      }
+    }
+
+    function onSocketChunk(chunk) {
+      if (!chunk || chunk.length === 0 || socket.destroyed) return;
+      rxBuf = rxBuf.length > 0 ? Buffer.concat([rxBuf, chunk]) : Buffer.from(chunk);
+      if (rxBuf.length > 1048576) {
+        socket.destroy();
+        return;
+      }
       const parsed = parseWsFrames(rxBuf);
       if (parsed.protocolError) {
         socket.destroy();
@@ -516,28 +794,63 @@ export function createStickBridgeServer(options = {}) {
       rxBuf = parsed.remainder;
       for (const frame of parsed.frames) {
         if (frame.opcode === 0x8) {
-          socket.end(encodeWsFrame('', 0x8));
+          socket.end(encodeWsRawFrame(Buffer.alloc(0), 0x8));
           return;
         }
         if (frame.opcode === 0x9) {
-          socket.write(encodeWsFrame(frame.payload.toString('utf8'), 0xA));
+          socket.write(encodeWsRawFrame(frame.payload, 0xA));
           continue;
         }
-        if (frame.opcode === 0x1) {
-          try {
-            const cmd = JSON.parse(frame.payload.toString('utf8'));
-            sendSerialCommand(cmd);
-          } catch (_e) {}
+        if (frame.opcode === 0xA) {
+          continue;
+        }
+        if (frame.opcode === 0x0) {
+          if (!fragOpcode) {
+            socket.destroy();
+            return;
+          }
+          fragLen += frame.payload.length;
+          if (fragLen > 65536) {
+            socket.destroy();
+            return;
+          }
+          fragChunks.push(frame.payload);
+          if (frame.fin) {
+            const fullPayload = Buffer.concat(fragChunks, fragLen);
+            const doneOp = fragOpcode;
+            fragOpcode = 0;
+            fragChunks = [];
+            fragLen = 0;
+            processDataMessage(doneOp, fullPayload);
+          }
+          continue;
+        }
+        if (frame.opcode === 0x1 || frame.opcode === 0x2) {
+          if (fragOpcode) {
+            socket.destroy();
+            return;
+          }
+          if (frame.fin) {
+            processDataMessage(frame.opcode, frame.payload);
+          } else {
+            fragOpcode = frame.opcode;
+            fragChunks = [frame.payload];
+            fragLen = frame.payload.length;
+          }
         }
       }
-    });
+    }
+
+    socket.on('data', onSocketChunk);
 
     const cleanup = () => wsClients.delete(socket);
     socket.on('close', cleanup);
     socket.on('error', cleanup);
-  });
 
-  let closed = false;
+    if (head && head.length > 0) {
+      onSocketChunk(head);
+    }
+  });
 
   async function start() {
     startSerialWorker();
@@ -554,7 +867,7 @@ export function createStickBridgeServer(options = {}) {
 
   async function close() {
     closed = true;
-    stopSerialWorker();
+    await stopSerialWorker();
     for (const s of wsClients) {
       try { s.destroy(); } catch (_e) {}
     }

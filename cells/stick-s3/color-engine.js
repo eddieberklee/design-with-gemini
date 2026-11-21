@@ -41,9 +41,34 @@
   ];
 
   function clamp(v, lo, hi) {
+    if (v === Infinity) return hi;
+    if (v === -Infinity) return lo;
+    if (v === null || v === undefined || v === '' || typeof v === 'boolean') {
+      return 0 < lo ? lo : (0 > hi ? hi : 0);
+    }
     const n = Number(v);
-    if (!Number.isFinite(n)) return lo;
+    if (n === Infinity) return hi;
+    if (n === -Infinity) return lo;
+    if (!Number.isFinite(n)) {
+      return 0 < lo ? lo : (0 > hi ? hi : 0);
+    }
     return n < lo ? lo : (n > hi ? hi : n);
+  }
+
+  function safeMode(m) {
+    if (m === null || m === undefined || typeof m === 'boolean') return 0;
+    const n = Number(m);
+    if (!Number.isFinite(n)) return 0;
+    const len = MODES.length;
+    return ((Math.trunc(n) % len) + len) % len;
+  }
+
+  function finiteOr(val, fallback) {
+    if (val === null || val === undefined || val === '' || typeof val === 'boolean') {
+      return fallback;
+    }
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
   }
 
   function smoothstep01(t) {
@@ -120,9 +145,37 @@
 
   // Matches firmware/src/color_math.h::oklchToSrgbGamutMapped
   function oklchToSrgbGamutMapped(L, C, hDeg) {
-    const clL = clamp(L, 0.04, 0.96);
-    const clC = clamp(C, 0, 0.32);
+    const clL = clamp(L, 0, 1);
+    const clC = clamp(C, 0, 0.37);
     const wrappedH = wrapHue(hDeg);
+
+    if (clL <= 0.001) {
+      return {
+        r: 0,
+        g: 0,
+        b: 0,
+        hex: '#000000',
+        l: 0,
+        c: 0,
+        h: wrappedH,
+        oklabA: 0,
+        oklabB: 0
+      };
+    }
+    if (clL >= 0.999 && clC <= 0.001) {
+      return {
+        r: 255,
+        g: 255,
+        b: 255,
+        hex: '#FFFFFF',
+        l: 1,
+        c: 0,
+        h: wrappedH,
+        oklabA: 0,
+        oklabB: 0
+      };
+    }
+
     const rad = wrappedH * (Math.PI / 180);
     const cosH = Math.cos(rad);
     const sinH = Math.sin(rad);
@@ -180,7 +233,7 @@
       b: bb,
       hex: formatHex(rb, gb, bb),
       l: clamp(lab.L, 0, 1),
-      c: clamp(c, 0, 0.32),
+      c: clamp(c, 0, 0.37),
       h: h,
       oklabA: lab.a,
       oklabB: lab.b
@@ -197,7 +250,7 @@
     const tiltMag = clamp(Math.hypot(cleanTx, cleanTy) / 0.92, 0, 1);
     const angleDeg = wrapHue(Math.atan2(cleanTy, cleanTx) * (180 / Math.PI));
     const zNorm = clamp((cleanAz + 1) * 0.5, 0, 1);
-    const m = ((Math.trunc(Number(mode) || 0) % MODES.length) + MODES.length) % MODES.length;
+    const m = safeMode(mode);
 
     if (m === 0) {
       const chroma = 0.018 + 0.235 * smoothstep01(tiltMag) + 0.045 * kin;
@@ -297,9 +350,14 @@
 
   // Smooth interpolation in OKLab perceptual space so hue/lightness transitions never muddy
   function lerpColorOklab(c0, c1, t) {
-    const u = clamp(t, 0, 1);
     if (!c0) return c1;
     if (!c1) return c0;
+    const u = clamp(t, 0, 1);
+    if (u <= 0.001) return c0;
+    if (u >= 0.999 || (c0.r === c1.r && c0.g === c1.g && c0.b === c1.b)) {
+      return c1;
+    }
+
     const L = c0.l + (c1.l - c0.l) * u;
     const a0 = typeof c0.oklabA === 'number' ? c0.oklabA : c0.c * Math.cos((c0.h * Math.PI) / 180);
     const b0 = typeof c0.oklabB === 'number' ? c0.oklabB : c0.c * Math.sin((c0.h * Math.PI) / 180);
@@ -332,39 +390,43 @@
     } catch (_err) {
       return null;
     }
-    if (!obj || typeof obj !== 'object') return null;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
     if (obj.t !== 's3' && obj.t !== 'imu') return null;
 
-    const ax = clamp(obj.ax, -4, 4);
-    const ay = clamp(obj.ay, -4, 4);
-    const az = clamp(obj.az !== undefined ? obj.az : 1, -4, 4);
-    const tx = clamp(obj.tx !== undefined ? obj.tx : ax, -2, 2);
-    const ty = clamp(obj.ty !== undefined ? obj.ty : ay, -2, 2);
-    const gx = clamp(obj.gx || 0, -2000, 2000);
-    const gy = clamp(obj.gy || 0, -2000, 2000);
-    const gz = clamp(obj.gz || 0, -2000, 2000);
-    const mode = ((Math.trunc(Number(obj.m) || 0) % MODES.length) + MODES.length) % MODES.length;
+    const ax = clamp(finiteOr(obj.ax, 0), -4, 4);
+    const ay = clamp(finiteOr(obj.ay, 0), -4, 4);
+    const az = clamp(finiteOr(obj.az, 1), -4, 4);
+    const tx = clamp(finiteOr(obj.tx, ax), -2, 2);
+    const ty = clamp(finiteOr(obj.ty, ay), -2, 2);
+    const gx = clamp(finiteOr(obj.gx, 0), -2000, 2000);
+    const gy = clamp(finiteOr(obj.gy, 0), -2000, 2000);
+    const gz = clamp(finiteOr(obj.gz, 0), -2000, 2000);
+    const mode = safeMode(obj.m);
     const hold = Boolean(obj.h === 1 || obj.h === true || obj.hold === 1 || obj.hold === true);
-    const kin = clamp(
-      obj.kin !== undefined
-        ? obj.kin
-        : Math.abs(Math.hypot(ax, ay, az) - 1) * 1.35 + Math.hypot(gx, gy, gz) / 1200,
-      0,
-      1
-    );
+    const fallbackKin = Math.abs(Math.hypot(ax, ay, az) - 1) * 1.35 + Math.hypot(gx, gy, gz) / 1200;
+    const kin = clamp(finiteOr(obj.kin, fallbackKin), 0, 1);
 
-    const roll = Number.isFinite(Number(obj.r))
-      ? clamp(obj.r, -180, 180)
+    const hasRoll = obj.r !== null && obj.r !== undefined && obj.r !== '' && typeof obj.r !== 'boolean' && Number.isFinite(Number(obj.r));
+    const roll = hasRoll
+      ? clamp(Number(obj.r), -180, 180)
       : Math.atan2(tx, Math.hypot(ty, az)) * (180 / Math.PI);
-    const pitch = Number.isFinite(Number(obj.p))
-      ? clamp(obj.p, -180, 180)
+
+    const hasPitch = obj.p !== null && obj.p !== undefined && obj.p !== '' && typeof obj.p !== 'boolean' && Number.isFinite(Number(obj.p));
+    const pitch = hasPitch
+      ? clamp(Number(obj.p), -180, 180)
       : Math.atan2(ty, Math.hypot(tx, az)) * (180 / Math.PI);
+
+    const hasBat = obj.bat !== null && obj.bat !== undefined && obj.bat !== '' && typeof obj.bat !== 'boolean' && Number.isFinite(Number(obj.bat));
+    const battery = hasBat ? clamp(Math.round(Number(obj.bat)), -1, 100) : -1;
+
+    const rawSeq = obj.seq === null || obj.seq === undefined || typeof obj.seq === 'boolean' ? NaN : Number(obj.seq);
+    const seq = Number.isFinite(rawSeq) ? Math.max(0, Math.min(0xFFFFFFFF, Math.trunc(rawSeq))) : 0;
 
     const computedColor = mapImuToColor(tx, ty, az, kin, mode);
     const deviceColor = parseHexToSpec(obj.hex) || computedColor;
 
     return {
-      seq: Math.max(0, Math.trunc(Number(obj.seq) || 0)),
+      seq: seq,
       ax: ax,
       ay: ay,
       az: az,
@@ -378,7 +440,7 @@
       kin: kin,
       mode: mode,
       hold: hold,
-      battery: Number.isFinite(Number(obj.bat)) ? clamp(Math.round(Number(obj.bat)), -1, 100) : -1,
+      battery: battery,
       event: typeof obj.ev === 'string' ? obj.ev.slice(0, 16) : '',
       color: hold ? deviceColor : computedColor,
       deviceHex: deviceColor.hex
@@ -388,7 +450,7 @@
   function buildHostCommand(cmd) {
     if (!cmd || typeof cmd !== 'object') return '';
     if (cmd.cmd === 'mode') {
-      const m = ((Math.trunc(Number(cmd.m) || 0) % MODES.length) + MODES.length) % MODES.length;
+      const m = safeMode(cmd.m);
       return JSON.stringify({ cmd: 'mode', m: m }) + '\n';
     }
     if (cmd.cmd === 'hold') {
@@ -404,7 +466,8 @@
   }
 
   function sampleDemoMotion(preset, timeSec) {
-    const t = Number(timeSec) || 0;
+    const rawT = Number(timeSec);
+    const t = Number.isFinite(rawT) ? rawT : 0;
     if (preset === 'flip') {
       const phase = t * 1.35;
       const ax = 0.38 * Math.sin(phase * 0.7);
@@ -430,6 +493,7 @@
   return {
     MODES: MODES,
     clamp: clamp,
+    safeMode: safeMode,
     wrapHue: wrapHue,
     formatHex: formatHex,
     oklchToSrgbGamutMapped: oklchToSrgbGamutMapped,

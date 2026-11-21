@@ -6,8 +6,9 @@
   const Transport = NS.Transport;
 
   const SWATCH_STORAGE_KEY = 's3_captured_swatches_v1';
+  const MAX_SWATCHES = 8;
   const SVG_NS = 'http://www.w3.org/2000/svg';
-  const COMMAND_LEASE_MS = 260;
+  const COMMAND_LEASE_MS = 450;
 
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
@@ -77,7 +78,7 @@
       if (!Array.isArray(arr)) return null;
       return arr
         .filter(function (s) { return s && typeof s.hex === 'string' && /^#[0-9A-F]{6}$/i.test(s.hex); })
-        .slice(0, 12);
+        .slice(0, MAX_SWATCHES);
     } catch (_e) {
       return null;
     }
@@ -86,28 +87,52 @@
   function saveSwatches(list) {
     try {
       if (root.localStorage) {
-        root.localStorage.setItem(SWATCH_STORAGE_KEY, JSON.stringify(list.slice(0, 12)));
+        root.localStorage.setItem(SWATCH_STORAGE_KEY, JSON.stringify(list.slice(0, MAX_SWATCHES)));
       }
     } catch (_e) {}
   }
 
-  function copyToClipboard(text) {
-    if (root.navigator && root.navigator.clipboard && typeof root.navigator.clipboard.writeText === 'function') {
-      return root.navigator.clipboard.writeText(text);
+  function fallbackExecCopy(text) {
+    try {
+      if (!document || !document.body || typeof document.execCommand !== 'function') {
+        return false;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      ta.style.pointerEvents = 'none';
+      document.body.appendChild(ta);
+      if (typeof ta.select === 'function') ta.select();
+      const copied = Boolean(document.execCommand('copy'));
+      document.body.removeChild(ta);
+      return copied;
+    } catch (_e) {
+      return false;
     }
-    return new Promise(function (resolve) {
+  }
+
+  function copyToClipboard(text) {
+    if (
+      root.navigator &&
+      root.navigator.clipboard &&
+      typeof root.navigator.clipboard.writeText === 'function'
+    ) {
       try {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-      } catch (_e) {}
-      resolve();
-    });
+        return Promise.resolve(root.navigator.clipboard.writeText(text)).then(
+          function () {
+            return { ok: true };
+          },
+          function () {
+            return { ok: fallbackExecCopy(text) };
+          }
+        );
+      } catch (_err) {
+        return Promise.resolve({ ok: fallbackExecCopy(text) });
+      }
+    }
+    return Promise.resolve({ ok: fallbackExecCopy(text) });
   }
 
   function pad3(n) {
@@ -123,7 +148,10 @@
   }
 
   function mountStickS3Cell(rootEl) {
-    if (!rootEl || !ColorEngine || !Transport) return;
+    if (!rootEl || !ColorEngine || !Transport) return null;
+    if (rootEl.__stickS3Instance && typeof rootEl.__stickS3Instance.destroy === 'function') {
+      rootEl.__stickS3Instance.destroy();
+    }
 
     const initialSwatches = loadSavedSwatches() || [
       { hex: '#D94F1E', mode: 'OKLCH', l: 61, c: 0.19, h: 36 },
@@ -150,6 +178,7 @@
       // Instrument controls
       mode: 0,
       hold: false,
+      pinnedCustomSwatch: false,
       simPreset: 'idle', // 'idle' | 'orbit' | 'flip' | 'shake'
       draggingPad: false,
 
@@ -177,12 +206,29 @@
       scopeHistory: []
     };
 
-    // FPS / Packet rate counter
+    // FPS / Packet rate counter & lifecycle state
     let pktCounter = 0;
     let lastRateTickMs = Date.now();
+    let lastSimScopeMs = -Infinity;
     let toastTimer = null;
     let announceTimer = null;
     let lastFocusBeforeModal = null;
+    let rafId = null;
+    let destroyed = false;
+
+    const reducedMotionQuery =
+      typeof root.matchMedia === 'function'
+        ? root.matchMedia('(prefers-reduced-motion: reduce)')
+        : null;
+
+    function isReducedMotion() {
+      if (reducedMotionQuery) return Boolean(reducedMotionQuery.matches);
+      if (typeof root.matchMedia === 'function') {
+        const mq = root.matchMedia('(prefers-reduced-motion: reduce)');
+        return Boolean(mq && mq.matches);
+      }
+      return false;
+    }
 
     // ---------- Polite Screen Reader Live Region ----------
     const srLive = el('div', {
@@ -309,9 +355,10 @@
       title: 'Click to copy live hex color',
       onClick: function () {
         const hex = state.displayColor.hex;
-        copyToClipboard(hex);
-        showToast('COPIED ' + hex);
-        announce('Copied ' + hex);
+        copyToClipboard(hex).then(function (res) {
+          showToast((res && res.ok ? 'COPIED ' : 'HEX ') + hex);
+          announce((res && res.ok ? 'Copied ' : 'Selected ') + hex);
+        });
       }
     }, [
       el('span', { className: 's3-hex-dot', 'aria-hidden': 'true' }),
@@ -374,7 +421,12 @@
 
     // Micro badge when Cell 03 shrinks grid <= 235px
     const microHexEl = el('span', { className: 's3-micro-pill s3-mono', textContent: '#D5C8C0' });
-    const microWrap = el('div', { className: 's3-micro', onClick: function () { openDialog(); } }, [microHexEl]);
+    const microWrap = el('button', {
+      type: 'button',
+      className: 's3-micro',
+      'aria-label': 'Open M5StickS3 Color Studio',
+      onClick: function () { openDialog(); }
+    }, [microHexEl]);
 
     clearNode(rootEl);
     rootEl.appendChild(hudTop);
@@ -421,7 +473,7 @@
     const scopeCanvas = el('canvas', { className: 's3-scope-canvas', width: 268, height: 76 });
 
     const heroHexEl = el('span', { className: 's3-hero-hex s3-mono', textContent: '#D5C8C0' });
-    const heroMetricsEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'oklch(0.84 0.02 0deg)' });
+    const heroMetricsEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'oklch(0.84 0.020 000deg)' });
     const heroContrastEl = el('span', { className: 's3-hero-metrics s3-mono', textContent: 'Contrast 15.9:1 AAA' });
     const heroSwatch = el('div', { className: 's3-hero-swatch' }, [
       el('div', { className: 's3-hero-pill' }, [heroHexEl, heroMetricsEl, heroContrastEl])
@@ -433,6 +485,11 @@
       type: 'button',
       className: 's3-btn s3-btn--primary',
       onClick: async function () {
+        if (state.linkSource !== 'serial' && !Transport.supportsWebSerial()) {
+          showToast('WEB SERIAL UNSUPPORTED');
+          connSummaryEl.textContent = 'Web Serial requires Chrome or Edge on localhost / HTTPS (or use the auto USB bridge).';
+          return;
+        }
         try {
           if (state.linkSource === 'serial') {
             await link.disconnectWebSerial();
@@ -441,7 +498,7 @@
             showToast('USB WEB SERIAL LIVE');
           }
         } catch (err) {
-          showToast('SERIAL CANCELLED');
+          showToast(!Transport.supportsWebSerial() ? 'WEB SERIAL UNSUPPORTED' : 'SERIAL CANCELLED');
           connSummaryEl.textContent = err && err.message ? err.message : 'Web Serial connection cancelled';
         }
       }
@@ -451,6 +508,11 @@
       type: 'button',
       className: 's3-btn',
       onClick: async function () {
+        if (state.linkSource !== 'ble' && !Transport.supportsWebBluetooth()) {
+          showToast('BLE UNSUPPORTED');
+          connSummaryEl.textContent = 'Web Bluetooth requires Chrome or Edge on localhost / HTTPS.';
+          return;
+        }
         try {
           if (state.linkSource === 'ble') {
             await link.disconnectWebBluetooth();
@@ -459,6 +521,7 @@
             showToast('WIRELESS BLE LIVE');
           }
         } catch (err) {
+          showToast(!Transport.supportsWebBluetooth() ? 'BLE UNSUPPORTED' : 'BLE CANCELLED');
           connSummaryEl.textContent = err && err.message ? err.message : 'BLE pairing cancelled';
         }
       }
@@ -478,6 +541,9 @@
         onClick: function () {
           state.simPreset = p.id;
           state.hold = false;
+          state.pinnedCustomSwatch = false;
+          state.heldColor = null;
+          if (!state.hwConnected) recomputeLocalTarget();
           renderStaticControls();
         }
       }, p.label);
@@ -508,8 +574,9 @@
         const cssVars = state.swatches.map(function (s, idx) {
           return '  --stick-s3-swatch-' + (idx + 1) + ': ' + s.hex + ';';
         }).join('\n');
-        copyToClipboard(':root {\n' + cssVars + '\n}');
-        showToast('COPIED CSS PALETTE');
+        copyToClipboard(':root {\n' + cssVars + '\n}').then(function (res) {
+          showToast(res && res.ok ? 'COPIED CSS PALETTE' : 'CSS PALETTE READY');
+        });
       }
     }, 'Copy CSS Tokens');
 
@@ -607,7 +674,7 @@
       };
       const deduped = [entry].concat(
         state.swatches.filter(function (s) { return s.hex.toUpperCase() !== entry.hex.toUpperCase(); })
-      ).slice(0, 8);
+      ).slice(0, MAX_SWATCHES);
       state.swatches = deduped;
       saveSwatches(deduped);
       renderSwatches();
@@ -622,6 +689,8 @@
       }
       if (!state.hwConnected) {
         recomputeLocalTarget();
+      } else {
+        state.targetColor = ColorEngine.mapImuToColor(state.tx, state.ty, state.az, state.kin, m);
       }
       const meta = ColorEngine.MODES[m];
       showToast('MODE · ' + meta.shortLabel);
@@ -631,6 +700,7 @@
 
     function toggleHold(sendToHw, captureChip) {
       state.hold = !state.hold;
+      state.pinnedCustomSwatch = false;
       if (state.hold) {
         state.heldColor = state.displayColor;
         if (captureChip) pushCapturedSwatch(state.displayColor);
@@ -693,6 +763,8 @@
       state.az = zSign * Math.sqrt(Math.max(0.04, 1 - magSq));
       state.kin = ColorEngine.clamp(Math.hypot(ev.movementX || 0, ev.movementY || 0) / 36, 0, 0.85);
       state.hold = false;
+      state.pinnedCustomSwatch = false;
+      state.heldColor = null;
       recomputeLocalTarget();
       renderStaticControls();
     }
@@ -722,7 +794,8 @@
       triggerTare(state.hwConnected);
     });
 
-    rootEl.addEventListener('keydown', function (ev) {
+    function onKeyDown(ev) {
+      if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey) return;
       if (ev.key === 'm' || ev.key === 'M') {
         ev.preventDefault();
         setMode((state.mode + 1) % ColorEngine.MODES.length, true);
@@ -734,12 +807,38 @@
         toggleHold(true, true);
       } else if (!state.hwConnected && ev.target === domePad) {
         const step = 0.12;
-        if (ev.key === 'ArrowLeft') { ev.preventDefault(); state.ax = ColorEngine.clamp(state.ax - step, -1, 1); recomputeLocalTarget(); }
-        else if (ev.key === 'ArrowRight') { ev.preventDefault(); state.ax = ColorEngine.clamp(state.ax + step, -1, 1); recomputeLocalTarget(); }
-        else if (ev.key === 'ArrowUp') { ev.preventDefault(); state.ay = ColorEngine.clamp(state.ay + step, -1, 1); recomputeLocalTarget(); }
-        else if (ev.key === 'ArrowDown') { ev.preventDefault(); state.ay = ColorEngine.clamp(state.ay - step, -1, 1); recomputeLocalTarget(); }
+        let moved = false;
+        if (ev.key === 'ArrowLeft') {
+          ev.preventDefault();
+          state.ax = ColorEngine.clamp(state.ax - step, -1, 1);
+          moved = true;
+        } else if (ev.key === 'ArrowRight') {
+          ev.preventDefault();
+          state.ax = ColorEngine.clamp(state.ax + step, -1, 1);
+          moved = true;
+        } else if (ev.key === 'ArrowUp') {
+          ev.preventDefault();
+          state.ay = ColorEngine.clamp(state.ay + step, -1, 1);
+          moved = true;
+        } else if (ev.key === 'ArrowDown') {
+          ev.preventDefault();
+          state.ay = ColorEngine.clamp(state.ay - step, -1, 1);
+          moved = true;
+        }
+        if (moved) {
+          const magSq = Math.min(0.96, state.ax * state.ax + state.ay * state.ay);
+          const zSign = state.az >= 0 ? 1 : -1;
+          state.az = zSign * Math.sqrt(Math.max(0.04, 1 - magSq));
+          state.simPreset = 'idle';
+          state.hold = false;
+          state.pinnedCustomSwatch = false;
+          state.heldColor = null;
+          recomputeLocalTarget();
+          renderStaticControls();
+        }
       }
-    });
+    }
+    rootEl.addEventListener('keydown', onKeyDown);
 
     // ---------- Swatch Strip & PNG Tear-Sheet Renderer ----------
 
@@ -756,11 +855,18 @@
             const spec = ColorEngine.parseHexToSpec(sw.hex);
             if (spec) {
               state.hold = true;
+              state.pinnedCustomSwatch = true;
               state.heldColor = spec;
               state.targetColor = spec;
               state.displayColor = spec;
+              state.pendingHoldUntil = Date.now() + COMMAND_LEASE_MS;
+              rootEl.style.setProperty('--s3-live-hex', spec.hex);
+              hexTextEl.textContent = spec.hex;
+              microHexEl.textContent = spec.hex;
+              link.sendCommand({ cmd: 'hold', h: 1 });
               copyToClipboard(sw.hex);
               showToast('PINNED ' + sw.hex);
+              announce('Pinned swatch ' + sw.hex);
               renderStaticControls();
             }
           }
@@ -775,8 +881,9 @@
           className: 's3-deck-card',
           title: 'Click to copy ' + sw.hex,
           onClick: function () {
-            copyToClipboard(sw.hex);
-            showToast('COPIED ' + sw.hex);
+            copyToClipboard(sw.hex).then(function (res) {
+              showToast((res && res.ok ? 'COPIED ' : 'HEX ') + sw.hex);
+            });
           }
         }, [
           el('div', { className: 's3-deck-color', style: { backgroundColor: sw.hex } }),
@@ -892,11 +999,15 @@
         ctx.font = '700 10px ui-monospace, Menlo, monospace';
         ctx.fillText('STICK S3', 8, 15);
 
-        ctx.fillStyle = state.hold ? '#d94f1e' : '#047857';
+        const lcdBadgeBg = state.hold ? '#b43a10' : (!state.hwConnected ? '#b45309' : '#047857');
+        const lcdBadgeText = state.hold
+          ? 'HOLD'
+          : (!state.hwConnected ? 'SIM' : (state.linkSource === 'ble' ? 'BLE' : 'USB'));
+        ctx.fillStyle = lcdBadgeBg;
         ctx.fillRect(72, 5, 32, 13);
         ctx.fillStyle = '#ffffff';
         ctx.font = '700 8.5px ui-monospace, Menlo, monospace';
-        ctx.fillText(state.hold ? 'HOLD' : (state.linkSource === 'ble' ? 'BLE' : 'USB'), 76, 14);
+        ctx.fillText(lcdBadgeText, 76, 14);
 
         ctx.fillStyle = col.hex;
         ctx.fillRect(8, 24, 119, 112);
@@ -915,9 +1026,10 @@
         ctx.arc(dx, dy, 4.5, 0, Math.PI * 2);
         ctx.fill();
 
+        const modeMeta = ColorEngine.MODES[state.mode] || ColorEngine.MODES[0];
         ctx.font = '700 10px ui-monospace, Menlo, monospace';
         ctx.fillText(col.hex, 14, 128);
-        ctx.fillText(ColorEngine.MODES[state.mode].shortLabel, 14, 38);
+        ctx.fillText(modeMeta.shortLabel, 14, 38);
 
         const bars = [
           { lbl: 'X', v: state.ax, c: '#f87171', y: 152 },
@@ -976,8 +1088,11 @@
     // ---------- 60 FPS Animation & Perceptual OKLab Damper Loop ----------
 
     function renderFrame(nowMs) {
+      if (destroyed) return;
+      const frameMs = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+
       if (!state.hwConnected && state.simPreset !== 'idle' && !state.draggingPad && !state.hold) {
-        const sim = ColorEngine.sampleDemoMotion(state.simPreset, nowMs * 0.001);
+        const sim = ColorEngine.sampleDemoMotion(state.simPreset, frameMs * 0.001);
         state.ax = sim.ax;
         state.ay = sim.ay;
         state.az = sim.az;
@@ -985,8 +1100,24 @@
         recomputeLocalTarget();
       }
 
+      if (!state.hwConnected && frameMs - lastSimScopeMs >= 33) {
+        lastSimScopeMs = frameMs;
+        state.scopeHistory.push({ ax: state.ax, ay: state.ay, az: state.az });
+        if (state.scopeHistory.length > 60) state.scopeHistory.shift();
+      }
+
+      const reducedMotion = isReducedMotion();
+      const lerpFactor = reducedMotion ? 1 : 0.28;
       const goal = state.hold && state.heldColor ? state.heldColor : state.targetColor;
-      state.displayColor = ColorEngine.lerpColorOklab(state.displayColor, goal, 0.28);
+      state.displayColor =
+        lerpFactor >= 1 ||
+        (state.displayColor &&
+          goal &&
+          state.displayColor.r === goal.r &&
+          state.displayColor.g === goal.g &&
+          state.displayColor.b === goal.b)
+          ? goal
+          : ColorEngine.lerpColorOklab(state.displayColor, goal, lerpFactor);
       const col = state.displayColor;
 
       const theme = ColorEngine.pickAdaptiveTheme(col.r, col.g, col.b, state.prevIsLightBg);
@@ -1031,19 +1162,22 @@
         heroSwatch.style.backgroundColor = col.hex;
         heroHexEl.textContent = col.hex;
         heroMetricsEl.textContent =
-          'oklch(' + col.l.toFixed(2) + ' ' + col.c.toFixed(3) + ' ' + Math.round(col.h) + 'deg)';
+          'oklch(' + col.l.toFixed(2) + ' ' + col.c.toFixed(3) + ' ' + pad3(col.h) + 'deg)';
         heroContrastEl.textContent = 'Reticle ' + theme.contrastRatio.toFixed(1) + ':1 AA · Capsule AAA';
-        scopeRateEl.textContent = state.hwConnected ? (state.packetHz + ' Hz live') : 'Simulated';
+        scopeRateEl.textContent = state.hwConnected ? (state.packetHz + ' Hz live') : 'Simulated · 30 Hz';
         renderTwinAndScope(col);
       }
 
-      root.requestAnimationFrame(renderFrame);
+      if (!destroyed && typeof root.requestAnimationFrame === 'function') {
+        rafId = root.requestAnimationFrame(renderFrame);
+      }
     }
 
     // ---------- Hardware Link Wiring ----------
 
     const link = Transport.createStickLink({
       onTelemetry: function (pkt, src) {
+        if (destroyed) return;
         const now = Date.now();
         pktCounter++;
         if (now - lastRateTickMs >= 1000) {
@@ -1052,8 +1186,13 @@
           lastRateTickMs = now;
         }
 
+        const prevConnected = state.hwConnected;
+        const prevBat = state.battery;
+        const prevSrc = state.linkSource;
+        const prevZSign = state.az >= 0;
+
         state.hwConnected = true;
-        state.linkSource = src;
+        state.linkSource = src || state.linkSource;
         state.ax = pkt.ax;
         state.ay = pkt.ay;
         state.az = pkt.az;
@@ -1064,53 +1203,153 @@
         state.kin = pkt.kin;
         state.battery = pkt.battery;
 
-        if (now > state.pendingModeUntil && pkt.mode !== state.mode) {
-          state.mode = pkt.mode;
-          renderStaticControls();
-        }
-        if (now > state.pendingHoldUntil && pkt.hold !== state.hold) {
-          state.hold = pkt.hold;
-          if (state.hold) state.heldColor = pkt.color;
-          renderStaticControls();
-        }
+        let needsStaticSync =
+          prevConnected !== state.hwConnected ||
+          prevBat !== state.battery ||
+          prevSrc !== state.linkSource ||
+          prevZSign !== (state.az >= 0);
 
-        state.targetColor = pkt.color;
-        if (state.hold) {
-          state.heldColor = pkt.color;
-        }
+        const safePktMode =
+          Number.isFinite(Number(pkt.mode)) && ColorEngine.MODES[pkt.mode] ? pkt.mode : 0;
 
         if (pkt.event && pkt.seq !== state.lastHandledEventSeq) {
           state.lastHandledEventSeq = pkt.seq;
           if (pkt.event === 'swatch') {
+            state.pinnedCustomSwatch = false;
+            state.pendingHoldUntil = 0;
+            state.hold = true;
+            state.heldColor = pkt.color;
+            needsStaticSync = true;
             pushCapturedSwatch(pkt.color);
             showToast('BTN-A SWATCH · ' + pkt.color.hex);
+          } else if (pkt.event === 'live') {
+            if (state.pinnedCustomSwatch || now > state.pendingHoldUntil) {
+              state.pinnedCustomSwatch = false;
+              state.pendingHoldUntil = 0;
+              state.hold = false;
+              state.heldColor = null;
+              needsStaticSync = true;
+            }
+          } else if (pkt.event === 'hold') {
+            if (now > state.pendingHoldUntil) {
+              state.pinnedCustomSwatch = false;
+              state.hold = true;
+              state.heldColor = pkt.color;
+              needsStaticSync = true;
+            }
           } else if (pkt.event === 'tare') {
             showToast('STICK S3 TARED');
           } else if (pkt.event === 'mode') {
-            showToast('MODE · ' + ColorEngine.MODES[pkt.mode].shortLabel);
+            if (now > state.pendingModeUntil) {
+              showToast('MODE · ' + ColorEngine.MODES[safePktMode].shortLabel);
+            }
           }
+        }
+
+        if (now > state.pendingModeUntil && safePktMode !== state.mode) {
+          state.mode = safePktMode;
+          needsStaticSync = true;
+        }
+
+        if (now > state.pendingHoldUntil) {
+          if (pkt.hold !== state.hold) {
+            state.hold = pkt.hold;
+            if (!state.hold) {
+              state.pinnedCustomSwatch = false;
+              state.heldColor = null;
+            } else if (!state.pinnedCustomSwatch) {
+              state.heldColor = pkt.color;
+            }
+            needsStaticSync = true;
+          } else if (state.hold && !state.pinnedCustomSwatch && pkt.hold === true) {
+            state.heldColor = pkt.color;
+          }
+        }
+
+        if (now <= state.pendingModeUntil) {
+          state.targetColor = ColorEngine.mapImuToColor(pkt.tx, pkt.ty, pkt.az, pkt.kin, state.mode);
+        } else {
+          state.targetColor = pkt.color;
+        }
+
+        if (needsStaticSync) {
+          renderStaticControls();
         }
 
         state.scopeHistory.push({ ax: pkt.ax, ay: pkt.ay, az: pkt.az });
         if (state.scopeHistory.length > 60) state.scopeHistory.shift();
       },
       onStatus: function (st) {
+        if (destroyed) return;
         const prevConnected = state.hwConnected;
+        const prevReachable = state.bridgeReachable;
+        const prevSrc = state.linkSource;
+        const prevPort = state.portName;
         state.hwConnected = Boolean(st.connected);
         state.linkSource = st.source || 'none';
         state.bridgeReachable = Boolean(st.bridgeReachable);
         state.portName = st.portName || '';
-        if (prevConnected !== state.hwConnected || st.detail) {
+        state.statusDetail = st.detail || '';
+        if (!state.hwConnected) {
+          state.battery = -1;
+          state.packetHz = 0;
+          pktCounter = 0;
+        }
+        if (
+          prevConnected !== state.hwConnected ||
+          prevReachable !== state.bridgeReachable ||
+          prevSrc !== state.linkSource ||
+          prevPort !== state.portName ||
+          Boolean(st.detail)
+        ) {
           renderStaticControls();
         }
       }
     });
 
+    function destroy() {
+      if (destroyed) return;
+      destroyed = true;
+      if (rafId !== null && typeof root.cancelAnimationFrame === 'function') {
+        root.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      if (announceTimer) {
+        clearTimeout(announceTimer);
+        announceTimer = null;
+      }
+      rootEl.removeEventListener('keydown', onKeyDown);
+      try {
+        if (dialog.open && typeof dialog.close === 'function') {
+          dialog.close();
+        }
+      } catch (_e) {}
+      if (dialog.parentNode) {
+        dialog.parentNode.removeChild(dialog);
+      }
+      if (rootEl.__stickS3Instance === instance) {
+        rootEl.__stickS3Instance = null;
+      }
+      link.destroy();
+    }
+
+    const instance = {
+      destroy: destroy
+    };
+    rootEl.__stickS3Instance = instance;
+
     renderSwatches();
     renderStaticControls();
     recomputeLocalTarget();
     link.start();
-    root.requestAnimationFrame(renderFrame);
+    if (typeof root.requestAnimationFrame === 'function') {
+      rafId = root.requestAnimationFrame(renderFrame);
+    }
+    return instance;
   }
 
   function bootstrap() {
