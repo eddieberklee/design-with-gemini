@@ -7,25 +7,22 @@
   const SESSION_KEY = 'dc_gemini_api_key_session';
   const LOCAL_KEY = 'dc_gemini_api_key_local';
 
-  const DEFAULT_FOUR_MODELS = [
-    'gemini-3-pro-preview',
-    'gemini-3.8-flash',
-    'gemini-3.1-flash-lite-preview',
-    'gemini-4-neon'
-  ];
-
-  const EXTRA_MODELS = [
+  const DEFAULT_SIX_MODELS = [
     'gemini-4-hydrogen',
     'gemini-4-argon',
     'gemini-4-carbon',
-    'gemini-4-neon'
+    'gemini-4-neon',
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-flash-lite-preview'
   ];
 
   const MODEL_SLOTS_PREFERENCE = [
-    [/^gemini-3(\.\d+)?-pro(?!.*image)/i, /^gemini-4-hydrogen$/i, /^gemini-2\.5-pro$/i],
-    [/^gemini-3\.8-flash$/i, /^gemini-3(\.\d+)?-flash(?!.*(lite|image|tts|audio))/i, /^gemini-4-argon$/i],
-    [/^gemini-3(\.\d+)?-flash-lite/i, /^gemini-4-carbon$/i],
-    [/^gemini-4-neon$/i, /^gemini-4-hydrogen$/i, /^gemini-4-argon$/i, /^gemini-4-carbon$/i, /^gemini-3\.8-flash$/i]
+    [/^gemini-4-hydrogen$/i],
+    [/^gemini-4-argon$/i],
+    [/^gemini-4-carbon$/i],
+    [/^gemini-4-neon$/i],
+    [/^gemini-3\.1-pro-preview$/i, /^gemini-3(\.\d+)?-pro(?!.*image)/i],
+    [/^gemini-3\.1-flash-lite-preview$/i, /^gemini-3(\.\d+)?-flash-lite/i]
   ];
 
   const EXCLUDE_RE = /(tts|image|live|audio|embedding|aqa|robotics|computer-use|deep-research|lyria|veo|imagen|gemma|decision|transcribe|learnlm|nano-banana|genie|^gemini-2\.0-|^gemini-2\.5-flash$)/i;
@@ -126,9 +123,9 @@
     return eligible;
   }
 
-  function pickFourModels(rawModels) {
+  function pickSixModels(rawModels) {
     const eligible = listEligibleModels(rawModels);
-    if (!eligible.length) return DEFAULT_FOUR_MODELS.slice();
+    if (!eligible.length) return DEFAULT_SIX_MODELS.slice();
 
     const chosen = [];
     for (let slot = 0; slot < MODEL_SLOTS_PREFERENCE.length; slot++) {
@@ -143,17 +140,9 @@
           }
         }
       }
-      if (picked) chosen.push(picked);
+      chosen.push(picked || DEFAULT_SIX_MODELS[slot]);
     }
-
-    for (let i = 0; i < eligible.length && chosen.length < 4; i++) {
-      if (chosen.indexOf(eligible[i]) < 0) chosen.push(eligible[i]);
-    }
-    for (let i = 0; i < DEFAULT_FOUR_MODELS.length && chosen.length < 4; i++) {
-      if (chosen.indexOf(DEFAULT_FOUR_MODELS[i]) < 0) chosen.push(DEFAULT_FOUR_MODELS[i]);
-    }
-
-    return chosen.slice(0, 4);
+    return chosen.slice(0, 6);
   }
 
   function parse3DSceneFromText(rawText) {
@@ -195,8 +184,8 @@
     const key = String(apiKey || '').trim();
     if (!key) {
       return {
-        selected: DEFAULT_FOUR_MODELS.slice(),
-        available: DEFAULT_FOUR_MODELS.slice()
+        selected: DEFAULT_SIX_MODELS.slice(),
+        available: DEFAULT_SIX_MODELS.slice()
       };
     }
     try {
@@ -206,13 +195,13 @@
         signal: signal
       });
       if (!res.ok) {
-        return { selected: DEFAULT_FOUR_MODELS.slice(), available: DEFAULT_FOUR_MODELS.slice() };
+        return { selected: DEFAULT_SIX_MODELS.slice(), available: DEFAULT_SIX_MODELS.slice() };
       }
       const json = await res.json();
       const eligible = listEligibleModels(json && json.models);
-      const selected = pickFourModels(json && json.models);
+      const selected = pickSixModels(json && json.models);
       const merged = selected.slice();
-      EXTRA_MODELS.concat(eligible).forEach(function (id) {
+      DEFAULT_SIX_MODELS.concat(eligible).forEach(function (id) {
         if (merged.indexOf(id) < 0) merged.push(id);
       });
       return {
@@ -220,7 +209,7 @@
         available: merged
       };
     } catch (_err) {
-      return { selected: DEFAULT_FOUR_MODELS.slice(), available: DEFAULT_FOUR_MODELS.slice() };
+      return { selected: DEFAULT_SIX_MODELS.slice(), available: DEFAULT_SIX_MODELS.slice() };
     }
   }
 
@@ -286,10 +275,10 @@
   }
 
   NS.Client = {
-    DEFAULT_FOUR_MODELS: DEFAULT_FOUR_MODELS,
+    DEFAULT_MODELS: DEFAULT_SIX_MODELS,
     KeyStore: KeyStore,
     listEligibleModels: listEligibleModels,
-    pickFourModels: pickFourModels,
+    pickSixModels: pickSixModels,
     parse3DSceneFromText: parse3DSceneFromText,
     discoverModels: discoverModels,
     generate3DForModel: generate3DForModel

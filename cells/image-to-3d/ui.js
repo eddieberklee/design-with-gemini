@@ -39,10 +39,10 @@
     root.innerHTML = [
       '<header class="ui-tile-head">',
       '  <span class="ui-tile-index">' + cellIndex + '</span>',
-      '  <h2 class="ui-tile-title">Image → 3D (4×)</h2>',
+      '  <h2 class="ui-tile-title">Image → 3D (6×)</h2>',
       '  <div class="ui-tile-actions">',
-      '    <button type="button" class="ui-btn ui-btn--sm i3d-sync-btn" aria-pressed="true" title="Sync camera orbit across all 4 viewers">Sync</button>',
-      '    <button type="button" class="ui-btn ui-btn--sm i3d-expand-btn" title="Open 4-up studio">4-Up</button>',
+      '    <button type="button" class="ui-btn ui-btn--sm i3d-sync-btn" aria-pressed="true" title="Sync camera orbit across all 6 viewers">Sync</button>',
+      '    <button type="button" class="ui-btn ui-btn--sm i3d-expand-btn" title="Open 6-up studio">6-Up</button>',
       '    <button type="button" class="ui-pill i3d-key-btn" data-tone="attention" aria-expanded="false">',
       '      <span class="ui-pill-label">Key</span>',
       '    </button>',
@@ -57,20 +57,20 @@
       '<div class="ui-tile-body i3d-body">',
       '  <div class="i3d-dropbar" role="button" tabindex="0" aria-label="Drop or choose an image">',
       '    <img class="i3d-thumb" alt="Dropped image" hidden>',
-      '    <span class="i3d-drop-text">Drop an image here, paste, or click to pick — 4 Gemini models race to build 3D</span>',
+      '    <span class="i3d-drop-text">Drop an image here, paste, or click to pick — 6 Gemini models race to build 3D</span>',
       '    <input type="file" class="i3d-file-input" accept="image/*">',
-      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--primary i3d-run-btn" disabled>Run 4×</button>',
+      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--primary i3d-run-btn" disabled>Run 6×</button>',
       '  </div>',
       '  <div class="i3d-arena"></div>',
       '</div>',
       '<footer class="ui-tile-foot">',
-      '  <span class="i3d-status ui-truncate">Drop an image to compare 4 Gemini models</span>',
+      '  <span class="i3d-status ui-truncate">Drop an image to compare 6 Gemini models</span>',
       '</footer>',
-      '<dialog class="ui-dialog i3d-dialog" aria-label="4-Model 3D Comparison Studio">',
+      '<dialog class="ui-dialog i3d-dialog" aria-label="6-Model 3D Comparison Studio">',
       '  <div class="ui-studio-bar">',
-      '    <span class="ui-studio-title">Image → 3D · 4 Gemini Models Side by Side</span>',
+      '    <span class="ui-studio-title">Image → 3D · 6 Gemini Models Side by Side</span>',
       '    <div class="ui-studio-actions">',
-      '      <button type="button" class="ui-btn ui-btn--sm i3d-dialog-rerun">Re-run 4×</button>',
+      '      <button type="button" class="ui-btn ui-btn--sm i3d-dialog-rerun">Re-run 6×</button>',
       '      <button type="button" class="ui-btn ui-btn--sm i3d-dialog-close">Close</button>',
       '    </div>',
       '  </div>',
@@ -98,13 +98,13 @@
     const dialogRerun = root.querySelector('.i3d-dialog-rerun');
     const dialogClose = root.querySelector('.i3d-dialog-close');
 
-    let models = Client.DEFAULT_FOUR_MODELS.slice();
-    let availableModels = Client.DEFAULT_FOUR_MODELS.slice();
+    let models = Client.DEFAULT_MODELS.slice();
+    let availableModels = Client.DEFAULT_MODELS.slice();
     let currentImage = null;
     let syncOrbit = true;
     let activeController = null;
     let discoveredKey = '';
-    const slotStates = [null, null, null, null];
+    const slotStates = [null, null, null, null, null, null];
 
     function buildSlots(container) {
       container.innerHTML = '';
@@ -223,7 +223,7 @@
           if (info && Array.isArray(info.available) && info.available.length) {
             availableModels = info.available;
           }
-          if (info && Array.isArray(info.selected) && info.selected.length === 4) {
+          if (info && Array.isArray(info.selected) && info.selected.length === 6) {
             models = info.selected;
           }
           applyModelOptions();
@@ -235,7 +235,7 @@
       if (activeController) {
         activeController.abort();
         activeController = null;
-        runBtn.textContent = 'Run 4×';
+        runBtn.textContent = 'Run 6×';
         statusEl.textContent = 'Cancelled';
         return;
       }
@@ -256,7 +256,7 @@
       activeController = new AbortController();
       const signal = activeController.signal;
       runBtn.textContent = 'Stop';
-      statusEl.textContent = 'Running 4 Gemini models in parallel...';
+      statusEl.textContent = 'Running 6 Gemini models in parallel...';
 
       let doneCount = 0;
       const jobs = models.map(function (modelId, idx) {
@@ -312,13 +312,13 @@
           });
         }).finally(function () {
           doneCount += 1;
-          statusEl.textContent = doneCount + '/4 models finished';
+          statusEl.textContent = doneCount + '/6 models finished';
         });
       });
 
       await Promise.allSettled(jobs);
       activeController = null;
-      runBtn.textContent = 'Run 4×';
+      runBtn.textContent = 'Run 6×';
     }
 
     async function handleImageFile(file) {
@@ -408,8 +408,8 @@
       Client.KeyStore.clear();
       keyInput.value = '';
       discoveredKey = '';
-      models = Client.DEFAULT_FOUR_MODELS.slice();
-      availableModels = Client.DEFAULT_FOUR_MODELS.slice();
+      models = Client.DEFAULT_MODELS.slice();
+      availableModels = Client.DEFAULT_MODELS.slice();
       applyModelOptions();
       refreshKeyState();
     });
