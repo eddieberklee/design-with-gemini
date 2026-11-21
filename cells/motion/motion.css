@@ -1,0 +1,820 @@
+/* ==========================================================================
+   iPhone Motion Grid Controller — Cell #2 & Expanded Pairing Studio
+   Strictly scoped to .cell--motion, .mg-*, .mg-dialog, .mg-hud, and
+   opt-in .grid.is-motion-controlled CSS custom properties.
+   Harmonized with index.html (#fafafa canvas, #ffffff cell, #e5e5e5 border)
+   and cells/decisions/decisions.css (Swiss Instrument palette).
+   ========================================================================== */
+
+/* Opt-in grid sizing override (inactive at default 1.00x so initial page is pixel-identical) */
+.grid.is-motion-controlled {
+  max-width: min(96vw, 1800px);
+  justify-content: center;
+  transition: gap 180ms ease;
+}
+
+.grid.is-motion-controlled[data-motion-layout="reflow"] {
+  grid-template-columns: repeat(auto-fill, min(100%, var(--mg-cell-w, 420px)));
+}
+
+.grid.is-motion-controlled[data-motion-layout="fixed3"] {
+  grid-template-columns: repeat(3, min(calc((100% - 8px) / 3), var(--mg-cell-w, 420px)));
+}
+
+@media (max-width: 767px) {
+  .grid.is-motion-controlled[data-motion-layout="fixed3"] {
+    grid-template-columns: repeat(2, min(calc((100% - 4px) / 2), var(--mg-cell-w, 260px)));
+  }
+}
+
+.cell--motion,
+.mg-dialog,
+.mg-hud {
+  --mg-bg: #ffffff;
+  --mg-canvas: #fafafa;
+  --mg-recess: #f6f6f4;
+  --mg-track: #ecece8;
+  --mg-border: #e5e5e5;
+  --mg-hairline: #efefef;
+  --mg-border-strong: #d4d4d0;
+
+  --mg-ink: #141413;
+  --mg-ink-2: #525250;
+  --mg-ink-3: #8a8a86;
+
+  --mg-accent: #d94f1e;
+  --mg-accent-soft: #fff1eb;
+  --mg-live: #047857;
+  --mg-live-bg: #ecfdf5;
+  --mg-live-border: #a7f3d0;
+  --mg-warn: #b45309;
+  --mg-warn-bg: #fffbeb;
+  --mg-warn-border: #fde68a;
+
+  --mg-sans: -apple-system, BlinkMacSystemFont, "Inter", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --mg-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --mg-ease: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  font-family: var(--mg-sans);
+  color: var(--mg-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.mg-mono {
+  font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.mg-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   1. IN-GRID 4:3 INSTRUMENT CARD
+   ========================================================================== */
+
+.cell--motion {
+  position: relative;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: mg-card;
+  display: flex;
+  flex-direction: column;
+  background: var(--mg-bg);
+}
+
+/* Header */
+.mg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--mg-hairline);
+  min-height: 32px;
+  flex-shrink: 0;
+}
+
+.mg-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mg-index {
+  font-family: var(--mg-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mg-ink-3);
+  letter-spacing: 0.02em;
+}
+
+.mg-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--mg-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mg-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.mg-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-family: var(--mg-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border: 1px solid var(--mg-border-strong);
+  background: var(--mg-recess);
+  color: var(--mg-ink-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mg-pill[data-state="live"] {
+  border-color: var(--mg-live-border);
+  background: var(--mg-live-bg);
+  color: var(--mg-live);
+}
+
+.mg-pill[data-state="warn"] {
+  border-color: var(--mg-warn-border);
+  background: var(--mg-warn-bg);
+  color: var(--mg-warn);
+}
+
+.mg-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.mg-pill[data-state="live"] .mg-dot {
+  box-shadow: 0 0 0 2px rgba(4, 120, 87, 0.2);
+}
+
+.mg-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--mg-border);
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-sans);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--mg-ease), border-color var(--mg-ease);
+}
+
+.mg-icon-btn:hover {
+  background: var(--mg-recess);
+  border-color: var(--mg-border-strong);
+}
+
+/* Main split stage inside 4:3 tile */
+.mg-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(108px, 44%) minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 10px;
+  align-items: center;
+  overflow: hidden;
+}
+
+/* QR stage */
+.mg-qr-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.mg-qr-frame {
+  position: relative;
+  width: 100%;
+  max-width: 168px;
+  aspect-ratio: 1 / 1;
+  background: #ffffff;
+  border: 1px solid var(--mg-border-strong);
+  border-radius: 6px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color var(--mg-ease), transform var(--mg-ease);
+}
+
+.mg-qr-frame:hover {
+  border-color: var(--mg-ink);
+}
+
+.mg-qr-frame svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.mg-qr-frame.is-unconfigured {
+  border-style: dashed;
+  background: var(--mg-recess);
+  padding: 8px;
+}
+
+.mg-qr-setup-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 5px;
+}
+
+.mg-qr-setup-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--mg-ink);
+  line-height: 1.25;
+}
+
+.mg-qr-setup-sub {
+  font-size: 9.5px;
+  color: var(--mg-ink-2);
+  line-height: 1.3;
+}
+
+.mg-qr-caption {
+  font-family: var(--mg-mono);
+  font-size: 9px;
+  color: var(--mg-ink-3);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Telemetry & Control Column */
+.mg-ctrl-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 7px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+.mg-readout-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 8px;
+  border-radius: 5px;
+  background: var(--mg-recess);
+  border: 1px solid var(--mg-hairline);
+}
+
+.mg-readout-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.mg-size-big {
+  font-family: var(--mg-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--mg-ink);
+}
+
+.mg-scale-chip {
+  font-family: var(--mg-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--mg-accent);
+  white-space: nowrap;
+}
+
+.mg-readout-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: var(--mg-mono);
+  font-size: 9.5px;
+  color: var(--mg-ink-3);
+}
+
+/* 3-axis accelerometer mini bars */
+.mg-axes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.mg-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mg-axis-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mg-mono);
+  font-size: 8.5px;
+  color: var(--mg-ink-3);
+}
+
+.mg-axis-track {
+  position: relative;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--mg-track);
+  overflow: hidden;
+}
+
+.mg-axis-mid {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--mg-border-strong);
+}
+
+.mg-axis-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--mg-ink);
+  transition: left 60ms linear, width 60ms linear;
+}
+
+.mg-axis-bar.is-accent {
+  background: var(--mg-accent);
+}
+
+/* Segmented controls */
+.mg-seg-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mg-seg {
+  display: inline-flex;
+  background: #eaeae6;
+  border-radius: 4px;
+  padding: 1.5px;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.mg-seg-btn {
+  flex: 1;
+  height: 19px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--mg-ink-2);
+  font-family: var(--mg-sans);
+  font-size: 10px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mg-seg-btn[aria-pressed="true"] {
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
+}
+
+/* Desktop interactive scale scrub slider */
+.mg-scrub-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mg-scrub-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--mg-mono);
+  font-size: 9px;
+  color: var(--mg-ink-3);
+}
+
+.mg-slider {
+  width: 100%;
+  height: 14px;
+  accent-color: var(--mg-accent);
+  cursor: ew-resize;
+  margin: 0;
+}
+
+/* Footer */
+.mg-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 10px;
+  border-top: 1px solid var(--mg-hairline);
+  background: var(--mg-canvas);
+  font-family: var(--mg-mono);
+  font-size: 9.5px;
+  color: var(--mg-ink-3);
+  flex-shrink: 0;
+}
+
+.mg-footer-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.mg-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--mg-border-strong);
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mg-chip-btn:hover {
+  background: var(--mg-recess);
+}
+
+.mg-chip-btn.is-active {
+  border-color: var(--mg-accent);
+  color: var(--mg-accent);
+  background: var(--mg-accent-soft);
+}
+
+/* Micro-cell takeover overlay when phone shrinks cells very small */
+.mg-micro {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: center;
+}
+
+.mg-micro-val {
+  font-family: var(--mg-mono);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--mg-ink);
+}
+
+.mg-micro-sub {
+  font-family: var(--mg-mono);
+  font-size: 10px;
+  color: var(--mg-accent);
+  font-weight: 600;
+}
+
+.mg-micro-bar {
+  width: 78%;
+  height: 4px;
+  border-radius: 99px;
+  background: var(--mg-track);
+  overflow: hidden;
+}
+
+.mg-micro-fill {
+  height: 100%;
+  background: var(--mg-accent);
+  border-radius: 99px;
+}
+
+/* Container queries for shrinking/growing cells */
+@container mg-card (max-width: 360px) {
+  .mg-header { padding: 6px 8px; }
+  .mg-body { padding: 7px 8px; gap: 7px; grid-template-columns: minmax(90px, 43%) minmax(0, 1fr); }
+  .mg-footer { padding: 4px 8px; }
+  .mg-expand-label { display: none; }
+  .mg-axes { display: none; }
+  .mg-size-big { font-size: 15px; }
+}
+
+@container mg-card (max-width: 245px) {
+  .mg-body { display: none; }
+  .mg-footer { display: none; }
+  .mg-actions .mg-icon-btn { display: none; }
+  .mg-micro { display: flex; }
+}
+
+/* ==========================================================================
+   2. FLOATING ACTIVE-RESIZE HUD (visible when resized or phone paired)
+   ========================================================================== */
+
+.mg-hud {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 900;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(20, 20, 19, 0.92);
+  color: #f7f7f5;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(8px);
+  font-size: 11px;
+}
+
+.mg-hud.is-visible {
+  display: inline-flex;
+}
+
+.mg-hud-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+.mg-hud[data-live="true"] .mg-hud-dot {
+  background: #10b981;
+}
+
+.mg-hud-val {
+  font-family: var(--mg-mono);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.mg-hud-btn {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-family: var(--mg-mono);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.mg-hud-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* ==========================================================================
+   3. EXPANDED PAIRING STUDIO (<dialog>)
+   ========================================================================== */
+
+.mg-dialog {
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--mg-border-strong);
+  border-radius: 10px;
+  width: min(820px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  background: var(--mg-bg);
+  box-shadow: 0 24px 60px rgba(20, 20, 19, 0.18);
+  overflow: hidden;
+}
+
+.mg-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.mg-dialog::backdrop {
+  background: rgba(244, 244, 242, 0.78);
+  backdrop-filter: blur(5px);
+}
+
+.mg-dlg-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--mg-border);
+}
+
+.mg-dlg-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.mg-dlg-body {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 20px;
+  padding: 18px;
+  overflow-y: auto;
+}
+
+@media (max-width: 680px) {
+  .mg-dlg-body {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mg-dlg-qr-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.mg-dlg-qr-box {
+  width: 248px;
+  height: 248px;
+  background: #ffffff;
+  border: 1px solid var(--mg-border-strong);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mg-dlg-qr-box svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.mg-dlg-url {
+  width: 100%;
+  font-family: var(--mg-mono);
+  font-size: 10px;
+  color: var(--mg-ink-2);
+  background: var(--mg-recess);
+  border: 1px solid var(--mg-border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.mg-dlg-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.mg-dlg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mg-dlg-label {
+  font-family: var(--mg-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mg-ink-3);
+}
+
+.mg-dlg-note {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mg-ink-2);
+}
+
+.mg-cmd-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  background: #141413;
+  color: #f7f7f5;
+  font-family: var(--mg-mono);
+  font-size: 11px;
+}
+
+.mg-cmd-box code {
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.mg-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.mg-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 5px;
+  border: 1px solid var(--mg-border-strong);
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-mono);
+  font-size: 11px;
+}
+
+.mg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 5px;
+  border: 1px solid var(--mg-border-strong);
+  background: var(--mg-bg);
+  color: var(--mg-ink);
+  font-family: var(--mg-sans);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mg-btn:hover {
+  background: var(--mg-recess);
+}
+
+.mg-btn--dark {
+  background: var(--mg-ink);
+  border-color: var(--mg-ink);
+  color: #ffffff;
+}
+
+.mg-btn--dark:hover {
+  background: #2b2b29;
+}
+
+.mg-btn--sm {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}

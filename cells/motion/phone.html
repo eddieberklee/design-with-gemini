@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#111110">
+  <title>Motion Grid Controller</title>
+  <link rel="stylesheet" href="phone.css">
+</head>
+<body>
+  <main class="ph-app" id="ph-app">
+    <header class="ph-header">
+      <div class="ph-brand">
+        <span class="ph-index">03</span>
+        <span class="ph-title">Motion Grid</span>
+      </div>
+      <div class="ph-status" id="ph-status" data-state="connecting">
+        <span class="ph-dot" aria-hidden="true"></span>
+        <span id="ph-status-text">LINKING</span>
+      </div>
+    </header>
+
+    <!-- Non-HTTPS diagnostic banner (shown automatically if iOS opens over HTTP) -->
+    <section class="ph-banner" id="ph-https-banner" hidden>
+      <strong>HTTPS Required on iPhone</strong>
+      <p>iOS Safari disables the accelerometer on non-HTTPS URLs. Open the HTTPS tunnel URL from <code>node cells/motion/server.mjs</code>, or use the manual slider below.</p>
+    </section>
+
+    <!-- Central Interactive Instrument Dial & Clutch Pad -->
+    <section class="ph-stage">
+      <div class="ph-dial-wrap" id="ph-dial-pad" aria-label="Motion dial and clutch touch pad">
+        <svg class="ph-dial-svg" viewBox="0 0 240 240" aria-hidden="true">
+          <!-- Outer tick track -->
+          <circle cx="120" cy="120" r="106" fill="none" stroke="#262624" stroke-width="2" />
+          <path id="ph-arc-bg" d="M 45.05 194.95 A 106 106 0 1 1 194.95 194.95" fill="none" stroke="#2c2c29" stroke-width="6" stroke-linecap="round" />
+          <path id="ph-arc-active" d="M 45.05 194.95 A 106 106 0 0 1 120 14" fill="none" stroke="#e85d2a" stroke-width="6" stroke-linecap="round" />
+          <!-- Neutral 1.00x detent tick -->
+          <line x1="120" y1="7" x2="120" y2="21" stroke="#f7f7f5" stroke-width="2" opacity="0.65" />
+          <!-- Inner crosshair -->
+          <circle cx="120" cy="120" r="56" fill="none" stroke="#232321" stroke-width="1" stroke-dasharray="3 4" />
+          <line x1="64" y1="120" x2="176" y2="120" stroke="#232321" stroke-width="1" />
+          <line x1="120" y1="64" x2="120" y2="176" stroke="#232321" stroke-width="1" />
+          <!-- Live accelerometer bubble reticle -->
+          <circle id="ph-bubble" cx="120" cy="120" r="8" fill="#e85d2a" opacity="0.9" />
+          <!-- Needle -->
+          <g id="ph-needle" transform="rotate(0 120 120)">
+            <line x1="120" y1="24" x2="120" y2="42" stroke="#e85d2a" stroke-width="3" stroke-linecap="round" />
+          </g>
+        </svg>
+
+        <div class="ph-dial-center">
+          <div class="ph-size-px" id="ph-size-px">420 px</div>
+          <div class="ph-scale-val" id="ph-scale-val">1.00×</div>
+          <div class="ph-cols-meta" id="ph-cols-meta">3 col · Reflow</div>
+        </div>
+
+        <!-- iOS Permission Gate Overlay -->
+        <div class="ph-gate" id="ph-gate">
+          <button type="button" class="ph-enable-btn" id="ph-enable-btn">
+            <span class="ph-enable-kicker">iPhone Accelerometer</span>
+            <span class="ph-enable-main">Enable Motion</span>
+          </button>
+          <p class="ph-gate-note" id="ph-gate-note">Tap once to grant motion access, then rotate, lift up/down, or pull phone.</p>
+        </div>
+      </div>
+
+      <!-- Live Gesture Impulse Meters -->
+      <div class="ph-meters">
+        <div class="ph-meter">
+          <div class="ph-meter-head"><span>TILT</span><span id="ph-m-tilt">+0.0°</span></div>
+          <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill is-accent" id="ph-b-tilt"></span></div>
+        </div>
+        <div class="ph-meter">
+          <div class="ph-meter-head"><span>LIFT ↑↓</span><span id="ph-m-lift">+0.0</span></div>
+          <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill" id="ph-b-lift"></span></div>
+        </div>
+        <div class="ph-meter">
+          <div class="ph-meter-head"><span>PULL ⇄</span><span id="ph-m-pull">+0.0</span></div>
+          <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill" id="ph-b-pull"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Bottom Controls -->
+    <section class="ph-controls">
+      <div class="ph-mode-hint" id="ph-mode-hint">Rotate, raise up/down, or pull phone to resize grid cells</div>
+
+      <div class="ph-seg" role="group" aria-label="Gesture mode">
+        <button type="button" class="ph-seg-btn" data-mode="all" aria-pressed="true">All</button>
+        <button type="button" class="ph-seg-btn" data-mode="tilt" aria-pressed="false">Tilt</button>
+        <button type="button" class="ph-seg-btn" data-mode="lift" aria-pressed="false">Lift</button>
+        <button type="button" class="ph-seg-btn" data-mode="pull" aria-pressed="false">Pull</button>
+      </div>
+
+      <div class="ph-action-grid">
+        <button type="button" class="ph-btn" id="ph-zero-btn">Zero Pose</button>
+        <button type="button" class="ph-btn" id="ph-clutch-btn" aria-pressed="false">Clutch: Off</button>
+        <button type="button" class="ph-btn" id="ph-layout-btn">Reflow</button>
+        <button type="button" class="ph-btn ph-btn--accent" id="ph-reset-btn">Reset 100%</button>
+      </div>
+
+      <!-- Direct Touch Trim Fallback -->
+      <div class="ph-trim">
+        <div class="ph-trim-head">
+          <span>MANUAL TRIM</span>
+          <span id="ph-session-tag">SESSION</span>
+        </div>
+        <input type="range" class="ph-slider" id="ph-slider" min="34" max="215" value="100" aria-label="Manual cell size trim">
+      </div>
+    </section>
+  </main>
+
+  <script defer src="physics.js"></script>
+  <script defer src="transport.js"></script>
+  <script defer src="phone.js"></script>
+</body>
+</html>

@@ -6,6 +6,7 @@
   <title>Design with Gemini — Grid</title>
   <link rel="stylesheet" href="cells/decisions/decisions.css">
   <link rel="stylesheet" href="cells/prosody/prosody.css">
+  <link rel="stylesheet" href="cells/motion/motion.css">
   <style>
     *, *::before, *::after {
       box-sizing: border-box;
@@ -46,7 +47,7 @@
   <main class="grid">
     <section class="cell cell--decisions" id="cell-decisions" aria-label="Gemini Decisions API prototype"></section>
     <section class="cell cell--prosody" id="cell-prosody" aria-label="Voice Prosody Button Sizer prototype"></section>
-    <div class="cell"></div>
+    <section class="cell cell--motion" id="cell-motion" aria-label="iPhone Motion Grid Controller prototype"></section>
     <div class="cell"></div>
     <div class="cell"></div>
     <div class="cell"></div>
@@ -61,5 +62,9 @@
   <script defer src="cells/decisions/ui.js"></script>
   <script defer src="cells/prosody/client.js"></script>
   <script defer src="cells/prosody/ui.js"></script>
+  <script defer src="cells/motion/qr.js"></script>
+  <script defer src="cells/motion/physics.js"></script>
+  <script defer src="cells/motion/transport.js"></script>
+  <script defer src="cells/motion/ui.js"></script>
 </body>
 </html>

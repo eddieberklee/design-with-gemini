@@ -1,0 +1,940 @@
+(function (root) {
+  'use strict';
+
+  const NS = (root.MotionGrid = root.MotionGrid || {});
+  const QR = NS.QR;
+  const Physics = NS.Physics;
+  const Transport = NS.Transport;
+
+  const STORAGE_BASE_URL_KEY = 'mg_custom_https_base_v1';
+  const STORAGE_SESSION_KEY = 'mg_session_id_v1';
+  const LOCAL_BRIDGE_DEFAULT = 'http://127.0.0.1:8443';
+
+  function el(tag, attrs, children) {
+    const node = document.createElement(tag);
+    if (attrs) {
+      Object.keys(attrs).forEach(function (k) {
+        const v = attrs[k];
+        if (v === undefined || v === null || v === false) return;
+        if (k === 'className') node.className = v;
+        else if (k === 'textContent') node.textContent = String(v);
+        else if (k === 'dataset') {
+          Object.keys(v).forEach(function (dk) {
+            if (v[dk] !== undefined && v[dk] !== null) node.dataset[dk] = String(v[dk]);
+          });
+        } else if (k === 'style' && typeof v === 'object') {
+          Object.assign(node.style, v);
+        } else if (k.startsWith('on') && typeof v === 'function') {
+          node.addEventListener(k.slice(2).toLowerCase(), v);
+        } else if (v === true) {
+          node.setAttribute(k, '');
+        } else {
+          node.setAttribute(k, String(v));
+        }
+      });
+    }
+    if (children !== undefined && children !== null) {
+      const list = Array.isArray(children) ? children : [children];
+      list.forEach(function (c) {
+        if (c === undefined || c === null || c === false) return;
+        if (typeof c === 'string' || typeof c === 'number') {
+          node.appendChild(document.createTextNode(String(c)));
+        } else {
+          node.appendChild(c);
+        }
+      });
+    }
+    return node;
+  }
+
+  function clearNode(node) {
+    while (node.firstChild) node.removeChild(node.firstChild);
+  }
+
+  function safeStorageGet(store, key) {
+    try { return store.getItem(key) || ''; } catch (_e) { return ''; }
+  }
+
+  function safeStorageSet(store, key, val) {
+    try {
+      if (!val) store.removeItem(key);
+      else store.setItem(key, val);
+    } catch (_e) {}
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return navigator.clipboard.writeText(text);
+    }
+    return new Promise(function (resolve) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch (_e) {}
+      resolve();
+    });
+  }
+
+  function isLocalhostHost(hostname) {
+    const h = String(hostname || '').toLowerCase();
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1' || h === '';
+  }
+
+  function normalizePhoneBaseUrl(raw) {
+    const trimmed = String(raw || '').trim();
+    if (!trimmed) return '';
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return '';
+      // If user pasted root repo URL, append cells/motion/phone.html
+      let path = u.pathname;
+      if (!path.endsWith('.html')) {
+        if (!path.endsWith('/')) path += '/';
+        path += 'cells/motion/phone.html';
+      }
+      u.pathname = path;
+      u.search = '';
+      u.hash = '';
+      return u.toString();
+    } catch (_e) {
+      return '';
+    }
+  }
+
+  function buildQrTargetUrl(basePhoneUrl, sessionId, transportMode) {
+    if (!basePhoneUrl) return '';
+    const sep = basePhoneUrl.indexOf('?') >= 0 ? '&' : '?';
+    return basePhoneUrl + sep + 's=' + encodeURIComponent(sessionId) + '&t=' + encodeURIComponent(transportMode || 'mqtt');
+  }
+
+  function mountMotionCell(rootEl) {
+    if (!rootEl || !QR || !Physics || !Transport) return;
+
+    const gridEl = rootEl.closest('.grid') || document.querySelector('.grid');
+    if (!gridEl) return;
+
+    // Persist session across reloads in this tab so re-scanning isn't needed on refresh
+    let sessionId = safeStorageGet(window.sessionStorage, STORAGE_SESSION_KEY);
+    if (!sessionId || !/^[A-Z0-9]{6,12}$/.test(sessionId)) {
+      sessionId = Transport.generateSessionId(8);
+      safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, sessionId);
+    }
+
+    const state = {
+      sessionId: sessionId,
+      mode: 'all',          // 'all' | 'tilt' | 'lift' | 'pull'
+      layout: 'reflow',     // 'reflow' | 'fixed3'
+      scale: Physics.DEFAULT_SCALE,
+      baseCellW: 420,
+      currentCellW: 420,
+      cols: 3,
+      controlled: false,
+
+      // Link & phone status
+      linkState: 'connecting',
+      linkTransport: 'mqtt',
+      phoneConnected: false,
+      lastPhoneMs: 0,
+      rxCount: 0,
+      rxHz: 0,
+      lastHzTick: Date.now(),
+
+      // Latest phone sensor vector for live meters
+      roll: 0,
+      pitch: 0,
+      liftA: 0,
+      pullA: 0,
+
+      // Resolved HTTPS URL for QR code
+      phoneBaseUrl: '',
+      phoneUrlSource: 'none', // 'origin-https' | 'local-bridge' | 'custom' | 'none'
+      phoneUrlIsHttps: false,
+      qrUrl: '',
+      customUrlInput: safeStorageGet(window.localStorage, STORAGE_BASE_URL_KEY),
+      bridgeConfig: null,
+
+      copyFeedback: ''
+    };
+
+    const spring = new Physics.SpringDamper(Physics.DEFAULT_SCALE, 190, 26);
+    let rafId = 0;
+    let lastRafTs = 0;
+    let link = null;
+    let feedbackTimer = 0;
+
+    // Measure natural baseline 3-column cell width before any motion override
+    function measureBaseCellWidth() {
+      const wasControlled = gridEl.classList.contains('is-motion-controlled');
+      const gridRect = gridEl.getBoundingClientRect();
+      const avail = Math.max(260, gridRect.width || (window.innerWidth * 0.92));
+      const naturalCols = window.innerWidth >= 768 ? 3 : 2;
+      const gap = 4;
+      const naturalW = Math.round((avail - gap * (naturalCols - 1)) / naturalCols);
+      state.baseCellW = Physics.clamp(naturalW, 180, 560);
+      if (!wasControlled) {
+        state.currentCellW = state.baseCellW;
+        state.cols = naturalCols;
+      }
+    }
+
+    function applyGridSize(scaleVal, forceActive) {
+      const clampedScale = Physics.clamp(scaleVal, Physics.MIN_SCALE, Physics.MAX_SCALE);
+      state.scale = clampedScale;
+
+      const bodyStyle = window.getComputedStyle(document.body);
+      const padX = (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0);
+      const maxAvail = Math.max(240, Math.min(window.innerWidth - padX, 1800));
+
+      const cellW = Physics.scaleToCellWidth(clampedScale, state.baseCellW, maxAvail);
+      state.currentCellW = cellW;
+
+      const isNearDefault = Math.abs(clampedScale - 1.0) < 0.008 && !forceActive && !state.phoneConnected;
+      if (isNearDefault) {
+        state.controlled = false;
+        gridEl.classList.remove('is-motion-controlled');
+        gridEl.style.removeProperty('--mg-cell-w');
+        gridEl.removeAttribute('data-motion-layout');
+        state.cols = window.innerWidth >= 768 ? 3 : 2;
+      } else {
+        state.controlled = true;
+        gridEl.classList.add('is-motion-controlled');
+        gridEl.setAttribute('data-motion-layout', state.layout);
+        gridEl.style.setProperty('--mg-cell-w', cellW + 'px');
+        if (state.layout === 'fixed3') {
+          state.cols = window.innerWidth >= 768 ? 3 : 2;
+        } else {
+          state.cols = Math.max(1, Math.floor((maxAvail + 4) / (cellW + 4)));
+        }
+      }
+
+      updateLiveDom();
+    }
+
+    function ensureSpringRunning() {
+      if (rafId) return;
+      lastRafTs = performance.now();
+      rafId = requestAnimationFrame(tickSpring);
+    }
+
+    function tickSpring(now) {
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastRafTs) / 1000));
+      lastRafTs = now;
+      const moving = spring.step(dt);
+      applyGridSize(spring.value, state.phoneConnected || Math.abs(spring.target - 1.0) >= 0.008);
+      if (moving) {
+        rafId = requestAnimationFrame(tickSpring);
+      } else {
+        rafId = 0;
+      }
+    }
+
+    function setTargetScale(target, immediate) {
+      const clamped = Physics.clamp(target, Physics.MIN_SCALE, Physics.MAX_SCALE);
+      if (immediate) {
+        spring.snap(clamped);
+        applyGridSize(clamped, Math.abs(clamped - 1.0) >= 0.008 || state.phoneConnected);
+      } else {
+        spring.setTarget(clamped);
+        ensureSpringRunning();
+      }
+    }
+
+    function resetToDefault() {
+      state.roll = 0;
+      state.pitch = 0;
+      state.liftA = 0;
+      state.pullA = 0;
+      spring.setTarget(Physics.DEFAULT_SCALE);
+      ensureSpringRunning();
+      sendToPhone({ t: 'cmd', cmd: 'reset' });
+    }
+
+    function sendToPhone(msg) {
+      if (link) link.send(msg);
+    }
+
+    function sendFeedbackToPhone() {
+      if (!state.phoneConnected) return;
+      sendToPhone({
+        t: 'state',
+        cellW: state.currentCellW,
+        scale: Number(state.scale.toFixed(3)),
+        cols: state.cols,
+        layout: state.layout,
+        mode: state.mode,
+        baseW: state.baseCellW
+      });
+    }
+
+    // ---------- URL Resolution & Bridge Discovery ----------
+
+    function recomputeQrUrl() {
+      let base = '';
+      let source = 'none';
+      let transportParam = 'mqtt';
+
+      // 1. Live local bridge (server.mjs) takes priority when running locally
+      if (state.bridgeConfig && state.bridgeConfig.phoneBaseUrl) {
+        base = state.bridgeConfig.phoneBaseUrl;
+        source = 'local-bridge';
+        transportParam = state.bridgeConfig.transport || 'dual';
+      } else if (window.location.protocol === 'https:' && !isLocalhostHost(window.location.hostname)) {
+        // 2. Already hosted on a real HTTPS origin (GitHub Pages, ngrok, Tailscale, Netlify, Vercel)
+        const dir = window.location.pathname.replace(/[^/]*$/, '');
+        base = window.location.origin + dir + 'cells/motion/phone.html';
+        source = 'origin-https';
+        transportParam = 'mqtt';
+      } else if (state.customUrlInput) {
+        // 3. Saved custom HTTPS URL override
+        const norm = normalizePhoneBaseUrl(state.customUrlInput);
+        if (norm) {
+          base = norm;
+          source = 'custom';
+          transportParam = 'mqtt';
+        }
+      }
+
+      state.phoneBaseUrl = base;
+      state.phoneUrlSource = source;
+      state.phoneUrlIsHttps = base.startsWith('https://');
+      state.qrUrl = base ? buildQrTargetUrl(base, state.sessionId, transportParam) : '';
+      renderQrTargets();
+      updateLiveDom();
+    }
+
+    function probeLocalBridge() {
+      const candidates = [];
+      if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+        candidates.push(window.location.origin + '/api/motion-config');
+      }
+      if (candidates.indexOf(LOCAL_BRIDGE_DEFAULT + '/api/motion-config') < 0) {
+        candidates.push(LOCAL_BRIDGE_DEFAULT + '/api/motion-config');
+      }
+
+      let idx = 0;
+      function tryNext() {
+        if (idx >= candidates.length) return;
+        const url = candidates[idx++];
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timer = setTimeout(function () { if (controller) controller.abort(); }, 1800);
+        fetch(url, {
+          method: 'GET',
+          signal: controller ? controller.signal : undefined,
+          headers: { 'ngrok-skip-browser-warning': '1' }
+        })
+          .then(function (res) {
+            clearTimeout(timer);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+          })
+          .then(function (cfg) {
+            if (cfg && cfg.ok && cfg.phoneBaseUrl) {
+              state.bridgeConfig = cfg;
+              recomputeQrUrl();
+              connectTransport();
+            } else {
+              tryNext();
+            }
+          })
+          .catch(function () {
+            clearTimeout(timer);
+            tryNext();
+          });
+      }
+      tryNext();
+    }
+
+    // ---------- Transport Lifecycle ----------
+
+    function connectTransport() {
+      if (link) {
+        link.close();
+        link = null;
+      }
+
+      const hasBridge = Boolean(state.bridgeConfig && state.bridgeConfig.desktopWsUrl);
+      const wsUrl = hasBridge
+        ? state.bridgeConfig.desktopWsUrl + '?s=' + encodeURIComponent(state.sessionId) + '&role=desktop'
+        : '';
+      const httpBase = hasBridge ? state.bridgeConfig.desktopHttpBase : '';
+
+      link = Transport.createLink({
+        mode: hasBridge ? 'dual' : 'mqtt',
+        sessionId: state.sessionId,
+        role: 'desktop',
+        wsUrl: wsUrl,
+        httpBase: httpBase,
+        onStatus: function (st, info) {
+          state.linkState = st;
+          state.linkTransport = (info && info.transport) || 'mqtt';
+          updateLiveDom();
+        },
+        onMessage: handlePhoneMessage
+      });
+      link.start();
+    }
+
+    function handlePhoneMessage(msg) {
+      if (!msg || typeof msg !== 'object') return;
+      const now = Date.now();
+      state.lastPhoneMs = now;
+      if (!state.phoneConnected) {
+        state.phoneConnected = true;
+        // Close studio QR modal automatically once iPhone connects so user sees the live grid!
+        if (refs.dialog && refs.dialog.open) {
+          refs.dialog.close();
+        }
+        sendFeedbackToPhone();
+      }
+
+      if (msg.t === 'hello') {
+        sendFeedbackToPhone();
+        updateLiveDom();
+        return;
+      }
+
+      if (msg.t === 'act') {
+        if (msg.cmd === 'reset') {
+          resetToDefault();
+        } else if (msg.cmd === 'layout' && (msg.val === 'reflow' || msg.val === 'fixed3')) {
+          state.layout = msg.val;
+          applyGridSize(state.scale, true);
+          sendFeedbackToPhone();
+        } else if (msg.cmd === 'mode' && ['all', 'tilt', 'lift', 'pull'].indexOf(msg.val) >= 0) {
+          state.mode = msg.val;
+          updateLiveDom();
+        }
+        return;
+      }
+
+      if (msg.t === 'm') {
+        state.rxCount++;
+        if (typeof msg.mode === 'string' && ['all', 'tilt', 'lift', 'pull'].indexOf(msg.mode) >= 0) {
+          state.mode = msg.mode;
+        }
+        if (Number.isFinite(msg.roll)) state.roll = msg.roll;
+        if (Number.isFinite(msg.pitch)) state.pitch = msg.pitch;
+        if (Number.isFinite(msg.lift)) state.liftA = msg.lift;
+        if (Number.isFinite(msg.pull)) state.pullA = msg.pull;
+        if (Number.isFinite(msg.scale)) {
+          setTargetScale(msg.scale, false);
+        }
+        updateLiveDom();
+      }
+    }
+
+    // Periodic Hz counter & phone timeout detector + phone HUD sync
+    setInterval(function () {
+      const now = Date.now();
+      const elapsed = Math.max(250, now - state.lastHzTick);
+      state.rxHz = Math.round((state.rxCount * 1000) / elapsed);
+      state.rxCount = 0;
+      state.lastHzTick = now;
+
+      if (state.phoneConnected && now - state.lastPhoneMs > 6500) {
+        state.phoneConnected = false;
+        updateLiveDom();
+      } else if (state.phoneConnected) {
+        updateLiveDom();
+      }
+    }, 1000);
+
+    feedbackTimer = setInterval(function () {
+      if (state.phoneConnected) sendFeedbackToPhone();
+    }, 220);
+
+    // ---------- Build DOM (Zero innerHTML interpolation) ----------
+
+    const refs = {};
+
+    function setAxisBar(barEl, valEl, value, maxRange, suffix) {
+      if (!barEl || !valEl) return;
+      const pct = Physics.clamp(value / maxRange, -1, 1);
+      const half = Math.abs(pct) * 50;
+      barEl.style.left = pct >= 0 ? '50%' : (50 - half) + '%';
+      barEl.style.width = half + '%';
+      valEl.textContent = (value >= 0 ? '+' : '−') + Math.abs(value).toFixed(1) + (suffix || '');
+    }
+
+    function renderQrTargets() {
+      // Card QR slot
+      clearNode(refs.cardQrFrame);
+      if (state.qrUrl) {
+        refs.cardQrFrame.classList.remove('is-unconfigured');
+        refs.cardQrFrame.title = 'Click to enlarge QR code for scanning';
+        const rendered = QR.renderSVGElement(state.qrUrl, {
+          quiet: 4,
+          fg: '#141413',
+          bg: '#ffffff',
+          label: 'Scan with iPhone camera to open Motion Grid Controller'
+        });
+        refs.cardQrFrame.appendChild(rendered.svg);
+        refs.cardQrCaption.textContent = state.phoneUrlIsHttps
+          ? 'Scan with iPhone · HTTPS'
+          : 'Scan · Needs HTTPS on iOS';
+      } else {
+        refs.cardQrFrame.classList.add('is-unconfigured');
+        refs.cardQrFrame.title = 'Click to configure HTTPS QR bridge';
+        refs.cardQrFrame.appendChild(
+          el('div', { className: 'mg-qr-setup-box' }, [
+            el('div', { className: 'mg-qr-setup-title', textContent: 'HTTPS Bridge Needed' }),
+            el('div', { className: 'mg-qr-setup-sub', textContent: 'iOS requires HTTPS for accelerometer. Click for 1-cmd setup.' })
+          ])
+        );
+        refs.cardQrCaption.textContent = 'Run bridge or set HTTPS URL';
+      }
+
+      // Studio Dialog QR slot
+      clearNode(refs.dlgQrBox);
+      if (state.qrUrl) {
+        const big = QR.renderSVGElement(state.qrUrl, {
+          quiet: 4,
+          fg: '#141413',
+          bg: '#ffffff',
+          label: 'Large QR code for iPhone motion controller'
+        });
+        refs.dlgQrBox.appendChild(big.svg);
+        refs.dlgUrlText.textContent = state.qrUrl;
+      } else {
+        refs.dlgQrBox.appendChild(
+          el('div', { className: 'mg-qr-setup-box', style: { padding: '16px' } }, [
+            el('div', { className: 'mg-qr-setup-title', textContent: 'Waiting for HTTPS Host' }),
+            el('div', {
+              className: 'mg-qr-setup-sub',
+              textContent: 'Run "node cells/motion/server.mjs" in this repo or paste any HTTPS URL on the right to generate a scannable iPhone QR code.'
+            })
+          ])
+        );
+        refs.dlgUrlText.textContent = 'No HTTPS phone URL detected yet.';
+      }
+    }
+
+    function updateLiveDom() {
+      // Status pill
+      if (state.phoneConnected) {
+        refs.statusPill.dataset.state = 'live';
+        refs.statusText.textContent = state.rxHz > 0 ? 'LIVE · ' + state.rxHz + 'Hz' : 'PHONE LIVE';
+      } else if (!state.qrUrl) {
+        refs.statusPill.dataset.state = 'warn';
+        refs.statusText.textContent = 'SETUP';
+      } else if (state.linkState === 'ready') {
+        refs.statusPill.dataset.state = 'ready';
+        refs.statusText.textContent = 'SCAN QR';
+      } else {
+        refs.statusPill.dataset.state = 'warn';
+        refs.statusText.textContent = 'LINKING';
+      }
+
+      const scaleLabel = state.scale.toFixed(2) + '×';
+      const pxLabel = state.currentCellW + ' px';
+      refs.sizeBig.textContent = pxLabel;
+      refs.scaleChip.textContent = scaleLabel;
+      refs.gridMeta.textContent = state.cols + ' col · ' + (state.layout === 'reflow' ? 'Reflow' : '3×3');
+
+      // Micro view (when cells are shrunk tiny)
+      refs.microVal.textContent = pxLabel;
+      refs.microSub.textContent = scaleLabel + ' · ' + state.cols + ' col';
+      const pct = ((state.scale - Physics.MIN_SCALE) / (Physics.MAX_SCALE - Physics.MIN_SCALE)) * 100;
+      refs.microFill.style.width = Physics.clamp(pct, 4, 100) + '%';
+
+      // Slider sync (only when not actively dragging with pointer)
+      if (document.activeElement !== refs.slider) {
+        refs.slider.value = String(Math.round(state.scale * 100));
+      }
+
+      // 3-Axis live bars: Roll (tilt), Lift (up/down), Pull (in/out)
+      setAxisBar(refs.barTilt, refs.valTilt, state.roll, 55, '°');
+      setAxisBar(refs.barLift, refs.valLift, state.liftA, 10, '');
+      setAxisBar(refs.barPull, refs.valPull, state.pullA, 10, '');
+
+      // Mode pills
+      Object.keys(refs.modeBtns).forEach(function (m) {
+        refs.modeBtns[m].setAttribute('aria-pressed', state.mode === m ? 'true' : 'false');
+      });
+
+      // Layout toggle button
+      refs.layoutBtn.textContent = state.layout === 'reflow' ? 'Reflow' : 'Lock 3×3';
+      refs.layoutBtn.classList.toggle('is-active', state.layout === 'fixed3');
+
+      // Footer link telemetry
+      const txName = state.linkTransport === 'local-ws'
+        ? 'LOCAL WS'
+        : state.linkTransport === 'local-http'
+          ? 'LOCAL HTTPS'
+          : 'MQTT WSS';
+      refs.footerLink.textContent = txName + ' · ' + state.sessionId.slice(0, 4);
+
+      // Reset button highlight when scaled away from 1.00x
+      const isOffset = Math.abs(state.scale - 1.0) >= 0.02;
+      refs.resetBtn.classList.toggle('is-active', isOffset);
+
+      // Floating HUD (visible when actively scaled or phone connected)
+      const showHud = isOffset || state.phoneConnected;
+      refs.hud.classList.toggle('is-visible', showHud);
+      refs.hud.dataset.live = state.phoneConnected ? 'true' : 'false';
+      refs.hudVal.textContent = (state.phoneConnected ? 'iPhone · ' : 'Grid · ') + pxLabel + ' (' + scaleLabel + ')';
+    }
+
+    // Build Cell #2 Card
+    clearNode(rootEl);
+
+    refs.statusText = el('span', { textContent: 'LINKING' });
+    refs.statusPill = el('button', {
+      type: 'button',
+      className: 'mg-pill',
+      title: 'Open Pairing Studio & QR code',
+      onClick: function () { openStudio(); }
+    }, [
+      el('span', { className: 'mg-dot', 'aria-hidden': 'true' }),
+      refs.statusText
+    ]);
+
+    const header = el('header', { className: 'mg-header' }, [
+      el('div', { className: 'mg-brand' }, [
+        el('span', { className: 'mg-index', textContent: '03' }),
+        el('span', { className: 'mg-title', textContent: 'Motion Grid' })
+      ]),
+      el('div', { className: 'mg-actions' }, [
+        refs.statusPill,
+        el('button', {
+          type: 'button',
+          className: 'mg-icon-btn',
+          title: 'Open large QR & setup studio',
+          onClick: function () { openStudio(); }
+        }, [
+          el('span', { className: 'mg-expand-label', textContent: 'QR ' }),
+          '↗'
+        ])
+      ])
+    ]);
+
+    refs.cardQrFrame = el('button', {
+      type: 'button',
+      className: 'mg-qr-frame',
+      onClick: function () { openStudio(); }
+    });
+    refs.cardQrCaption = el('div', { className: 'mg-qr-caption', textContent: 'Loading QR…' });
+
+    refs.sizeBig = el('span', { className: 'mg-size-big', textContent: '420 px' });
+    refs.scaleChip = el('span', { className: 'mg-scale-chip', textContent: '1.00×' });
+    refs.gridMeta = el('span', { textContent: '3 col · Reflow' });
+
+    refs.valTilt = el('span', { textContent: '+0.0°' });
+    refs.barTilt = el('span', { className: 'mg-axis-bar is-accent' });
+    refs.valLift = el('span', { textContent: '+0.0' });
+    refs.barLift = el('span', { className: 'mg-axis-bar' });
+    refs.valPull = el('span', { textContent: '+0.0' });
+    refs.barPull = el('span', { className: 'mg-axis-bar' });
+
+    function makeAxis(label, valNode, barNode) {
+      return el('div', { className: 'mg-axis' }, [
+        el('div', { className: 'mg-axis-head' }, [
+          el('span', { textContent: label }),
+          valNode
+        ]),
+        el('div', { className: 'mg-axis-track' }, [
+          el('span', { className: 'mg-axis-mid' }),
+          barNode
+        ])
+      ]);
+    }
+
+    refs.modeBtns = {};
+    const modeOrder = [
+      { id: 'all', label: 'All' },
+      { id: 'tilt', label: 'Tilt' },
+      { id: 'lift', label: 'Lift' },
+      { id: 'pull', label: 'Pull' }
+    ];
+    const modeSeg = el('div', { className: 'mg-seg', role: 'group', 'aria-label': 'Motion gesture mode' },
+      modeOrder.map(function (m) {
+        const b = el('button', {
+          type: 'button',
+          className: 'mg-seg-btn',
+          'aria-pressed': state.mode === m.id ? 'true' : 'false',
+          textContent: m.label,
+          onClick: function () {
+            state.mode = m.id;
+            sendToPhone({ t: 'cmd', cmd: 'mode', val: m.id });
+            updateLiveDom();
+          }
+        });
+        refs.modeBtns[m.id] = b;
+        return b;
+      })
+    );
+
+    refs.slider = el('input', {
+      type: 'range',
+      className: 'mg-slider',
+      min: String(Math.round(Physics.MIN_SCALE * 100)),
+      max: String(Math.round(Physics.MAX_SCALE * 100)),
+      value: '100',
+      'aria-label': 'Simulate phone motion cell size',
+      onInput: function (ev) {
+        const nextScale = Number(ev.target.value) / 100;
+        // Reflect simulated tilt angle so axis meter responds too
+        state.roll = (nextScale - 1.0) * 45;
+        setTargetScale(nextScale, false);
+      }
+    });
+
+    const body = el('div', { className: 'mg-body' }, [
+      el('div', { className: 'mg-qr-col' }, [
+        refs.cardQrFrame,
+        refs.cardQrCaption
+      ]),
+      el('div', { className: 'mg-ctrl-col' }, [
+        el('div', { className: 'mg-readout-card' }, [
+          el('div', { className: 'mg-readout-top' }, [refs.sizeBig, refs.scaleChip]),
+          el('div', { className: 'mg-readout-meta' }, [
+            el('span', { textContent: 'CELL WIDTH' }),
+            refs.gridMeta
+          ])
+        ]),
+        el('div', { className: 'mg-axes' }, [
+          makeAxis('TILT', refs.valTilt, refs.barTilt),
+          makeAxis('LIFT', refs.valLift, refs.barLift),
+          makeAxis('PULL', refs.valPull, refs.barPull)
+        ]),
+        el('div', { className: 'mg-seg-row' }, [modeSeg]),
+        el('div', { className: 'mg-scrub-wrap' }, [
+          el('div', { className: 'mg-scrub-label' }, [
+            el('span', { textContent: 'TEST SIZE' }),
+            el('span', { textContent: 'R = Reset' })
+          ]),
+          refs.slider
+        ])
+      ])
+    ]);
+
+    // Micro overlay when cells are shrunk very small
+    refs.microVal = el('div', { className: 'mg-micro-val', textContent: '160 px' });
+    refs.microSub = el('div', { className: 'mg-micro-sub', textContent: '0.38×' });
+    refs.microFill = el('div', { className: 'mg-micro-fill', style: { width: '40%' } });
+    const micro = el('div', { className: 'mg-micro' }, [
+      refs.microVal,
+      refs.microSub,
+      el('div', { className: 'mg-micro-bar' }, [refs.microFill]),
+      el('button', {
+        type: 'button',
+        className: 'mg-chip-btn',
+        textContent: 'Reset 100%',
+        onClick: resetToDefault
+      })
+    ]);
+
+    refs.footerLink = el('span', { textContent: 'MQTT WSS' });
+    refs.layoutBtn = el('button', {
+      type: 'button',
+      className: 'mg-chip-btn',
+      textContent: 'Reflow',
+      title: 'Toggle between responsive column reflow and locked 3x3 grid',
+      onClick: function () {
+        state.layout = state.layout === 'reflow' ? 'fixed3' : 'reflow';
+        applyGridSize(state.scale, state.controlled);
+        sendFeedbackToPhone();
+      }
+    });
+    refs.resetBtn = el('button', {
+      type: 'button',
+      className: 'mg-chip-btn',
+      textContent: '100%',
+      title: 'Reset grid cell size to default (R)',
+      onClick: resetToDefault
+    });
+
+    const footer = el('footer', { className: 'mg-footer' }, [
+      el('div', { className: 'mg-footer-group' }, [refs.footerLink]),
+      el('div', { className: 'mg-footer-group' }, [refs.layoutBtn, refs.resetBtn])
+    ]);
+
+    rootEl.appendChild(header);
+    rootEl.appendChild(body);
+    rootEl.appendChild(micro);
+    rootEl.appendChild(footer);
+
+    // Floating HUD appended to body
+    refs.hudVal = el('span', { className: 'mg-hud-val', textContent: 'Grid · 420 px (1.00×)' });
+    refs.hud = el('div', { className: 'mg-hud', role: 'status', 'aria-live': 'polite' }, [
+      el('span', { className: 'mg-hud-dot', 'aria-hidden': 'true' }),
+      refs.hudVal,
+      el('button', {
+        type: 'button',
+        className: 'mg-hud-btn',
+        textContent: 'Zero',
+        onClick: function () { sendToPhone({ t: 'cmd', cmd: 'zero' }); }
+      }),
+      el('button', {
+        type: 'button',
+        className: 'mg-hud-btn',
+        textContent: 'Reset 100%',
+        onClick: resetToDefault
+      })
+    ]);
+    document.body.appendChild(refs.hud);
+
+    // Expanded Pairing Studio <dialog>
+    refs.dlgQrBox = el('div', { className: 'mg-dlg-qr-box' });
+    refs.dlgUrlText = el('div', { className: 'mg-dlg-url', textContent: '' });
+    refs.dlgUrlInput = el('input', {
+      type: 'url',
+      className: 'mg-input',
+      placeholder: 'https://your-host.example/cells/motion/phone.html',
+      value: state.customUrlInput
+    });
+    refs.dlgCopyBtn = el('button', {
+      type: 'button',
+      className: 'mg-btn mg-btn--sm',
+      textContent: 'Copy',
+      onClick: function () {
+        copyText('node cells/motion/server.mjs').then(function () {
+          refs.dlgCopyBtn.textContent = 'Copied!';
+          setTimeout(function () { refs.dlgCopyBtn.textContent = 'Copy'; }, 1500);
+        });
+      }
+    });
+
+    refs.dialog = el('dialog', { className: 'mg-dialog', 'aria-label': 'iPhone Motion Grid Pairing Studio' }, [
+      el('div', { className: 'mg-dlg-bar' }, [
+        el('div', { className: 'mg-dlg-title', textContent: 'iPhone Motion Controller — QR & HTTPS Pairing' }),
+        el('button', {
+          type: 'button',
+          className: 'mg-btn mg-btn--sm',
+          textContent: 'Close',
+          onClick: function () { refs.dialog.close(); }
+        })
+      ]),
+      el('div', { className: 'mg-dlg-body' }, [
+        el('div', { className: 'mg-dlg-qr-panel' }, [
+          refs.dlgQrBox,
+          refs.dlgUrlText,
+          el('div', { style: { display: 'flex', gap: '6px', width: '100%' } }, [
+            el('button', {
+              type: 'button',
+              className: 'mg-btn mg-btn--sm',
+              style: { flex: '1' },
+              textContent: 'New Session',
+              onClick: function () {
+                state.sessionId = Transport.generateSessionId(8);
+                safeStorageSet(window.sessionStorage, STORAGE_SESSION_KEY, state.sessionId);
+                state.phoneConnected = false;
+                recomputeQrUrl();
+                connectTransport();
+              }
+            }),
+            el('button', {
+              type: 'button',
+              className: 'mg-btn mg-btn--sm',
+              style: { flex: '1' },
+              textContent: 'Retry Bridge',
+              onClick: function () { probeLocalBridge(); }
+            })
+          ])
+        ]),
+        el('div', { className: 'mg-dlg-side' }, [
+          el('div', { className: 'mg-dlg-section' }, [
+            el('div', { className: 'mg-dlg-label', textContent: '1. Instant Local HTTPS Bridge (Recommended)' }),
+            el('p', {
+              className: 'mg-dlg-note',
+              textContent: 'iOS Safari strictly requires HTTPS to unlock the iPhone accelerometer. Run this zero-dependency command from the repo root — it auto-launches a trusted HTTPS tunnel (ngrok or LAN HTTPS) and populates the QR code automatically:'
+            }),
+            el('div', { className: 'mg-cmd-box' }, [
+              el('code', { textContent: 'node cells/motion/server.mjs' }),
+              refs.dlgCopyBtn
+            ])
+          ]),
+          el('div', { className: 'mg-dlg-section' }, [
+            el('div', { className: 'mg-dlg-label', textContent: '2. Or Use Any Hosted HTTPS URL' }),
+            el('p', {
+              className: 'mg-dlg-note',
+              textContent: 'If this repo is served on GitHub Pages, Tailscale Serve, Vercel, or ngrok, paste the HTTPS URL below. Phone telemetry relays securely over MQTT WSS with zero backend.'
+            }),
+            el('div', { className: 'mg-input-row' }, [
+              refs.dlgUrlInput,
+              el('button', {
+                type: 'button',
+                className: 'mg-btn mg-btn--dark',
+                textContent: 'Set URL',
+                onClick: function () {
+                  const val = refs.dlgUrlInput.value.trim();
+                  state.customUrlInput = val;
+                  safeStorageSet(window.localStorage, STORAGE_BASE_URL_KEY, val);
+                  recomputeQrUrl();
+                }
+              })
+            ])
+          ]),
+          el('div', { className: 'mg-dlg-section' }, [
+            el('div', { className: 'mg-dlg-label', textContent: '3. Gestures Supported on iPhone' }),
+            el('p', {
+              className: 'mg-dlg-note',
+              textContent: 'Rotate/tilt the phone like a dial, raise it up or lower it down (gravity-compensated world-up accelerometer), or pull it toward you / push it away. Tap "Zero Pose" on the phone to re-anchor any grip.'
+            })
+          ])
+        ])
+      ])
+    ]);
+    refs.dialog.addEventListener('click', function (ev) {
+      if (ev.target === refs.dialog) refs.dialog.close();
+    });
+    document.body.appendChild(refs.dialog);
+
+    function openStudio() {
+      probeLocalBridge();
+      if (typeof refs.dialog.showModal === 'function') {
+        if (!refs.dialog.open) refs.dialog.showModal();
+      } else {
+        refs.dialog.setAttribute('open', '');
+      }
+    }
+
+    // Keyboard shortcut: R resets grid size when not focused on an input
+    window.addEventListener('keydown', function (ev) {
+      if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+      const tag = ev.target && ev.target.tagName ? ev.target.tagName.toLowerCase() : '';
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (ev.key === 'r' || ev.key === 'R') {
+        resetToDefault();
+      }
+    });
+
+    window.addEventListener('resize', function () {
+      measureBaseCellWidth();
+      if (state.controlled) applyGridSize(state.scale, true);
+      else updateLiveDom();
+    });
+
+    window.addEventListener('beforeunload', function () {
+      clearInterval(feedbackTimer);
+      if (link) link.close();
+    });
+
+    // Boot
+    measureBaseCellWidth();
+    recomputeQrUrl();
+    connectTransport();
+    probeLocalBridge();
+  }
+
+  NS.UI = {
+    mountMotionCell: mountMotionCell
+  };
+
+  function autoMount() {
+    const elRoot = document.getElementById('cell-motion');
+    if (elRoot) mountMotionCell(elRoot);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', autoMount);
+  } else {
+    autoMount();
+  }
+})(window);
