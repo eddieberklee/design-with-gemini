@@ -29,10 +29,16 @@
 
   const params = new URLSearchParams(root.location ? root.location.search : '');
   const rawSid = String(params.get('s') || '').trim().toUpperCase();
+  // No valid `?s=` means nothing to pair with: no shared fallback room, no relay socket.
   const sessionId = Transport && typeof Transport.isValidSessionId === 'function'
-    ? (Transport.isValidSessionId(rawSid) ? rawSid : 'DL000000')
-    : (/^[A-Z0-9]{6,16}$/.test(rawSid) ? rawSid : 'DL000000');
+    ? (Transport.isValidSessionId(rawSid) ? rawSid : '')
+    : (/^[A-Z0-9]{6,12}$/.test(rawSid) ? rawSid : '');
   const transportParam = String(params.get('t') || 'mqtt').trim().toLowerCase();
+  // Desktop presence: it answers `hello` with `state` and sends `hb` every 1.5 s while paired.
+  const LINK_TICK_MS = 2500;
+  const HELLO_MAX_TRIES = 8; // ~20 s of waiting for a desktop before releasing the relay
+  const DESKTOP_SILENCE_MS = 6000;
+  const SENSOR_PROBE_MS = 2500;
   const clientInstanceId = Transport && typeof Transport.generateSessionId === 'function'
     ? Transport.generateSessionId(6)
     : 'PH0001';
@@ -76,6 +82,15 @@
   let latestCompassHeading = null;
   let latestOrientationAlpha = null;
   let inertiaRaf = 0;
+  let linkStatus = 'idle'; // 'idle' | 'connecting' | 'reconnecting' | 'ready' | 'failed'
+  let linkTransport = 'mqtt';
+  let desktopLive = false;
+  let lastDesktopMs = 0;
+  let helloTries = 0;
+  let noDesktop = false;
+  let linkTick = 0;
+  let gotSensorSample = false;
+  let sensorProbeTimer = 0;
 
   // Build 24 detent ticks in SVG
   const tickLines = [];
@@ -212,8 +227,106 @@
   // Transport Connection (`MotionGrid.Transport`)
   // =========================================================================
 
+  function isPageHidden() {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  }
+
+  // `LIVE` only while the desktop is answering; a relay socket alone is `WAIT DESKTOP`.
+  function renderStatus() {
+    let st = 'connecting';
+    let text = 'LINKING';
+    const tag = linkTransport === 'local-ws' ? 'WS' : linkTransport === 'local-http' ? 'HTTPS' : 'MQTT';
+    if (!sessionId) {
+      st = 'warn';
+      text = 'NO SESSION · RESCAN QR';
+    } else if (!Transport || typeof Transport.createLink !== 'function') {
+      st = 'warn';
+      text = 'NO TRANSPORT';
+    } else if (linkStatus === 'failed') {
+      st = 'warn';
+      text = 'OFFLINE · TAP';
+    } else if (!link && noDesktop) {
+      st = 'warn';
+      text = 'NO DESKTOP · TAP';
+    } else if (!link) {
+      st = 'warn';
+      text = 'PAUSED · TAP';
+    } else if (linkStatus === 'ready' && desktopLive) {
+      st = 'ready';
+      text = 'LIVE · ' + tag;
+    } else if (linkStatus === 'ready') {
+      text = 'WAIT DESKTOP · ' + tag;
+    }
+    refs.status.dataset.state = st;
+    refs.statusText.textContent = text;
+  }
+
+  function sendHello() {
+    if (link) link.send({ t: 'hello', v: 1, cid: clientInstanceId, kind: 'rotary-dial' });
+  }
+
+  function markDesktopSeen() {
+    lastDesktopMs = Date.now();
+    helloTries = 0;
+    if (!desktopLive) {
+      desktopLive = true;
+      renderStatus();
+    }
+  }
+
+  // One interval while the link is open and the page visible: phone heartbeat when the desktop
+  // answers, bounded hello retries when it does not, then the relay is released.
+  function onLinkTick() {
+    if (!link || linkStatus !== 'ready') return;
+    if (desktopLive && Date.now() - lastDesktopMs > DESKTOP_SILENCE_MS) {
+      desktopLive = false;
+      helloTries = 0;
+      renderStatus();
+    }
+    if (desktopLive) {
+      link.send({ t: 'hb', cid: clientInstanceId });
+      return;
+    }
+    if (helloTries >= HELLO_MAX_TRIES) {
+      noDesktop = true;
+      closeLink();
+      renderStatus();
+      return;
+    }
+    helloTries++;
+    sendHello();
+  }
+
+  function syncLinkTick() {
+    const want = Boolean(link) && linkStatus === 'ready' && !isPageHidden();
+    if (want && !linkTick) {
+      linkTick = setInterval(onLinkTick, LINK_TICK_MS);
+    } else if (!want && linkTick) {
+      clearInterval(linkTick);
+      linkTick = 0;
+    }
+  }
+
+  function closeLink() {
+    if (link) {
+      const old = link;
+      link = null;
+      try { old.close(); } catch (_e) {}
+    }
+    desktopLive = false;
+    if (linkStatus !== 'failed') linkStatus = 'idle';
+    syncLinkTick();
+  }
+
   function connect() {
-    if (!Transport || typeof Transport.createLink !== 'function') return;
+    closeLink();
+    noDesktop = false;
+    helloTries = 0;
+    linkStatus = 'idle';
+    if (!sessionId || !Transport || typeof Transport.createLink !== 'function' || isPageHidden()) {
+      renderStatus();
+      return;
+    }
     const canLocal = transportParam === 'local' || transportParam === 'dual';
     const wsProto = root.location && root.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = canLocal && root.location
@@ -221,24 +334,34 @@
       : '';
     const httpBase = canLocal && root.location ? root.location.origin : '';
 
-    link = Transport.createLink({
+    linkStatus = 'connecting';
+    const myLink = Transport.createLink({
       mode: canLocal ? 'dual' : 'mqtt',
       sessionId: sessionId,
       role: 'phone',
       wsUrl: wsUrl,
       httpBase: httpBase,
       onStatus: function (st, info) {
-        refs.status.dataset.state = st === 'ready' ? 'ready' : 'connecting';
-        if (st === 'ready') {
-          const tag = info && info.transport === 'local-ws' ? 'LIVE · WS' : 'LIVE · WSS';
-          refs.statusText.textContent = tag;
-          link.send({ t: 'hello', v: 1, cid: clientInstanceId, kind: 'rotary-dial' });
-        } else {
-          refs.statusText.textContent = 'LINKING';
+        if (link !== myLink) return;
+        const prevStatus = linkStatus;
+        const prevTransport = linkTransport;
+        linkStatus = st;
+        linkTransport = (info && info.transport) || 'mqtt';
+        if (st === 'failed') {
+          // Every sub-link hit its retry ceiling; a tap or a visible page retries.
+          closeLink();
+        } else if (st === 'ready' && (prevStatus !== 'ready' || prevTransport !== linkTransport)) {
+          // Greet only when the usable path changes (the aggregate re-reports 'ready').
+          sendHello();
         }
+        syncLinkTick();
+        renderStatus();
       },
       onMessage: function (msg) {
-        if (!msg || !tracker) return;
+        if (link !== myLink) return;
+        if (!msg || typeof msg !== 'object') return;
+        if (msg.t === 'state' || msg.t === 'cmd' || msg.t === 'hb') markDesktopSeen();
+        if (!tracker) return;
         if (msg.t === 'state') {
           if (Number.isFinite(msg.dialValue)) tracker.setValue(msg.dialValue);
           if (typeof msg.fineMode === 'boolean') tracker.setFineMode(msg.fineMode);
@@ -254,53 +377,96 @@
         }
       }
     });
-    link.start();
+    link = myLink;
+    myLink.start();
+    syncLinkTick();
+    renderStatus();
   }
+
+  // A link that hit the retry ceiling, timed out waiting for a desktop, or was paused by a
+  // hidden page restarts only on a tap or when the page becomes visible again.
+  refs.status.addEventListener('click', function () {
+    if (!link) connect();
+  });
 
   // =========================================================================
   // iOS 13+ Gyroscope & Orientation Permission Gate
   // =========================================================================
 
+  function onDeviceOrientation(ev) {
+    if (!ev) return;
+    if (Number.isFinite(ev.webkitCompassHeading)) {
+      latestCompassHeading = ev.webkitCompassHeading;
+    }
+    if (Number.isFinite(ev.alpha)) {
+      latestOrientationAlpha = ev.alpha;
+    }
+  }
+
+  // Permission granted (or not needed) does not mean a sensor exists: desktop browsers and
+  // insecure pages never deliver usable samples. Re-open the gate instead of a dead dial.
+  function onSensorProbeTimeout() {
+    sensorProbeTimer = 0;
+    if (gotSensorSample) return;
+    stopSensors();
+    refs.gate.hidden = false;
+    refs.gateNote.textContent =
+      'No gyroscope data from this browser. Use the touch ring, or open this page in iPhone Safari over HTTPS.';
+  }
+
+  function stopSensors() {
+    sensorsActive = false;
+    root.removeEventListener('deviceorientation', onDeviceOrientation);
+    root.removeEventListener('devicemotion', onDeviceMotion);
+    if (sensorProbeTimer) {
+      clearTimeout(sensorProbeTimer);
+      sensorProbeTimer = 0;
+    }
+    if (tracker) renderPhoneUi(tracker.getState());
+  }
+
   function startSensors() {
     if (sensorsActive || !tracker) return;
     sensorsActive = true;
     refs.gate.hidden = true;
+    root.addEventListener('deviceorientation', onDeviceOrientation);
+    root.addEventListener('devicemotion', onDeviceMotion);
+    if (!gotSensorSample) {
+      if (sensorProbeTimer) clearTimeout(sensorProbeTimer);
+      sensorProbeTimer = setTimeout(onSensorProbeTimeout, SENSOR_PROBE_MS);
+    }
+  }
 
-    root.addEventListener('deviceorientation', function (ev) {
-      if (!ev) return;
-      if (Number.isFinite(ev.webkitCompassHeading)) {
-        latestCompassHeading = ev.webkitCompassHeading;
-      }
-      if (Number.isFinite(ev.alpha)) {
-        latestOrientationAlpha = ev.alpha;
-      }
+  function onDeviceMotion(ev) {
+    if (!ev) return;
+    const rot = ev.rotationRate || {};
+    const accG = ev.accelerationIncludingGravity || {};
+    const acc = ev.acceleration || {};
+    if (
+      !gotSensorSample &&
+      (Number.isFinite(rot.alpha) || Number.isFinite(rot.beta) || Number.isFinite(rot.gamma))
+    ) {
+      gotSensorSample = true;
+    }
+    const st = tracker.ingestMotion({
+      alpha: rot.alpha,
+      beta: rot.beta,
+      gamma: rot.gamma,
+      gx: accG.x,
+      gy: accG.y,
+      gz: accG.z,
+      ax: acc.x,
+      ay: acc.y,
+      az: acc.z,
+      webkitCompassHeading: latestCompassHeading,
+      orientationAlpha: latestOrientationAlpha,
+      ts: ev.timeStamp || Date.now()
     });
-
-    root.addEventListener('devicemotion', function (ev) {
-      if (!ev) return;
-      const rot = ev.rotationRate || {};
-      const accG = ev.accelerationIncludingGravity || {};
-      const acc = ev.acceleration || {};
-      const st = tracker.ingestMotion({
-        alpha: rot.alpha,
-        beta: rot.beta,
-        gamma: rot.gamma,
-        gx: accG.x,
-        gy: accG.y,
-        gz: accG.z,
-        ax: acc.x,
-        ay: acc.y,
-        az: acc.z,
-        webkitCompassHeading: latestCompassHeading,
-        orientationAlpha: latestOrientationAlpha,
-        ts: ev.timeStamp || Date.now()
-      });
-      if (st.detentDelta !== 0) {
-        playDetentMicroTick(st.detentSlot % 6 === 0);
-      }
-      renderPhoneUi(st);
-      transmitDialState(st, st.detentDelta !== 0);
-    });
+    if (st.detentDelta !== 0) {
+      playDetentMicroTick(st.detentSlot % 6 === 0);
+    }
+    renderPhoneUi(st);
+    transmitDialState(st, st.detentDelta !== 0);
   }
 
   refs.enableBtn.addEventListener('click', function () {
@@ -403,7 +569,7 @@
         lastTs = now;
         vel *= Math.exp(-dt / 0.55);
         if (Math.abs(vel) < 3) {
-          const stFinal = tracker.ingestDeltaAngle(0, dt);
+          const stFinal = settleVelocity();
           renderPhoneUi(stFinal);
           transmitDialState(stFinal, true);
           inertiaRaf = 0;
@@ -417,10 +583,21 @@
       };
       inertiaRaf = requestAnimationFrame(tickInertia);
     } else {
-      const st = tracker.ingestDeltaAngle(0, 0.016);
+      const st = settleVelocity();
       renderPhoneUi(st);
       transmitDialState(st, true);
     }
+  }
+
+  // Touch spin stopped: nothing else decays the velocity readout (gyro samples do, touch does not),
+  // so a released ring would keep showing and sending its last RPM.
+  function settleVelocity() {
+    tracker.degPerSec = 0;
+    tracker.rawDegPerSec = 0;
+    tracker.rpm = 0;
+    tracker.detentDelta = 0;
+    tracker.stationary = true;
+    return tracker.getState();
   }
 
   refs.wheelPad.addEventListener('pointerup', function (e) { endTouchSpin(e, false); });
@@ -471,10 +648,7 @@
       cancelAnimationFrame(inertiaRaf);
       inertiaRaf = 0;
     }
-    if (link) {
-      try { link.close(); } catch (_e) {}
-      link = null;
-    }
+    closeLink();
     if (audioCtx) {
       try { audioCtx.close(); } catch (_e) {}
       audioCtx = null;
@@ -483,6 +657,23 @@
 
   if (typeof root.addEventListener === 'function') {
     root.addEventListener('pagehide', cleanupPhonePage);
+    // Back/forward cache restore: pagehide closed the link, so reconnect.
+    root.addEventListener('pageshow', function (ev) {
+      if (ev && ev.persisted && !link) connect();
+    });
+  }
+
+  // Hidden page (screen locked, app switched): no relay socket and no timers. Visible again:
+  // reconnect, which is also the retry for a failed or timed-out link.
+  if (typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', function () {
+      if (isPageHidden()) {
+        closeLink();
+        renderStatus();
+      } else if (!link) {
+        connect();
+      }
+    });
   }
 
   if (tracker) {

@@ -2,18 +2,24 @@
 /**
  * Optional Local Hardware IOHIDManager Lid Angle Bridge (`cells/left-grille/lid-bridge.mjs`)
  *
- * Zero-npm-dependency Node HTTP + SSE server (`127.0.0.1:8791`) serving Apple's built-in
+ * Zero-npm-dependency Node HTTP + SSE server (`127.0.0.1:8793`) serving Apple's built-in
  * MacBook `LidAngleSensor` (`VendorID = 0x05AC`, `ProductID = 0x8104`,
  * `UsagePage = 0x0020`, `Usage = 0x008A`) via a tiny cached `/tmp` Swift IOKit helper.
  *
- * Endpoints (all with `Access-Control-Allow-Origin: *`):
+ * Endpoints:
  *   - `GET /angle`  -> JSON snapshot `{ available, angleDeg, raw, source, reason?, timestampMs }`
  *   - `GET /events` -> Server-Sent Events stream (`event: angle\ndata: <json>\n\n`)
  *   - `GET /health` -> `{ ok: true, available, clients }`
  *
+ * Access policy (`isAllowedHost`, `isAllowedOrigin`): the `Host` header must name a loopback
+ * host (blocks DNS rebinding), and a request that carries `Origin` must come from a loopback
+ * http(s) page or `Origin: null` (the `file://` page). Any other origin gets `403` and no CORS
+ * header, so a random website cannot read the hinge angle. `Origin: null` is also what a
+ * sandboxed iframe on any site sends; that is the accepted cost of supporting `file://`.
+ *
  * Usage:
  *   node cells/left-grille/lid-bridge.mjs
- *   LID_BRIDGE_PORT=8791 node cells/left-grille/lid-bridge.mjs
+ *   LID_BRIDGE_PORT=8793 node cells/left-grille/lid-bridge.mjs
  */
 
 import http from 'node:http';
@@ -25,7 +31,29 @@ import { execFileSync, spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_HOST = '127.0.0.1';
-export const DEFAULT_PORT = 8791;
+export const DEFAULT_PORT = 8793;
+export const MAX_SSE_CLIENTS = 8;
+const MAX_SSE_BUFFERED_BYTES = 64 * 1024;
+const MAX_HELPER_LINE_BYTES = 16 * 1024;
+const LOOPBACK_HOST_RE = /^(127\.0\.0\.1|localhost|\[::1\])$/i;
+
+/** `Host` header must name a loopback host (optionally with a port); anything else is DNS rebinding. */
+export function isAllowedHost(hostHeader) {
+  const m = /^(\[[^\]]+\]|[^:[\]]+)(?::\d{1,5})?$/.exec(String(hostHeader || '').trim());
+  return Boolean(m && LOOPBACK_HOST_RE.test(m[1]));
+}
+
+/** `undefined` (no Origin header) is allowed; `'null'` is the file:// page; else loopback http(s) only. */
+export function isAllowedOrigin(origin) {
+  if (origin === undefined) return true;
+  if (origin === 'null') return true;
+  try {
+    const u = new URL(String(origin));
+    return (u.protocol === 'http:' || u.protocol === 'https:') && LOOPBACK_HOST_RE.test(u.hostname);
+  } catch (_) {
+    return false;
+  }
+}
 
 const SWIFT_LID_HELPER_SRC = `import Foundation
 import IOKit
@@ -212,11 +240,23 @@ export function createBridgeServer(opts = {}) {
     lastBroadcastMs = now;
     const payload = `event: angle\ndata: ${JSON.stringify(snapshot)}\n\n`;
     for (const res of sseClients) {
+      writeOrDrop(res, payload);
+    }
+  }
+
+  // A client that stops reading must not grow the server's write buffer without bound.
+  function writeOrDrop(res, chunk) {
+    if (res.writableLength > MAX_SSE_BUFFERED_BYTES) {
+      sseClients.delete(res);
       try {
-        res.write(payload);
-      } catch (_) {
-        sseClients.delete(res);
-      }
+        res.destroy();
+      } catch (_) {}
+      return;
+    }
+    try {
+      res.write(chunk);
+    } catch (_) {
+      sseClients.delete(res);
     }
   }
 
@@ -249,6 +289,10 @@ export function createBridgeServer(opts = {}) {
     helperProc.stdout.setEncoding('utf8');
     helperProc.stdout.on('data', (chunk) => {
       helperStdoutBuf += chunk;
+      if (helperStdoutBuf.length > MAX_HELPER_LINE_BYTES && helperStdoutBuf.indexOf('\n') === -1) {
+        helperStdoutBuf = '';
+        return;
+      }
       let nl = helperStdoutBuf.indexOf('\n');
       while (nl !== -1) {
         const line = helperStdoutBuf.slice(0, nl);
@@ -286,22 +330,32 @@ export function createBridgeServer(opts = {}) {
 
   const keepaliveTimer = setInterval(() => {
     for (const res of sseClients) {
-      try {
-        res.write(': keepalive\n\n');
-      } catch (_) {
-        sseClients.delete(res);
-      }
+      writeOrDrop(res, ': keepalive\n\n');
     }
   }, 10_000);
   if (typeof keepaliveTimer.unref === 'function') keepaliveTimer.unref();
 
   const server = http.createServer((req, res) => {
+    const origin = req.headers.origin;
+    if (!isAllowedHost(req.headers.host) || !isAllowedOrigin(origin)) {
+      res.writeHead(403, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'no-store',
+        Vary: 'Origin'
+      });
+      res.end(JSON.stringify({ error: 'Forbidden origin or host' }));
+      return;
+    }
+
     const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
-      'Cache-Control': 'no-store'
+      'Cache-Control': 'no-store',
+      Vary: 'Origin'
     };
+    if (origin !== undefined) {
+      corsHeaders['Access-Control-Allow-Origin'] = origin;
+    }
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204, corsHeaders);
@@ -348,6 +402,14 @@ export function createBridgeServer(opts = {}) {
     }
 
     if (req.method === 'GET' && url.pathname === '/events') {
+      if (sseClients.size >= MAX_SSE_CLIENTS) {
+        res.writeHead(503, {
+          ...corsHeaders,
+          'Content-Type': 'application/json; charset=utf-8'
+        });
+        res.end(JSON.stringify({ error: 'Too many event-stream clients' }));
+        return;
+      }
       res.writeHead(200, {
         ...corsHeaders,
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -393,13 +455,15 @@ export function createBridgeServer(opts = {}) {
   return {
     server,
     start() {
-      startHelper();
+      // Spawn the HID helper only once the port is ours, so a failed bind (port in use)
+      // never leaves a helper process behind.
       return new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, host, () => {
           server.removeListener('error', reject);
           const addr = server.address();
           const boundPort = addr && typeof addr === 'object' ? addr.port : port;
+          startHelper();
           resolve({ host, port: boundPort });
         });
       });
@@ -411,7 +475,8 @@ export function createBridgeServer(opts = {}) {
 
 // CLI entrypoint
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const port = Number(process.env.LID_BRIDGE_PORT || DEFAULT_PORT);
+  const envPort = Number(process.env.LID_BRIDGE_PORT);
+  const port = Number.isInteger(envPort) && envPort > 0 && envPort < 65536 ? envPort : DEFAULT_PORT;
   const bridge = createBridgeServer({ host: DEFAULT_HOST, port });
   bridge
     .start()

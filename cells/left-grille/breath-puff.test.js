@@ -352,6 +352,128 @@ test('LeftGrilleLab Slot 5 registration and DOM mount + Sim Puff/Blow smoke chec
   }
 });
 
+test('Status text never goes stale: denied error clears once the bus recovers, and closing mid-sim resets the pill', () => {
+  function makeMockEl(tag) {
+    const el = {
+      tagName: String(tag).toUpperCase(),
+      className: '',
+      children: [],
+      attributes: {},
+      dataset: {},
+      style: {},
+      listeners: {},
+      _text: '',
+      classList: {
+        _set: new Set(),
+        add(...cls) {
+          cls.forEach((c) => this._set.add(c));
+          el.className = Array.from(this._set).join(' ');
+        }
+      },
+      setAttribute(k, v) {
+        this.attributes[k] = String(v);
+        if (k === 'class') this.className = String(v);
+      },
+      getAttribute(k) {
+        return this.attributes[k];
+      },
+      addEventListener(type, fn) {
+        (this.listeners[type] = this.listeners[type] || []).push(fn);
+      },
+      appendChild(child) {
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const idx = this.children.indexOf(child);
+        if (idx >= 0) this.children.splice(idx, 1);
+      },
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      set textContent(v) {
+        this._text = String(v);
+        this.children = [];
+      },
+      get textContent() {
+        if (this.children.length === 0) return this._text;
+        return this._text + this.children.map((c) => c.textContent || '').join('');
+      }
+    };
+    return el;
+  }
+  const find = (node, cls) => {
+    if (node.className && node.className.split(' ').includes(cls)) return node;
+    for (const c of node.children || []) {
+      const f = find(c, cls);
+      if (f) return f;
+    }
+    return null;
+  };
+
+  const prevDoc = globalThis.document;
+  const prevAdd = globalThis.addEventListener;
+  const prevRemove = globalThis.removeEventListener;
+  const winListeners = {};
+  globalThis.document = {
+    createElement: (t) => makeMockEl(t),
+    createElementNS: (_ns, t) => makeMockEl(t),
+    createTextNode: (txt) => ({ textContent: String(txt), children: [] })
+  };
+  globalThis.addEventListener = (type, fn) => {
+    (winListeners[type] = winListeners[type] || []).push(fn);
+  };
+  globalThis.removeEventListener = (type, fn) => {
+    if (winListeners[type]) winListeners[type] = winListeners[type].filter((f) => f !== fn);
+  };
+
+  try {
+    const cellEl = makeMockEl('section');
+    let stateCb = null;
+    const bus = {
+      subscribeAudio: () => () => {},
+      requestArm: () => Promise.resolve(false),
+      stopAll: () => {},
+      onStateChange(cb) {
+        stateCb = cb;
+        cb({ state: 'idle', sampleRate: 48000, error: '' });
+        return () => {};
+      }
+    };
+    const inst = mountBreathPuffCell(cellEl, bus);
+    const meta = find(cellEl, 'bp-hero-meta');
+    const pill = find(cellEl, 'bp-status-pill');
+    const arm = find(cellEl, 'bp-btn--arm');
+
+    const denied = 'Mic permission denied — allow microphone access or use Sim controls.';
+    stateCb({ state: 'error', sampleRate: 48000, error: denied });
+    assert.equal(meta.textContent, denied);
+    assert.equal(pill.textContent, 'SIM ONLY');
+    assert.match(arm.textContent, /RETRY/, 'narrow cells hide the pill; the button must show the failure');
+
+    // Re-armed successfully: the old denial must not stay on screen next to "LIVE"
+    stateCb({ state: 'requesting', sampleRate: 48000, error: '' });
+    stateCb({ state: 'listening', sampleRate: 48000, error: '' });
+    assert.equal(pill.textContent, 'LIVE · 48k');
+    assert.notEqual(meta.textContent, denied);
+    assert.match(arm.textContent, /LIVE/);
+
+    // Sim started, then the secondary page closes before it finishes
+    stateCb({ state: 'idle', sampleRate: 48000, error: '' });
+    inst.runSimulation('blow');
+    assert.match(pill.textContent, /SIM/);
+    (winListeners['lg-secondary-close'] || []).forEach((fn) => fn({ type: 'lg-secondary-close' }));
+    assert.equal(pill.textContent, 'READY · <12k passive', 'closing mid-sim must not leave a SIM status');
+    inst.destroy();
+  } finally {
+    globalThis.document = prevDoc;
+    if (prevAdd) globalThis.addEventListener = prevAdd;
+    else delete globalThis.addEventListener;
+    if (prevRemove) globalThis.removeEventListener = prevRemove;
+    else delete globalThis.removeEventListener;
+  }
+});
+
 test('Disarm calls stopAll({ dispatchClose: false }), idle resets DSP cooldown across t=120s -> t=0s rearm, and bezel renders 05 kicker', () => {
   function makeMockEl(tag) {
     const el = {

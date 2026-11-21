@@ -94,6 +94,14 @@
   box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
 }
 
+.id-led[data-state="linking"] {
+  background: #d97706;
+}
+
+.id-led[data-state="error"] {
+  background: var(--id-vermilion);
+}
+
 .id-status-text {
   font-family: var(--id-mono);
   font-size: clamp(7.5px, 1.9cqw, 9.5px);
@@ -673,6 +681,13 @@
   -webkit-font-smoothing: antialiased;
 }
 
+/* dial-phone.html has no page reset: padded 100dvh boxes must not exceed the viewport */
+.dp-body *,
+.dp-body *::before,
+.dp-body *::after {
+  box-sizing: border-box;
+}
+
 .dp-body[data-theme="light"] {
   --dp-bg: #f6f6f3;
   --dp-surface: #ffffff;
@@ -749,11 +764,22 @@
   font-size: 10.5px;
   font-weight: 600;
   color: #f59e0b;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 .dp-status[data-state="ready"] {
   color: var(--dp-live);
   border-color: rgba(16, 185, 129, 0.35);
+}
+
+.dp-status[data-state="warn"] {
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+.dp-body[data-theme="light"] .dp-status[data-state="warn"] {
+  color: #b91c1c;
 }
 
 .dp-dot {

@@ -52,6 +52,12 @@
   const BLE_UART_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
   const BLE_UART_TX_CHAR = '6e400003-b5a3-f393-e0a9-e50e24dcca9e';
   const MAX_QR_URL_BYTES = 213;
+  // Relay link budget (resident-cost rules shared with cells/motion): an unpaired desktop keeps
+  // the public-broker socket only for one bounded pairing window, a paired one only while visible.
+  const PAIR_WINDOW_MS = 90000;
+  const PHONE_TIMEOUT_MS = 7000;
+  const HEARTBEAT_MS = 1500;
+  const MAX_REMOTE_DEG = 1e7;
 
   function clamp(v, lo, hi) {
     if (!Number.isFinite(v)) return lo;
@@ -358,16 +364,18 @@
     // the detent index, naturally providing a full 15-degree reversal deadband right at
     // the click boundary while yielding exact 24 ticks per 360-degree revolution in both
     // CW (+360 -> +24) and CCW (-360 -> -24) directions.
-    let stepClicks = 0;
+    // Closed form of "step while past the next boundary" so a huge delta (or a remote
+    // packet that set cumulativeDeg/detentIndex far apart) costs O(1), not O(delta / 15).
     const eps = 1e-7;
-    while (this.cumulativeDeg >= (this.detentIndex + 1) * DETENT_STEP_DEG - eps) {
-      this.detentIndex += 1;
-      stepClicks += 1;
+    const prevIndex = this.detentIndex;
+    const upIndex = Math.floor((this.cumulativeDeg + eps) / DETENT_STEP_DEG) || 0; // no -0
+    const downIndex = Math.ceil((this.cumulativeDeg - eps) / DETENT_STEP_DEG) || 0;
+    if (upIndex > this.detentIndex) {
+      this.detentIndex = upIndex;
+    } else if (downIndex < this.detentIndex) {
+      this.detentIndex = downIndex;
     }
-    while (this.cumulativeDeg <= (this.detentIndex - 1) * DETENT_STEP_DEG + eps) {
-      this.detentIndex -= 1;
-      stepClicks -= 1;
-    }
+    const stepClicks = this.detentIndex - prevIndex;
 
     this.detentDelta = stepClicks;
     if (stepClicks !== 0) {
@@ -867,6 +875,11 @@
     let inertiaRaf = 0;
     let simTimer = 0;
     let heartbeatTimer = null;
+    let pairTimer = null;
+    let pairing = false;
+    let pairTimedOut = false;
+    let resumeOnVisible = false;
+    let phoneUrlInfo = null;
     let secondaryActive = false;
     let unmounted = false;
 
@@ -1041,7 +1054,7 @@
 
     const linkMetaText = h('span', {
       className: 'id-link-meta',
-      textContent: 'WSS ' + sessionId.slice(0, 6)
+      textContent: 'NO LINK'
     });
 
     const telemetryCol = h('div', { className: 'id-telemetry' }, [
@@ -1089,6 +1102,7 @@
         customHost = String(e.target.value || '').trim();
         safeStorageSet('localStorage', STORAGE_HOST_KEY, customHost);
         renderQrPopover();
+        syncLink(false);
       }
     });
     const copyUrlBtn = h(
@@ -1192,25 +1206,51 @@
       updateStatusPill();
     }
 
+    // Status text names what is actually true: a relay socket alone is "WAITING", never live.
     function updateStatusPill() {
+      let st = 'standby';
+      let text = 'DRAG · QR · BLE';
       if (phoneConnected) {
-        ledDot.dataset.state = 'live';
-        statusLabel.textContent = linkTransport === 'local-ws' ? 'IPHONE · WS' : 'IPHONE · WSS';
+        st = 'live';
+        text = linkTransport === 'local-ws' ? 'IPHONE · WS' : 'IPHONE · WSS';
       } else if (bleConnected) {
-        ledDot.dataset.state = 'live';
-        statusLabel.textContent = 'BLE LIVE';
-      } else if (linkState === 'ready') {
-        ledDot.dataset.state = 'ready';
-        statusLabel.textContent = 'READY · SCAN/DRAG';
-      } else {
-        ledDot.dataset.state = 'standby';
-        statusLabel.textContent = 'DRAG · QR · BLE';
+        st = 'live';
+        text = 'BLE LIVE';
+      } else if (linkState === 'failed') {
+        st = 'error';
+        text = 'RELAY OFFLINE · PAIR QR';
+      } else if (link && linkState === 'ready') {
+        st = 'ready';
+        text = 'WAITING · SCAN QR';
+      } else if (link) {
+        st = 'linking';
+        text = 'LINKING…';
+      } else if (qrOpen && !isScannable()) {
+        text = 'NO LINK · SET HOST';
+      } else if (pairTimedOut) {
+        text = 'PAIR TIMEOUT · QR';
       }
+      ledDot.dataset.state = st;
+      statusLabel.textContent = text;
+      linkMetaText.textContent = link
+        ? (linkTransport === 'local-ws' ? 'WS ' : 'WSS ') + sessionId.slice(0, 6)
+        : 'NO LINK';
+    }
+
+    function refreshPhoneUrl() {
+      phoneUrlInfo = resolveDialPhoneUrl(customHost, bridgeConfig, root.location, sessionId);
+      return phoneUrlInfo;
+    }
+
+    // A phone can open the QR target only when it is a real, non-loopback URL.
+    function isScannable() {
+      const info = phoneUrlInfo || refreshPhoneUrl();
+      return Boolean(info.qrUrl && info.source !== 'fallback' && !info.isLocalhost);
     }
 
     function renderQrPopover() {
       clearChildren(qrSvgSlot);
-      const info = resolveDialPhoneUrl(customHost, bridgeConfig, root.location, sessionId);
+      const info = refreshPhoneUrl();
 
       if (info.qrUrl && QR && typeof QR.renderSVGElement === 'function') {
         try {
@@ -1232,9 +1272,9 @@
 
       if (info.error) {
         qrHintText.textContent = info.error;
-      } else if (info.isLocalhost && !customHost) {
+      } else if (!isScannable()) {
         qrHintText.textContent =
-          'Opened on localhost: enter your Mac LAN IP or HTTPS tunnel below so iPhone on Wi-Fi can reach dial-phone.html.';
+          'No phone-reachable URL (file:// or localhost): enter your Mac LAN IP or HTTPS tunnel below so iPhone on Wi-Fi can reach dial-phone.html.';
       } else {
         qrHintText.textContent =
           'Scan on iPhone -> Tap Enable Gyroscope -> Lay phone flat on desk and spin like a knob.';
@@ -1251,6 +1291,9 @@
         renderQrPopover();
         qrOverlay.hidden = false;
         hostInput.focus({ preventScroll: true });
+        // Opening the QR is the user's pairing intent (and the retry after OFFLINE/TIMEOUT).
+        if (!phoneConnected) startPairingWindow();
+        syncLink(false);
       }
     }
 
@@ -1259,6 +1302,7 @@
       qrOpen = false;
       qrOverlay.hidden = true;
       qrBtn.setAttribute('aria-expanded', 'false');
+      updateStatusPill();
       if (restoreFocus) {
         qrBtn.focus({ preventScroll: true });
       }
@@ -1286,6 +1330,16 @@
         clearInterval(simTimer);
         simTimer = 0;
       }
+    }
+
+    // Motion has stopped (release, end of spin, discrete key/wheel step). Nothing else decays the
+    // velocity readout, so one ArrowRight used to leave "56.8 RPM" on screen indefinitely.
+    function settleVelocity() {
+      tracker.degPerSec = 0;
+      tracker.rawDegPerSec = 0;
+      tracker.rpm = 0;
+      tracker.detentDelta = 0;
+      tracker.stationary = true;
     }
 
     function pointerAngleFromCenter(clientX, clientY) {
@@ -1340,7 +1394,7 @@
       if (Math.abs(releaseVel) > 28 && !prefersReducedMotion(win)) {
         startInertialFlywheel( clamp(releaseVel, -1080, 1080) );
       } else {
-        tracker.ingestDeltaAngle(0, 0.016);
+        settleVelocity();
         renderTelemetry();
       }
     }
@@ -1351,7 +1405,7 @@
     function startInertialFlywheel(initialVelDegPerSec) {
       stopInertia();
       if (prefersReducedMotion(win)) {
-        tracker.ingestDeltaAngle(0, 0.016);
+        settleVelocity();
         renderTelemetry();
         return;
       }
@@ -1367,7 +1421,7 @@
         lastTs = now;
         vel *= Math.exp(-dt / 0.58);
         if (Math.abs(vel) < 3.0) {
-          tracker.ingestDeltaAngle(0, dt);
+          settleVelocity();
           renderTelemetry();
           inertiaRaf = 0;
           return;
@@ -1394,6 +1448,7 @@
         if (st.detentDelta !== 0) {
           clickSynth.playTick(st.detentSlot % 6 === 0);
         }
+        settleVelocity();
         renderTelemetry();
       },
       { passive: false }
@@ -1406,6 +1461,7 @@
         const step = e.shiftKey ? 1.5 : DETENT_STEP_DEG;
         const st = tracker.ingestDeltaAngle(step, 0.016);
         if (st.detentDelta !== 0) clickSynth.playTick(st.detentSlot % 6 === 0);
+        settleVelocity();
         renderTelemetry();
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
         e.preventDefault();
@@ -1413,6 +1469,7 @@
         const step = e.shiftKey ? -1.5 : -DETENT_STEP_DEG;
         const st = tracker.ingestDeltaAngle(step, 0.016);
         if (st.detentDelta !== 0) clickSynth.playTick(st.detentSlot % 6 === 0);
+        settleVelocity();
         renderTelemetry();
       } else if (e.key === 'Home') {
         e.preventDefault();
@@ -1437,7 +1494,7 @@
         if (unmounted || count >= steps) {
           clearInterval(simTimer);
           simTimer = 0;
-          tracker.ingestDeltaAngle(0, 0.016);
+          settleVelocity();
           renderTelemetry();
           return;
         }
@@ -1466,20 +1523,32 @@
       if (link) link.send(msg);
     }
 
+    function sendStateToPhone() {
+      sendToPhone({
+        t: 'state',
+        dialValue: Number(tracker.dialValue.toFixed(2)),
+        fineMode: tracker.fineMode
+      });
+    }
+
+    // Remote fields come from a public relay topic; keep them finite and bounded.
+    function remoteNum(v, lim) {
+      return Number.isFinite(v) ? clamp(v, -lim, lim) : null;
+    }
+
     function handlePhonePacket(msg) {
       if (!msg || typeof msg !== 'object') return;
       lastPhoneRxMs = Date.now();
       if (!phoneConnected) {
-        phoneConnected = true;
+        setPhoneConnected(true);
         if (qrOpen) closeQrOverlay(false);
+        // Answer the first packet too (the phone's hello may predate this link) with a presence
+        // beat only: a `state` reply would carry the desktop's pre-packet value and snap the phone back.
+        if (msg.t !== 'hello') sendToPhone({ t: 'hb' });
       }
 
       if (msg.t === 'hello') {
-        sendToPhone({
-          t: 'state',
-          dialValue: Number(tracker.dialValue.toFixed(2)),
-          fineMode: tracker.fineMode
-        });
+        sendStateToPhone();
         renderTelemetry();
         return;
       }
@@ -1499,22 +1568,35 @@
       if (msg.t === 'm' || msg.t === 'dial') {
         stopInertia();
         const prevSlot = tracker.detentSlot;
-        if (Number.isFinite(msg.deltaDeg)) {
-          tracker.ingestDeltaAngle(msg.deltaDeg, msg.dt || 0.025);
-        } else if (Number.isFinite(msg.angleDeg)) {
-          tracker.ingestAbsoluteAngle(msg.angleDeg, 0.025);
+        const deltaDeg = remoteNum(msg.deltaDeg, 3600);
+        const angleDeg = remoteNum(msg.angleDeg, MAX_REMOTE_DEG);
+        if (deltaDeg !== null) {
+          tracker.ingestDeltaAngle(deltaDeg, remoteNum(msg.dt, 0.25) || 0.025);
+        } else if (angleDeg !== null) {
+          tracker.ingestAbsoluteAngle(angleDeg, 0.025);
         }
-        if (Number.isFinite(msg.cumulativeDeg)) tracker.cumulativeDeg = msg.cumulativeDeg;
-        if (Number.isFinite(msg.turns)) tracker.turns = msg.turns;
-        if (Number.isFinite(msg.degPerSec)) tracker.degPerSec = msg.degPerSec;
-        if (Number.isFinite(msg.rpm)) tracker.rpm = msg.rpm;
-        if (Number.isFinite(msg.detentIndex)) tracker.detentIndex = msg.detentIndex;
-        if (Number.isFinite(msg.detentSlot)) tracker.detentSlot = msg.detentSlot;
-        if (Number.isFinite(msg.totalDetentTicks)) tracker.totalDetentTicks = msg.totalDetentTicks;
+        const cumulativeDeg = remoteNum(msg.cumulativeDeg, MAX_REMOTE_DEG);
+        if (cumulativeDeg !== null) {
+          tracker.cumulativeDeg = cumulativeDeg;
+          tracker.turns = cumulativeDeg / 360;
+          tracker.angleDeg = wrapAngle360(cumulativeDeg);
+        }
+        const degPerSec = remoteNum(msg.degPerSec, 1e5);
+        if (degPerSec !== null) {
+          tracker.degPerSec = degPerSec;
+          tracker.rpm = degPerSec / 6;
+        }
+        const detentIndex = remoteNum(msg.detentIndex, MAX_REMOTE_DEG / DETENT_STEP_DEG);
+        if (detentIndex !== null) {
+          tracker.detentIndex = Math.round(detentIndex);
+          tracker.detentSlot = ((tracker.detentIndex % DETENT_COUNT) + DETENT_COUNT) % DETENT_COUNT;
+        }
+        const ticks = remoteNum(msg.totalDetentTicks, 1e12);
+        if (ticks !== null) tracker.totalDetentTicks = Math.max(0, Math.round(ticks));
         if (Number.isFinite(msg.dialValue)) tracker.dialValue = clamp(msg.dialValue, 0, 100);
         if (typeof msg.fineMode === 'boolean') tracker.fineMode = msg.fineMode;
         if (typeof msg.faceUp === 'boolean') tracker.faceUp = msg.faceUp;
-        if (Number.isFinite(msg.tiltDeg)) tracker.tiltDeg = msg.tiltDeg;
+        if (Number.isFinite(msg.tiltDeg)) tracker.tiltDeg = clamp(msg.tiltDeg, 0, 180);
 
         if (tracker.detentSlot !== prevSlot) {
           clickSynth.playTick(tracker.detentSlot % 6 === 0);
@@ -1523,14 +1605,104 @@
       }
     }
 
+    function isPageHidden() {
+      return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    }
+
+    // The relay link exists only while the secondary page is open and visible, the QR target is
+    // reachable from a phone, and either a phone is paired or a bounded pairing window is running.
+    function wantLink() {
+      return (
+        !unmounted &&
+        secondaryActive &&
+        !isPageHidden() &&
+        isScannable() &&
+        (phoneConnected || pairing)
+      );
+    }
+
+    function closeLink() {
+      if (link) {
+        const old = link;
+        link = null;
+        try { old.close(); } catch (_e) {}
+      }
+      if (linkState !== 'failed') linkState = 'standby';
+    }
+
+    // force=true reopens an existing link (e.g. a bridge config now offers local WS).
+    function syncLink(force) {
+      if (!wantLink()) {
+        closeLink();
+      } else if (!link || force) {
+        connectTransport();
+      }
+      updateStatusPill();
+    }
+
+    function startPairingWindow() {
+      if (pairTimer) clearTimeout(pairTimer);
+      pairing = true;
+      pairTimedOut = false;
+      pairTimer = setTimeout(onPairingWindowEnd, PAIR_WINDOW_MS);
+    }
+
+    function stopPairingWindow() {
+      pairing = false;
+      if (pairTimer) {
+        clearTimeout(pairTimer);
+        pairTimer = null;
+      }
+    }
+
+    function onPairingWindowEnd() {
+      pairTimer = null;
+      pairing = false;
+      if (!phoneConnected && link) pairTimedOut = true;
+      syncLink(false);
+    }
+
+    function onHeartbeat() {
+      if (phoneConnected && Date.now() - lastPhoneRxMs > PHONE_TIMEOUT_MS) {
+        setPhoneConnected(false);
+        return;
+      }
+      sendToPhone({ t: 'hb' });
+    }
+
+    // Phone liveness check + desktop->phone heartbeat run only while a phone is paired and visible.
+    function syncHeartbeat() {
+      const want = phoneConnected && secondaryActive && !unmounted && !isPageHidden();
+      if (want && !heartbeatTimer) {
+        heartbeatTimer = setInterval(onHeartbeat, HEARTBEAT_MS);
+      } else if (!want && heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+    }
+
+    function setPhoneConnected(next) {
+      if (phoneConnected === next) return;
+      phoneConnected = next;
+      if (next) {
+        stopPairingWindow();
+        pairTimedOut = false;
+      } else if (link && secondaryActive && !isPageHidden()) {
+        // Give a dropped phone one bounded window to come back, then release the relay.
+        startPairingWindow();
+      }
+      syncHeartbeat();
+      renderTelemetry();
+    }
+
     function connectTransport() {
       const curNS = (win && win.MotionGrid) || (root && root.MotionGrid) || NS || {};
       const curTransport = curNS.Transport || Transport;
-      if (!curTransport || typeof curTransport.createLink !== 'function') return;
       if (link) {
         try { link.close(); } catch (_e) {}
         link = null;
       }
+      if (!curTransport || typeof curTransport.createLink !== 'function') return;
       const hasBridge = Boolean(bridgeConfig && bridgeConfig.desktopWsUrl);
       const wsUrl = hasBridge
         ? bridgeConfig.desktopWsUrl + '?s=' + encodeURIComponent(sessionId) + '&role=desktop'
@@ -1538,22 +1710,33 @@
       const httpBase = hasBridge ? bridgeConfig.desktopHttpBase : '';
 
       linkState = 'connecting';
-      link = curTransport.createLink({
+      linkTransport = hasBridge ? 'local-ws' : 'mqtt';
+      const myLink = curTransport.createLink({
         mode: hasBridge ? 'dual' : 'mqtt',
         sessionId: sessionId,
         role: 'desktop',
         wsUrl: wsUrl,
         httpBase: httpBase,
         onStatus: function (st, info) {
+          if (link !== myLink) return;
           linkState = st;
           linkTransport = (info && info.transport) || 'mqtt';
-          linkMetaText.textContent =
-            (linkTransport === 'local-ws' ? 'WS ' : 'WSS ') + sessionId.slice(0, 6);
+          if (st === 'failed') {
+            // Every sub-link hit its retry ceiling: release it; PAIR QR or a visible tab retries.
+            link = null;
+            try { myLink.close(); } catch (_e) {}
+            stopPairingWindow();
+            if (phoneConnected) setPhoneConnected(false);
+          }
           updateStatusPill();
         },
-        onMessage: handlePhonePacket
+        onMessage: function (msg) {
+          if (link !== myLink) return;
+          handlePhonePacket(msg);
+        }
       });
-      link.start();
+      link = myLink;
+      myLink.start();
     }
 
     function probeLocalBridge() {
@@ -1584,8 +1767,10 @@
           if (bridgeProbeAbort === ctrl) bridgeProbeAbort = null;
           if (unmounted || !secondaryActive || !cfg || !cfg.ok) return;
           bridgeConfig = cfg;
-          connectTransport();
+          refreshPhoneUrl();
           if (qrOpen) renderQrPopover();
+          // Reopen only a link that is already wanted, now with the local WS path.
+          syncLink(Boolean(link));
         })
         .catch(function () {
           if (bridgeProbeAbort === ctrl) bridgeProbeAbort = null;
@@ -1799,54 +1984,61 @@
       return true;
     }
 
+    // Opening the page opens no socket and starts no timer; only the one-shot same-origin
+    // bridge probe runs. The relay link waits for PAIR QR (see wantLink / startPairingWindow).
     function activateSecondarySession() {
       if (unmounted) return;
+      const wasActive = secondaryActive;
       secondaryActive = true;
-      if (!heartbeatTimer) {
-        heartbeatTimer = setInterval(function () {
-          if (phoneConnected && Date.now() - lastPhoneRxMs > 7000) {
-            phoneConnected = false;
-            renderTelemetry();
-          }
-        }, 1500);
-      }
-      if (!link) {
-        connectTransport();
-        probeLocalBridge();
-      }
+      if (!wasActive) probeLocalBridge();
+      refreshPhoneUrl();
+      updateStatusPill();
     }
 
     function onSecondaryOpen() {
       activateSecondarySession();
     }
 
-    function onHashOrPopState() {
-      if (isSecondaryVisible()) {
-        activateSecondarySession();
-      }
-    }
-
+    // Only our own open/close events drive the session: `popstate`/`hashchange` arrive after
+    // `lg-secondary-close` while `LeftGrilleLab.isSecondaryOpen()` can still read true.
     function onSecondaryClose() {
       secondaryActive = false;
+      resumeOnVisible = false;
+      pairTimedOut = false;
       stopInertia();
       closeQrOverlay(false);
       if (bridgeProbeAbort) {
         try { bridgeProbeAbort.abort(); } catch (_e) {}
         bridgeProbeAbort = null;
       }
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer);
-        heartbeatTimer = null;
-      }
-      if (link) {
-        try { link.close(); } catch (_e) {}
-        link = null;
-      }
-      linkState = 'standby';
+      stopPairingWindow();
       phoneConnected = false;
+      syncHeartbeat();
+      closeLink();
+      linkState = 'standby';
       disconnectBle();
       clickSynth.close();
       renderTelemetry();
+    }
+
+    // Hidden tab: drop the relay link, the heartbeat and the pairing window. Visible again:
+    // resume what hiding suspended, and retry a link that had failed (one fresh pairing window).
+    function onVisibilityChange() {
+      if (unmounted || !secondaryActive) return;
+      if (isPageHidden()) {
+        resumeOnVisible = Boolean(link) || pairing || phoneConnected || linkState === 'failed';
+        stopInertia();
+        stopPairingWindow();
+        phoneConnected = false;
+        syncHeartbeat();
+        closeLink();
+        clickSynth.close();
+        renderTelemetry();
+      } else if (resumeOnVisible) {
+        resumeOnVisible = false;
+        startPairingWindow();
+        syncLink(false);
+      }
     }
 
     function onKeyDownDoc(e) {
@@ -1861,16 +2053,12 @@
       if (!target || typeof target.addEventListener !== 'function') return;
       target.addEventListener('lg-secondary-open', onSecondaryOpen);
       target.addEventListener('lg-secondary-close', onSecondaryClose);
-      target.addEventListener('hashchange', onHashOrPopState);
-      target.addEventListener('popstate', onHashOrPopState);
     }
 
     function detachWindowEvents(target) {
       if (!target || typeof target.removeEventListener !== 'function') return;
       target.removeEventListener('lg-secondary-open', onSecondaryOpen);
       target.removeEventListener('lg-secondary-close', onSecondaryClose);
-      target.removeEventListener('hashchange', onHashOrPopState);
-      target.removeEventListener('popstate', onHashOrPopState);
     }
 
     attachWindowEvents(root);
@@ -1879,6 +2067,7 @@
     }
     if (typeof document.addEventListener === 'function') {
       document.addEventListener('keydown', onKeyDownDoc, true);
+      document.addEventListener('visibilitychange', onVisibilityChange);
     }
 
     if (isSecondaryVisible()) {
@@ -1895,6 +2084,7 @@
       }
       if (typeof document.removeEventListener === 'function') {
         document.removeEventListener('keydown', onKeyDownDoc, true);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
 

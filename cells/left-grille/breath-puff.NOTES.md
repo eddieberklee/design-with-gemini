@@ -13,7 +13,7 @@
 - **`cells/left-grille/breath-puff.css`**:
   - Strictly scoped `.bp-cell` / `.bp-stage` styles with `position: absolute; inset: 0;` 4:3 stage lock, Swiss/Braun palette (`#ffffff`, `#f5f5f3`, `#141413`, `#0052cc`, `#047857`, `#9a4700`), and `@container` breakpoints at `310px` and `225px` scaling cleanly down to `150px` wide cells.
 - **`cells/left-grille/breath-puff.test.js`**:
-  - Reproducible `node --test` suite verifying `SHARP PUFF`, `SUSTAINED BLOW`, `GENTLE BREEZE`, multi-rate (`44.1 kHz` / `96 kHz`) + `NaN` resilience, `PinwheelPhysics`, `LeftGrilleLab` Slot `5` mounting, and 100% rejection of `< 35 ms` desk taps, `140 ms` resonant desk thumps, high-frequency grille scratches, and voiced speech / `120 Hz` humming.
+  - Reproducible `node --test` suite verifying `SHARP PUFF`, `SUSTAINED BLOW`, `GENTLE BREEZE`, multi-rate (`44.1 kHz` / `96 kHz`) + `NaN` resilience, `PinwheelPhysics`, `LeftGrilleLab` Slot `5` mounting, status text after mic denial / recovery / close mid-sim, and 100% rejection of `< 35 ms` desk taps, `140 ms` resonant desk thumps, high-frequency grille scratches, and voiced speech / `120 Hz` humming.
 
 ---
 
@@ -40,6 +40,8 @@
 - **No `innerHTML` with Dynamic Strings (`mountBreathPuffCell`)**: All DOM and SVG elements are constructed via `document.createElement` / `document.createElementNS` and `.textContent`.
 - **Simulation Isolation (`mountBreathPuffCell.runSimulation`)**: Live `bus.subscribeAudio` frames are ignored while `simTimer` plays back `Sim Puff` / `Sim Blow` waveforms so room noise never corrupts simulation telemetry.
 - **Reduced Motion (`prefers-reduced-motion: reduce`)**: Rotor SVG angular rotation pauses while numeric `Airflow %`, `Rotor RPM`, `Duration`, and hero classification readouts remain live.
+- **Truthful Status (`mountBreathPuffCell:updateStateUi`)**: a bus error (for example mic denied) shows `SIM ONLY` in the pill, the error in `.bp-hero-meta`, and `RETRY` on the arm button with the error as its title (the pill and meta are hidden below a `310px` container, which is every cell at a 390 px page). Once the bus leaves `error` the error text is replaced (`metaShowsError`), so it never sits next to `LIVE`. Closing the secondary page mid-sim stops the sim and re-renders the pill (`onSecondaryClose` → `updateStateUi`), so `SIM WAVEFORM` cannot persist.
+- **Hidden Tab & Close**: the bus suspends its `AudioContext` while the tab is hidden (`shared-bus.js:_applyVisibilitySuspend`), so no audio callbacks reach the DSP. The rotor `rAF` loop runs only while airflow or rotor speed is non-zero and is cancelled on `lg-secondary-close`, which also arrives with the bus already `idle` (mic released).
 
 ---
 
@@ -51,3 +53,4 @@
   ```
 - **Live Browser Check**:
   Open the Left Grille secondary grid (`#left-grille`), inspect **Slot 5 (`Grille Breath Puff`)**, trigger **`Sim Puff`** and **`Sim Blow`**, or click **`ARM`** and blow softly vs sharply across the MacBook Pro left speaker grille (`8%–22%` mic ports) while testing voice/tap immunity.
+  Without a mic prompt: stub `navigator.mediaDevices.getUserMedia` to reject with `NotAllowedError` (expect `RETRY` + `SIM ONLY` + the denial text), then to resolve a silent `createMediaStreamDestination()` stream and click `RETRY` with a user gesture (expect `LIVE` / `LIVE · 48k` and the denial text gone). Start `Sim Blow`, close with `Esc`, reopen: the pill must read `READY · <12k passive`.

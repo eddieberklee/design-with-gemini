@@ -19,7 +19,7 @@
  *      `localStorage['dwg.lidAngleCal.v1']`), and smooths with a 1D adaptive Kalman filter.
  *
  * 2. Mode B — Optional Exact Hardware IOHIDManager Bridge (`cells/left-grille/lid-bridge.mjs`):
- *    - Quietly probes `http://127.0.0.1:8791/angle` (600 ms timeout) when Cell 05 is open
+ *    - Quietly probes `http://127.0.0.1:8793/angle` (600 ms timeout) when Cell 05 is open
  *      (`lg-secondary-open` / `#left-grille`) or on `[HID]` click, never eagerly on the
  *      hidden main grid. When live, streams exact `0.1°` Apple `LidAngleSensor`
  *      (`0x05AC:0x8104`, UsagePage `0x0020`, Usage `0x008A`) readings over SSE `/events`.
@@ -71,7 +71,7 @@
   const MIN_CALIBRATION_SPAN = 1.0;
 
   // Hardware Bridge Defaults
-  const BRIDGE_ORIGIN = 'http://127.0.0.1:8791';
+  const BRIDGE_ORIGIN = 'http://127.0.0.1:8793';
   const BRIDGE_PROBE_TIMEOUT_MS = 600;
 
   // SVG Side-Elevation Geometry (`viewBox="0 0 212 134"`)
@@ -293,9 +293,10 @@
     }
 
     static load(storage) {
-      const store = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
-      if (!store) return new LidCalibration();
       try {
+        // Reading the `localStorage` global itself throws (SecurityError) when site data is blocked.
+        const store = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
+        if (!store) return new LidCalibration();
         const raw = store.getItem(STORAGE_KEY);
         if (!raw) return new LidCalibration();
         const parsed = LidCalibration.sanitize(JSON.parse(raw));
@@ -332,9 +333,9 @@
     }
 
     save(storage) {
-      const store = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
-      if (!store) return;
       try {
+        const store = storage || (typeof localStorage !== 'undefined' ? localStorage : null);
+        if (!store) return;
         if (!this.openCalibrated && !this.lowCalibrated) {
           store.removeItem(STORAGE_KEY);
         } else {
@@ -1293,6 +1294,8 @@
     let dragPointerId = null;
     let noteTimer = null;
     let destroyed = false;
+    let secondaryOpen = false;
+    let sonarArmedBus = false;
 
     // Clear target container safely without innerHTML
     while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
@@ -1325,7 +1328,7 @@
         className: 'la-btn la-btn--hid',
         dataset: { live: 'false' },
         'aria-pressed': 'false',
-        title: 'Probe local macOS IOHIDManager bridge on 127.0.0.1:8791 for exact 0.1° hinge angle',
+        title: 'Probe local macOS IOHIDManager bridge on 127.0.0.1:8793 for exact 0.1° hinge angle',
         onClick: () => handleHidButtonClick()
       },
       [hidDot, h('span', { textContent: 'HID' })]
@@ -1512,7 +1515,12 @@
       if (sourceMode === 'hid') {
         sourceBadge.textContent = 'HW HID · LIVE';
       } else if (sourceMode === 'sonar') {
-        sourceBadge.textContent = busState.txMode === 'chirp' ? 'SONAR · CHIRP' : 'SONAR';
+        // Armed is not measuring: until an echo frame arrives the angle is not a sonar reading.
+        sourceBadge.textContent = !sonarSignalPresent
+          ? 'SONAR · NO ECHO'
+          : busState.txMode === 'chirp'
+            ? 'SONAR · CHIRP'
+            : 'SONAR';
       } else if (sourceMode === 'drag') {
         sourceBadge.textContent = 'DRAG';
       } else {
@@ -1612,7 +1620,22 @@
       if (typeof bus.onStateChange === 'function') {
         unsubState = bus.onStateChange((st) => {
           if (destroyed || !st) return;
+          const wasListening = busState.state === 'listening';
           busState = Object.assign({ state: 'idle', sampleRate: 48000, txMode: 'off' }, st);
+          // Ownership of a mic SONAR armed ends when the bus stops, or when another cell takes
+          // over the TX (e.g. chirp sonar) — same rule as tap-zones' CAL arm.
+          if (
+            busState.state === 'idle' ||
+            busState.state === 'error' ||
+            (busState.txMode && busState.txMode !== 'lid-ping')
+          ) {
+            sonarArmedBus = false;
+          }
+          // A fresh arm supersedes an earlier transient failure note.
+          if (!wasListening && busState.state === 'listening' && noteTimer) {
+            clearTimeout(noteTimer);
+            noteTimer = null;
+          }
           const sonarReady =
             busState.state === 'listening' &&
             (busState.txMode === 'lid-ping' || busState.txMode === 'chirp');
@@ -1666,7 +1689,14 @@
       }
       const tx = typeof bus.getTxMode === 'function' ? bus.getTxMode() : busState.txMode;
       if (busState.state === 'listening' && tx === 'lid-ping') {
-        if (typeof bus.setTxMode === 'function') bus.setTxMode('off');
+        // If SONAR is what turned the mic on, turning it off releases the mic too (the shared
+        // nav ARRAY button or another cell keeps it only when they armed it).
+        if (sonarArmedBus && typeof bus.stopAll === 'function') {
+          sonarArmedBus = false;
+          bus.stopAll({ dispatchClose: false });
+        } else if (typeof bus.setTxMode === 'function') {
+          bus.setTxMode('off');
+        }
         sonarSignalPresent = false;
         if (sourceMode === 'sonar') sourceMode = hidLive ? 'hid' : 'idle';
         refreshDefaultNote();
@@ -1675,9 +1705,11 @@
       }
       estimator.resetState(currentAngle);
       if (typeof bus.requestArm === 'function') {
+        if (busState.state === 'idle' || busState.state === 'error') sonarArmedBus = true;
         const ok = await bus.requestArm('lid-ping');
-        if (!ok && !destroyed) {
-          setNote('Mic denied — drag lid SVG or run HID bridge', 3200);
+        // `false` also means "aborted" (page closed, ARRAY disarmed): only an error state is a failure.
+        if (!ok && !destroyed && busState.state === 'error') {
+          setNote('Mic unavailable — drag lid SVG or run HID bridge', 3200);
         }
       } else if (typeof bus.setTxMode === 'function') {
         bus.setTxMode('lid-ping');
@@ -1730,7 +1762,7 @@
     }
 
     // -------------------------------------------------------------------------
-    // 5. Mode B — Local Hardware IOHIDManager Bridge (`127.0.0.1:8791`)
+    // 5. Mode B — Local Hardware IOHIDManager Bridge (`127.0.0.1:8793`)
     // -------------------------------------------------------------------------
     function closeHidBridge(optsClose = {}) {
       hidEpoch++;
@@ -1785,6 +1817,7 @@
         hidAvailableReason = data.reason || 'LidAngleSensor unavailable';
         hidLive = false;
         if (sourceMode === 'hid') sourceMode = 'idle';
+        refreshDefaultNote(true); // drop the 'Apple IOHID … 0.1°' note
         updateVisuals();
       }
     }
@@ -1825,6 +1858,7 @@
                 ? 'sonar'
                 : 'idle';
           }
+          refreshDefaultNote(true); // the bridge went away: drop the 'Apple IOHID … 0.1°' note
           updateVisuals();
           // Single bounded retry to avoid noisy reconnect loops
           if (!hidReconnectTried && !destroyed && myEpoch === hidEpoch) {
@@ -2018,6 +2052,7 @@
     // 7. Lifecycle Cleanup (`lg-secondary-close` & `pagehide`)
     // -------------------------------------------------------------------------
     function onSecondaryClose() {
+      secondaryOpen = false;
       closeHidBridge({ rememberIfLive: true });
       if (noteTimer) {
         clearTimeout(noteTimer);
@@ -2028,10 +2063,26 @@
     }
 
     function onSecondaryOpen() {
+      secondaryOpen = true;
       if (destroyed || opts.autoProbeHid === false) return;
       if (hidUserDisconnected || hidLive || hidEventSource || hidProbing) return;
       hidWantedOnReopen = false;
       probeHidBridge({ userInitiated: false });
+    }
+
+    // Hidden tab: close the bridge event stream (it pushes ~2 updates/s into a page nobody sees).
+    // Visible again: reconnect only what hiding closed, and only while the page is open.
+    function onVisibilityChange() {
+      if (destroyed || typeof document === 'undefined') return;
+      if (document.visibilityState === 'hidden') {
+        if (hidLive || hidEventSource || hidProbing) {
+          closeHidBridge();
+          hidWantedOnReopen = true;
+        }
+      } else if (hidWantedOnReopen && secondaryOpen && !hidUserDisconnected) {
+        hidWantedOnReopen = false;
+        probeHidBridge({ userInitiated: false });
+      }
     }
 
     function onHashReopen() {
@@ -2047,6 +2098,9 @@
       window.addEventListener('pagehide', onSecondaryClose);
       window.addEventListener('hashchange', onHashReopen);
     }
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
 
     updateCalButtons();
     refreshDefaultNote(true);
@@ -2061,6 +2115,7 @@
       (typeof location !== 'undefined' && location && location.hash === '#left-grille') ||
       (cellEl && typeof cellEl.closest === 'function' && !cellEl.closest('[hidden]'));
 
+    secondaryOpen = Boolean(shouldProbeOnMount);
     if (opts.autoProbeHid !== false && shouldProbeOnMount) {
       probeHidBridge({ userInitiated: false });
     }
@@ -2080,6 +2135,9 @@
           window.removeEventListener('lg-secondary-close', onSecondaryClose);
           window.removeEventListener('pagehide', onSecondaryClose);
           window.removeEventListener('hashchange', onHashReopen);
+        }
+        if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+          document.removeEventListener('visibilitychange', onVisibilityChange);
         }
       }
     };
@@ -2115,6 +2173,7 @@
     LAG_MIN_MS,
     LAG_MAX_MS,
     STORAGE_KEY,
+    BRIDGE_ORIGIN,
     DEFAULT_OPEN_ANGLE,
     DEFAULT_LOW_ANGLE,
     DEFAULT_OPEN_REF_INDEX,

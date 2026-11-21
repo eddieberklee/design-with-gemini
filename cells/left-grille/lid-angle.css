@@ -560,6 +560,11 @@
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
+/* `display: inline-flex` above would otherwise override the `hidden` attribute (Reset showed uncalibrated) */
+.la-cal-btn[hidden] {
+  display: none;
+}
+
 .la-cal-btn:hover {
   background: var(--la-well);
   color: var(--la-ink);

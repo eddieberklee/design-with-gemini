@@ -229,6 +229,30 @@ test('6. Web Bluetooth BLE rotary payload parser & QR URL resolver', () => {
   assert.equal(resolved.isLocalhost, false);
 });
 
+test('5b. Huge or inconsistent angle inputs advance detents in O(1) (no runaway loop)', () => {
+  // Run in a vm with a timeout: a synchronous O(delta / 15) loop cannot be interrupted by node:test.
+  const code = fs.readFileSync(path.join(__dirname, 'iphone-dial.js'), 'utf8');
+  const ctx = vm.createContext({ module: { exports: {} } });
+  vm.runInContext(code, ctx);
+  const out = vm.runInContext(
+    `(function () {
+      const t = new module.exports.RotaryDialTracker({ initialValue: 50 });
+      const a = t.ingestDeltaAngle(1e12, 0.02).detentIndex;
+      const b = t.ingestDeltaAngle(-3e12, 0.02).detentIndex;
+      t.cumulativeDeg = 5;
+      t.detentIndex = 1e15; // e.g. a remote packet set fields that disagree
+      const c = t.ingestDeltaAngle(1, 0.02).detentIndex;
+      return { a: a, b: b, c: c, ticks: t.totalDetentTicks };
+    })()`,
+    ctx,
+    { timeout: 2000 }
+  );
+  assert.equal(out.a, Math.floor((1e12 + 1e-7) / 15));
+  assert.equal(out.b, Math.ceil((-2e12 - 1e-7) / 15));
+  assert.equal(out.c, 1);
+  assert.ok(Number.isFinite(out.ticks));
+});
+
 test('7. Standalone mobile dial-phone.js syntax & Secondary Slot 7 registration', () => {
   const phoneJsPath = path.join(__dirname, 'dial-phone.js');
   const code = fs.readFileSync(phoneJsPath, 'utf8');
@@ -523,11 +547,12 @@ test('10. Lifecycle: zero main-grid leak, lg-secondary-open activation, and lg-s
     assert.equal(activeIntervals.size, 0, 'Must not start heartbeatTimer while hidden on main grid');
     assert.equal(createdLinks, 0, 'Must not open MQTT/WS transport while hidden on main grid');
 
-    // 2. Open secondary grid (`lg-secondary-open`) -> starts heartbeatTimer & transport link
+    // 2. Open secondary grid (`lg-secondary-open`): still no relay socket and no timer until the
+    //    user asks to pair (PAIR QR) with a phone-reachable URL (see test 10b)
     hiddenPage.hidden = false;
     emitWin('lg-secondary-open');
-    assert.equal(activeIntervals.size, 1, 'Expected 1 heartbeatTimer after lg-secondary-open');
-    assert.equal(createdLinks, 1, 'Expected 1 transport link after lg-secondary-open');
+    assert.equal(activeIntervals.size, 0, 'No heartbeat interval while no phone is paired');
+    assert.equal(createdLinks, 0, 'Opening the page must not connect to the public MQTT broker');
 
     // 3. Start BLE pairing (`handleBleClick`) and fire `lg-secondary-close` mid-flight during `gatt.connect()`
     const blePromise = instance.handleBleClick();
@@ -538,7 +563,8 @@ test('10. Lifecycle: zero main-grid leak, lg-secondary-open activation, and lg-s
     // Close secondary view while gatt.connect() is still in flight
     emitWin('lg-secondary-close');
     assert.equal(activeIntervals.size, 0, 'lg-secondary-close must clear heartbeatTimer');
-    assert.equal(closedLinks, 1, 'lg-secondary-close must close active transport link');
+    assert.equal(createdLinks, 0, 'no link was ever opened');
+    assert.equal(closedLinks, 0);
     assert.equal(gattListeners.length, 0, 'lg-secondary-close must remove gattserverdisconnected listener');
 
     // Now resolve the late gatt.connect() -> must immediately disconnect and never start notifications
@@ -563,7 +589,290 @@ test('10. Lifecycle: zero main-grid leak, lg-secondary-open activation, and lg-s
   }
 });
 
-test('11. dial-phone.js invalid ?s=BAD! fallback, hello state handshake without overwrite, and pagehide cleanup', () => {
+test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed retry, hidden tab, no re-open after close', () => {
+  const { mountIphoneDialCell } = Dial;
+
+  function makeEl(tag) {
+    const attrs = {};
+    const listeners = {};
+    const classes = new Set();
+    return {
+      tagName: String(tag || 'div').toUpperCase(),
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      parentNode: null,
+      textContent: '',
+      value: '',
+      get firstChild() {
+        return this.children[0] || null;
+      },
+      get className() {
+        return Array.from(classes).join(' ');
+      },
+      set className(v) {
+        classes.clear();
+        String(v || '').split(/\s+/).filter(Boolean).forEach((c) => classes.add(c));
+      },
+      classList: {
+        add: (...cs) => cs.forEach((c) => classes.add(c)),
+        remove: (...cs) => cs.forEach((c) => classes.delete(c)),
+        toggle: (c, force) => (force ? classes.add(c) : classes.delete(c)),
+        contains: (c) => classes.has(c)
+      },
+      appendChild(child) {
+        if (child && typeof child === 'object') child.parentNode = this;
+        this.children.push(child);
+        return child;
+      },
+      removeChild(child) {
+        const i = this.children.indexOf(child);
+        if (i >= 0) this.children.splice(i, 1);
+        return child;
+      },
+      setAttribute(k, v) {
+        attrs[k] = String(v);
+      },
+      getAttribute(k) {
+        return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null;
+      },
+      hasAttribute(k) {
+        return Object.prototype.hasOwnProperty.call(attrs, k);
+      },
+      closest() {
+        return null;
+      },
+      addEventListener(type, fn) {
+        (listeners[type] = listeners[type] || []).push(fn);
+      },
+      removeEventListener(type, fn) {
+        if (listeners[type]) listeners[type] = listeners[type].filter((f) => f !== fn);
+      },
+      fire(type, ev) {
+        (listeners[type] || []).slice().forEach((fn) => fn(ev || { type }));
+      },
+      focus() {},
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 160, height: 160 })
+    };
+  }
+  function findByClass(node, cls) {
+    if (!node || !node.classList) return null;
+    if (node.classList.contains(cls)) return node;
+    for (const c of node.children || []) {
+      const f = findByClass(c, cls);
+      if (f) return f;
+    }
+    return null;
+  }
+
+  // Fake timers so the test can assert exactly which timers exist
+  const timeouts = new Map();
+  const intervals = new Map();
+  let nextId = 1;
+  const saved = {
+    setTimeout: globalThis.setTimeout,
+    clearTimeout: globalThis.clearTimeout,
+    setInterval: globalThis.setInterval,
+    clearInterval: globalThis.clearInterval,
+    document: globalThis.document,
+    window: globalThis.window,
+    MotionGrid: globalThis.MotionGrid,
+    LeftGrilleLab: globalThis.LeftGrilleLab,
+    location: Object.getOwnPropertyDescriptor(globalThis, 'location'),
+    localStorage: Object.getOwnPropertyDescriptor(globalThis, 'localStorage'),
+    addEventListener: globalThis.addEventListener,
+    removeEventListener: globalThis.removeEventListener
+  };
+  globalThis.setTimeout = (fn, ms) => {
+    const id = nextId++;
+    timeouts.set(id, { fn, ms });
+    return id;
+  };
+  globalThis.clearTimeout = (id) => timeouts.delete(id);
+  globalThis.setInterval = (fn, ms) => {
+    const id = nextId++;
+    intervals.set(id, { fn, ms });
+    return id;
+  };
+  globalThis.clearInterval = (id) => intervals.delete(id);
+  const fireTimeoutsOf = (ms) => {
+    for (const [id, t] of Array.from(timeouts)) {
+      if (t.ms === ms) {
+        timeouts.delete(id);
+        t.fn();
+      }
+    }
+  };
+
+  const links = [];
+  globalThis.MotionGrid = {
+    Transport: {
+      isValidSessionId: (s) => /^[A-Z0-9]{6,12}$/.test(String(s || '')),
+      generateSessionId: () => 'AB12CD',
+      createLink(opts) {
+        const l = { opts, closed: false, sent: [], start() {}, send(m) { l.sent.push(m); return true; }, close() { l.closed = true; } };
+        links.push(l);
+        return l;
+      }
+    }
+  };
+  const openLinks = () => links.filter((l) => !l.closed);
+
+  let secondaryOpen = true;
+  globalThis.LeftGrilleLab = { isSecondaryOpen: () => secondaryOpen, _pending: [] };
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { protocol: 'file:', hash: '#left-grille', pathname: '/x/index.html', origin: 'null' }
+  });
+  let storedHost = '';
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k) => (k === 'dwg.iphoneDialHost.v1' ? storedHost : null),
+      setItem: (k, v) => { if (k === 'dwg.iphoneDialHost.v1') storedHost = v; },
+      removeItem: () => {}
+    }
+  });
+
+  const docListeners = {};
+  let visibility = 'visible';
+  globalThis.document = {
+    get visibilityState() {
+      return visibility;
+    },
+    createElement: (t) => makeEl(t),
+    createElementNS: (_ns, t) => makeEl(t),
+    createTextNode: (t) => ({ nodeType: 3, textContent: String(t) }),
+    getElementById: () => null,
+    addEventListener: (type, fn) => {
+      (docListeners[type] = docListeners[type] || []).push(fn);
+    },
+    removeEventListener: (type, fn) => {
+      if (docListeners[type]) docListeners[type] = docListeners[type].filter((f) => f !== fn);
+    }
+  };
+  const setVisibility = (v) => {
+    visibility = v;
+    (docListeners.visibilitychange || []).slice().forEach((fn) => fn({ type: 'visibilitychange' }));
+  };
+  globalThis.window = globalThis;
+  const winListeners = {};
+  globalThis.addEventListener = (type, fn) => {
+    (winListeners[type] = winListeners[type] || []).push(fn);
+  };
+  globalThis.removeEventListener = (type, fn) => {
+    if (winListeners[type]) winListeners[type] = winListeners[type].filter((f) => f !== fn);
+  };
+  const emitWin = (type) => (winListeners[type] || []).slice().forEach((fn) => fn({ type }));
+
+  try {
+    const cellEl = makeEl('section');
+    const inst = mountIphoneDialCell(cellEl);
+    const qrBtn = findByClass(cellEl, 'id-btn--qr');
+    const hostInput = findByClass(cellEl, 'id-host-input');
+    const status = findByClass(cellEl, 'id-status-text');
+    const meta = findByClass(cellEl, 'id-link-meta');
+
+    // A single arrow-key step moves one detent and leaves no phantom velocity on screen
+    const pad = findByClass(cellEl, 'id-dial-pad');
+    pad.fire('keydown', { key: 'ArrowRight', shiftKey: false, preventDefault() {} });
+    assert.equal(inst.tracker.detentIndex, 1);
+    assert.equal(inst.tracker.rpm, 0, 'discrete steps must not leave a stale RPM readout');
+
+    // Open page on file:// without a host: nothing can pair, so no socket and no timer
+    assert.equal(links.length, 0);
+    assert.equal(intervals.size + timeouts.size, 0);
+    assert.equal(meta.textContent, 'NO LINK');
+    qrBtn.fire('click');
+    assert.equal(links.length, 0, 'file:// QR has no phone-reachable URL; must not touch the broker');
+    assert.equal(status.textContent, 'NO LINK · SET HOST');
+
+    // Entering a LAN host makes the QR scannable -> one link for one bounded pairing window
+    hostInput.fire('input', { target: { value: '192.168.1.42:8000' } });
+    assert.equal(openLinks().length, 1);
+    assert.equal(intervals.size, 0, 'no interval while waiting for a phone');
+    assert.equal(timeouts.size, 1, 'exactly one pairing-window timeout');
+    links[0].opts.onStatus('ready', { transport: 'mqtt' });
+    assert.equal(status.textContent, 'WAITING · SCAN QR');
+
+    // No phone within the window -> relay released, truthful status
+    fireTimeoutsOf(90000);
+    assert.equal(openLinks().length, 0, 'pairing window must close the broker link');
+    assert.equal(status.textContent, 'PAIR TIMEOUT · QR');
+
+    // PAIR QR again (close + reopen) retries
+    qrBtn.fire('click');
+    qrBtn.fire('click');
+    assert.equal(openLinks().length, 1);
+    const l2 = openLinks()[0];
+
+    // Transport retry ceiling -> released + OFFLINE; becoming visible again retries once
+    l2.opts.onStatus('failed', { transport: 'mqtt' });
+    assert.equal(openLinks().length, 0);
+    assert.equal(timeouts.size, 0);
+    assert.match(status.textContent, /OFFLINE/);
+    setVisibility('hidden');
+    setVisibility('visible');
+    assert.equal(openLinks().length, 1, 'visible tab retries a failed link');
+    const l3 = openLinks()[0];
+    l3.opts.onStatus('ready', { transport: 'mqtt' });
+
+    // Phone pairs: pairing window ends, heartbeat interval runs, desktop answers with state
+    l3.opts.onMessage({ t: 'm', cid: 'P1', seq: 1, deltaDeg: 1e12, cumulativeDeg: 1e300, detentIndex: 1e300, dialValue: 60 });
+    assert.equal(timeouts.size, 0);
+    assert.equal(intervals.size, 1);
+    assert.equal(l3.sent[0] && l3.sent[0].t, 'hb', 'first phone packet is answered with a presence beat');
+    assert.ok(!l3.sent.some((m) => m.t === 'state'), 'no state reply that would snap the phone back to 50');
+    assert.equal(inst.tracker.dialValue, 60);
+    l3.opts.onMessage({ t: 'hello', cid: 'P1' });
+    assert.equal(l3.sent[l3.sent.length - 1].t, 'state');
+    assert.equal(l3.sent[l3.sent.length - 1].dialValue, 60);
+    assert.ok(Math.abs(inst.tracker.cumulativeDeg) <= 1e7, 'remote cumulativeDeg is bounded');
+    assert.match(status.textContent, /IPHONE/);
+
+    // Hidden tab: link, heartbeat and pairing all stop; visible resumes with a fresh window
+    setVisibility('hidden');
+    assert.equal(openLinks().length, 0);
+    assert.equal(intervals.size + timeouts.size, 0);
+    setVisibility('visible');
+    assert.equal(openLinks().length, 1);
+    assert.equal(timeouts.size, 1);
+
+    // Close the page: everything stops, and a later popstate/hashchange while ui.js still reports
+    // isSecondaryOpen() === true (deferred view transition) must not re-open anything
+    emitWin('lg-secondary-close');
+    assert.equal(openLinks().length, 0);
+    assert.equal(intervals.size + timeouts.size, 0);
+    emitWin('popstate');
+    emitWin('hashchange');
+    setVisibility('hidden');
+    setVisibility('visible');
+    assert.equal(openLinks().length, 0, 'no relay link after the page closed');
+    assert.equal(intervals.size + timeouts.size, 0);
+    secondaryOpen = false;
+    inst.unmount();
+  } finally {
+    globalThis.setTimeout = saved.setTimeout;
+    globalThis.clearTimeout = saved.clearTimeout;
+    globalThis.setInterval = saved.setInterval;
+    globalThis.clearInterval = saved.clearInterval;
+    globalThis.document = saved.document;
+    globalThis.window = saved.window;
+    globalThis.MotionGrid = saved.MotionGrid;
+    globalThis.LeftGrilleLab = saved.LeftGrilleLab;
+    if (saved.location) Object.defineProperty(globalThis, 'location', saved.location);
+    else delete globalThis.location;
+    if (saved.localStorage) Object.defineProperty(globalThis, 'localStorage', saved.localStorage);
+    else delete globalThis.localStorage;
+    if (saved.addEventListener) globalThis.addEventListener = saved.addEventListener;
+    else delete globalThis.addEventListener;
+    if (saved.removeEventListener) globalThis.removeEventListener = saved.removeEventListener;
+    else delete globalThis.removeEventListener;
+  }
+});
+
+test('11. dial-phone.js: no link without a valid ?s=, truthful status, bounded desktop wait, retry, hidden page, pagehide', () => {
   const phoneJsPath = path.join(__dirname, 'dial-phone.js');
   const code = fs.readFileSync(phoneJsPath, 'utf8');
 
@@ -592,118 +901,215 @@ test('11. dial-phone.js invalid ?s=BAD! fallback, hello state handshake without 
     };
   }
 
-  const elements = {};
-  const sentPackets = [];
-  let capturedLinkOpts = null;
-  let linkClosed = 0;
-  let audioClosed = 0;
-  const pageListeners = {};
-
-  const sandbox = {
-    URLSearchParams,
-    Math,
-    Number,
-    String,
-    Boolean,
-    Object,
-    Array,
-    Date,
-    Promise,
-    performance: { now: () => 1000 },
-    location: {
-      search: '?s=BAD!&t=mqtt',
-      protocol: 'https:',
-      host: 'localhost:8443',
-      origin: 'https://localhost:8443'
-    },
-    navigator: {},
-    LeftGrilleDial: Dial,
-    MotionGrid: {
-      Transport: {
-        isValidSessionId: (s) => /^[A-Z0-9]{6,16}$/.test(String(s || '')),
-        generateSessionId: () => 'PH1234',
-        createLink(opts) {
-          if (!/^[A-Z0-9]{6,16}$/.test(opts.sessionId)) {
-            throw new Error('Invalid sessionId for MQTT transport');
-          }
-          capturedLinkOpts = opts;
-          return {
-            start() {
-              opts.onStatus('ready', { transport: 'mqtt' });
-            },
-            send(pkt) {
-              sentPackets.push(pkt);
-            },
-            close() {
-              linkClosed++;
+  function bootPhone(search) {
+    const elements = {};
+    const links = [];
+    const timeouts = new Map();
+    const intervals = new Map();
+    let nextId = 1;
+    let audioClosed = 0;
+    let visibility = 'visible';
+    const pageListeners = {};
+    const docListeners = {};
+    const sandbox = {
+      URLSearchParams,
+      Math,
+      Number,
+      String,
+      Boolean,
+      Object,
+      Array,
+      Date,
+      Promise,
+      performance: { now: () => 1000 },
+      setTimeout: (fn, ms) => {
+        const id = nextId++;
+        timeouts.set(id, { fn, ms });
+        return id;
+      },
+      clearTimeout: (id) => timeouts.delete(id),
+      setInterval: (fn, ms) => {
+        const id = nextId++;
+        intervals.set(id, { fn, ms });
+        return id;
+      },
+      clearInterval: (id) => intervals.delete(id),
+      location: {
+        search,
+        protocol: 'https:',
+        host: 'localhost:8443',
+        origin: 'https://localhost:8443'
+      },
+      navigator: {},
+      LeftGrilleDial: Dial,
+      MotionGrid: {
+        Transport: {
+          isValidSessionId: (s) => /^[A-Z0-9]{6,12}$/.test(String(s || '')),
+          generateSessionId: () => 'PH1234',
+          createLink(opts) {
+            if (!/^[A-Z0-9]{6,12}$/.test(opts.sessionId)) {
+              throw new Error('Invalid sessionId for MQTT transport');
             }
+            const l = { opts, closed: false, sent: [], start() {}, send(p) { l.sent.push(p); }, close() { l.closed = true; } };
+            links.push(l);
+            return l;
+          }
+        }
+      },
+      AudioContext: class {
+        constructor() {
+          this.state = 'running';
+          this.currentTime = 0;
+          this.destination = {};
+        }
+        createOscillator() {
+          return {
+            type: 'triangle',
+            frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+            connect() {},
+            start() {},
+            stop() {}
           };
         }
-      }
-    },
-    AudioContext: class {
-      constructor() {
-        this.state = 'running';
-        this.currentTime = 0;
-        this.destination = {};
-      }
-      createOscillator() {
-        return {
-          type: 'triangle',
-          frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-          connect() {},
-          start() {},
-          stop() {}
-        };
-      }
-      createGain() {
-        return {
-          gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
-          connect() {}
-        };
-      }
-      close() {
-        this.state = 'closed';
-        audioClosed++;
-      }
-    },
-    document: {
-      body: makePhoneNode(),
-      getElementById(id) {
-        if (!elements[id]) elements[id] = makePhoneNode();
-        return elements[id];
+        createGain() {
+          return {
+            gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} },
+            connect() {}
+          };
+        }
+        close() {
+          this.state = 'closed';
+          audioClosed++;
+        }
       },
-      createElementNS: () => makePhoneNode()
-    },
-    addEventListener(type, fn) {
-      (pageListeners[type] = pageListeners[type] || []).push(fn);
-    },
-    cancelAnimationFrame() {}
-  };
-  sandbox.window = sandbox;
-  sandbox.globalThis = sandbox;
+      document: {
+        get visibilityState() {
+          return visibility;
+        },
+        body: makePhoneNode(),
+        getElementById(id) {
+          if (!elements[id]) elements[id] = makePhoneNode();
+          return elements[id];
+        },
+        createElementNS: () => makePhoneNode(),
+        addEventListener(type, fn) {
+          (docListeners[type] = docListeners[type] || []).push(fn);
+        }
+      },
+      addEventListener(type, fn) {
+        (pageListeners[type] = pageListeners[type] || []).push(fn);
+      },
+      removeEventListener(type, fn) {
+        if (pageListeners[type]) pageListeners[type] = pageListeners[type].filter((f) => f !== fn);
+      },
+      cancelAnimationFrame() {}
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    new vm.Script(code, { filename: 'dial-phone.js' }).runInNewContext(sandbox);
+    return {
+      elements,
+      links,
+      timeouts,
+      intervals,
+      openLinks: () => links.filter((l) => !l.closed),
+      status: () => elements['dp-status-text'].textContent,
+      audioClosed: () => audioClosed,
+      setVisibility(v) {
+        visibility = v;
+        (docListeners.visibilitychange || []).forEach((fn) => fn({}));
+      },
+      firePage(type, ev) {
+        (pageListeners[type] || []).slice().forEach((fn) => fn(ev || {}));
+      },
+      tick(ms) {
+        for (const t of Array.from(intervals.values())) if (t.ms === ms) t.fn();
+      },
+      fireTimeouts(ms) {
+        for (const [id, t] of Array.from(timeouts)) {
+          if (t.ms === ms) {
+            timeouts.delete(id);
+            t.fn();
+          }
+        }
+      },
+      pageListeners
+    };
+  }
 
-  const script = new vm.Script(code, { filename: 'dial-phone.js' });
-  script.runInNewContext(sandbox);
+  // 1. Missing or invalid `?s=`: nothing to pair with -> no shared fallback room, no socket
+  for (const search of ['?s=BAD!&t=mqtt', '']) {
+    const bad = bootPhone(search);
+    assert.equal(bad.links.length, 0, `no relay link for search "${search}"`);
+    assert.equal(bad.status(), 'NO SESSION · RESCAN QR');
+    assert.equal(bad.intervals.size + bad.timeouts.size, 0);
+  }
 
-  // 1. Invalid `?s=BAD!` must fall back to `'DL000000'` without throwing
-  assert.ok(capturedLinkOpts, 'Transport.createLink must be called');
-  assert.equal(capturedLinkOpts.sessionId, 'DL000000', 'Invalid ?s=BAD! must fall back to DL000000');
+  const p = bootPhone('?s=DL123456&t=mqtt');
+  assert.equal(p.links.length, 1);
+  const l1 = p.links[0];
+  assert.equal(l1.opts.sessionId, 'DL123456');
 
-  // 2. On connect (`ready`), phone sends ONLY `{ t: 'hello' }` and does NOT blast `{ t: 'm', dialValue: 50 }`
-  assert.equal(sentPackets.length, 1, 'Connect must send only hello without overwriting desktop state');
-  assert.equal(sentPackets[0].t, 'hello');
+  // 2. Relay ready is not "live": hello only, and the status waits for the desktop
+  l1.opts.onStatus('ready', { transport: 'mqtt' });
+  assert.equal(l1.sent.length, 1, 'connect sends only hello, never default telemetry');
+  assert.equal(l1.sent[0].t, 'hello');
+  assert.equal(p.status(), 'WAIT DESKTOP · MQTT');
 
-  // 3. Receiving desktop `{ t: 'state', dialValue: 82.5, fineMode: true }` syncs phone UI
-  capturedLinkOpts.onMessage({ t: 'state', dialValue: 82.5, fineMode: true });
-  assert.equal(elements['dp-value'].textContent, 'VAL 82.5');
-  assert.equal(elements['dp-fine-btn'].textContent, '0.25× Fine');
+  // 3. Desktop `state` syncs the UI and makes the link live
+  l1.opts.onMessage({ t: 'state', dialValue: 82.5, fineMode: true });
+  assert.equal(p.elements['dp-value'].textContent, 'VAL 82.5');
+  assert.equal(p.elements['dp-fine-btn'].textContent, '0.25× Fine');
+  assert.equal(p.status(), 'LIVE · MQTT');
+  p.tick(2500);
+  assert.equal(l1.sent[l1.sent.length - 1].t, 'hb', 'phone heartbeats while the desktop answers');
 
-  // 4. Triggering audio tick + `pagehide` closes both link and AudioContext
-  elements['dp-touch-only-btn'].trigger('click');
-  (pageListeners.pagehide || []).forEach((fn) => fn());
-  assert.equal(linkClosed, 1, 'pagehide must close active Transport link');
-  assert.equal(audioClosed, 1, 'pagehide must close active AudioContext');
+  // 4. Desktop goes silent -> bounded hello retries, then the relay is released
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 60000;
+    for (let i = 0; i < 8; i++) p.tick(2500);
+    assert.equal(p.status(), 'WAIT DESKTOP · MQTT');
+    assert.equal(l1.sent.filter((m) => m.t === 'hello').length, 1 + 8);
+    p.tick(2500);
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(p.openLinks().length, 0, 'no desktop after bounded retries -> relay closed');
+  assert.equal(p.intervals.size, 0);
+  assert.equal(p.status(), 'NO DESKTOP · TAP');
+
+  // 5. Tap the status to retry; transport ceiling -> OFFLINE; tap retries again
+  p.elements['dp-status'].trigger('click');
+  assert.equal(p.openLinks().length, 1);
+  const l2 = p.openLinks()[0];
+  l2.opts.onStatus('failed', { transport: 'mqtt' });
+  assert.equal(p.openLinks().length, 0);
+  assert.equal(p.intervals.size, 0);
+  assert.equal(p.status(), 'OFFLINE · TAP');
+  p.elements['dp-status'].trigger('click');
+  assert.equal(p.openLinks().length, 1);
+
+  // 6. Hidden page: no socket, no timer; visible again reconnects
+  p.setVisibility('hidden');
+  assert.equal(p.openLinks().length, 0);
+  assert.equal(p.intervals.size, 0);
+  p.setVisibility('visible');
+  assert.equal(p.openLinks().length, 1);
+
+  // 7. Audio tick + pagehide closes link and AudioContext; bfcache restore reconnects
+  p.elements['dp-touch-only-btn'].trigger('click');
+  p.firePage('pagehide');
+  assert.equal(p.openLinks().length, 0, 'pagehide must close active Transport link');
+  assert.equal(p.audioClosed(), 1, 'pagehide must close active AudioContext');
+  p.firePage('pageshow', { persisted: true });
+  assert.equal(p.openLinks().length, 1, 'bfcache restore reconnects');
+
+  // 8. No-sensor path: permission not needed but no gyroscope samples -> gate comes back
+  p.elements['dp-enable-btn'].trigger('click');
+  assert.equal(p.elements['dp-gate'].hidden, true);
+  p.fireTimeouts(2500);
+  assert.equal(p.elements['dp-gate'].hidden, false, 'gate re-opens when no sensor data arrives');
+  assert.match(p.elements['dp-gate-note'].textContent, /No gyroscope data/);
+  assert.equal((p.pageListeners.devicemotion || []).length, 0, 'devicemotion listener removed');
 });
-
-

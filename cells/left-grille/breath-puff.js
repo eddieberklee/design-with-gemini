@@ -1153,6 +1153,7 @@
     let animRaf = null;
     let lastAnimTs = 0;
     let busState = { state: 'idle', sampleRate: 48000, error: '' };
+    let metaShowsError = false;
     let unsubAudio = null;
     let unsubState = null;
 
@@ -1409,9 +1410,14 @@
         heroBadge.dataset.kind = kindSlug(p.kind);
         eventTag.textContent = `${p.intensityPct}%`;
         durVal.textContent = `${p.durationMs} ms`;
-        heroMeta.textContent = `+${p.peakSnrDb.toFixed(1)} dB · imp ${p.impulse.toFixed(2)}`;
+        heroMeta.textContent = puffMetaText(p);
+        metaShowsError = false;
         srLive.textContent = `${p.kind}, ${p.intensityPct} percent, ${p.durationMs} milliseconds`;
       }
+    }
+
+    function puffMetaText(p) {
+      return `+${p.peakSnrDb.toFixed(1)} dB · imp ${p.impulse.toFixed(2)}`;
     }
 
     function stopSimulation() {
@@ -1468,12 +1474,26 @@
       const armed = busState.state === 'listening' || busState.state === 'requesting';
       armBtn.dataset.armed = armed ? 'true' : 'false';
       armBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
+      // The status pill and error text are hidden in narrow cells, so the button itself says
+      // when the mic failed (its title carries the bus error).
       armText.textContent =
         busState.state === 'requesting'
           ? 'ARMING…'
           : busState.state === 'listening'
           ? 'LIVE'
+          : busState.state === 'error'
+          ? 'RETRY'
           : 'ARM';
+      armBtn.setAttribute(
+        'title',
+        busState.state === 'error' && busState.error
+          ? busState.error
+          : 'Arm shared 48 kHz grille microphone array'
+      );
+      if (busState.state !== 'error' && metaShowsError) {
+        heroMeta.textContent = lastPuff ? puffMetaText(lastPuff) : 'Blow across left grille';
+        metaShowsError = false;
+      }
 
       if (simTimer !== null) return;
       statusPill.dataset.veto = 'false';
@@ -1484,6 +1504,7 @@
         statusPill.textContent = 'SIM ONLY';
         if (busState.error && !lastPuff) {
           heroMeta.textContent = busState.error;
+          metaShowsError = true;
         }
       } else {
         targetAirflowPct = 0;
@@ -1531,6 +1552,8 @@
       updateRotorVisual(0, 0, 0);
       airflowVal.textContent = '0%';
       dsp.reset();
+      // A sim cut short by closing the page must not leave "SIM WAVEFORM" in the pill.
+      updateStateUi(busState);
     };
 
     if (typeof globalThis.addEventListener === 'function') {

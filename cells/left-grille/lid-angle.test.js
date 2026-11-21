@@ -415,16 +415,20 @@ test('lid-bridge.mjs passes node --check and serves CORS JSON /angle + SSE /even
   const baseUrl = `http://127.0.0.1:${started.port}`;
 
   try {
-    const angleRes = await fetch(`${baseUrl}/angle`);
+    // file:// pages send `Origin: null`; the bridge echoes it (never a blanket `*`)
+    const angleRes = await fetch(`${baseUrl}/angle`, { headers: { Origin: 'null' } });
     assert.equal(angleRes.status, 200);
-    assert.equal(angleRes.headers.get('access-control-allow-origin'), '*');
+    assert.equal(angleRes.headers.get('access-control-allow-origin'), 'null');
     const angleJson = await angleRes.json();
     assert.equal(angleJson.available, false);
     assert.equal(angleJson.source, 'iohid');
 
-    const optRes = await fetch(`${baseUrl}/angle`, { method: 'OPTIONS' });
+    const optRes = await fetch(`${baseUrl}/angle`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:8000' }
+    });
     assert.equal(optRes.status, 204);
-    assert.equal(optRes.headers.get('access-control-allow-origin'), '*');
+    assert.equal(optRes.headers.get('access-control-allow-origin'), 'http://localhost:8000');
 
     // Malformed request target must return 400 JSON without crashing the server
     const badStatus = await new Promise((resolve, reject) => {
@@ -448,9 +452,9 @@ test('lid-bridge.mjs passes node --check and serves CORS JSON /angle + SSE /even
 
     // Verify SSE /events emits initial `event: angle` frame with CORS header
     const sseChunk = await new Promise((resolve, reject) => {
-      const req = http.get(`${baseUrl}/events`, (res) => {
+      const req = http.get(`${baseUrl}/events`, { headers: { Origin: 'null' } }, (res) => {
         assert.equal(res.statusCode, 200);
-        assert.equal(res.headers['access-control-allow-origin'], '*');
+        assert.equal(res.headers['access-control-allow-origin'], 'null');
         assert.match(res.headers['content-type'], /text\/event-stream/);
         res.setEncoding('utf8');
         res.once('data', (chunk) => {
@@ -464,6 +468,117 @@ test('lid-bridge.mjs passes node --check and serves CORS JSON /angle + SSE /even
     assert.match(sseChunk, /data: \{.*"available":false/);
   } finally {
     await bridge.close();
+  }
+});
+
+function rawHttp(port, requestText) {
+  return new Promise((resolve, reject) => {
+    const sock = net.connect(port, '127.0.0.1', () => sock.write(requestText));
+    let buf = '';
+    sock.setEncoding('utf8');
+    sock.on('data', (c) => {
+      buf += c;
+      // SSE responses never end; the status line is all we need
+      if (/\r\n\r\n/.test(buf)) {
+        sock.destroy();
+        resolve(buf);
+      }
+    });
+    sock.on('end', () => resolve(buf));
+    sock.on('error', reject);
+  });
+}
+
+test('lid-bridge.mjs refuses cross-site origins, DNS-rebinding Host headers and unbounded SSE clients', async () => {
+  const mod = await import(pathToFileURL(path.join(__dirname, 'lid-bridge.mjs')).href);
+  const bridge = mod.createBridgeServer({ host: '127.0.0.1', port: 0, disableHardware: true });
+  const { port } = await bridge.start();
+  const base = `http://127.0.0.1:${port}`;
+  const held = [];
+  try {
+    // Cross-site page: no data and no CORS grant (was 200 + `Access-Control-Allow-Origin: *`)
+    const evil = await fetch(`${base}/angle`, { headers: { Origin: 'https://evil.example' } });
+    assert.equal(evil.status, 403);
+    assert.equal(evil.headers.get('access-control-allow-origin'), null);
+    const evilSse = await fetch(`${base}/events`, { headers: { Origin: 'https://evil.example' } });
+    assert.equal(evilSse.status, 403);
+    // Look-alike loopback origins are not loopback
+    const lookalike = await fetch(`${base}/angle`, { headers: { Origin: 'http://127.0.0.1.evil.example' } });
+    assert.equal(lookalike.status, 403);
+
+    // Loopback dev servers on any port are allowed and get their own origin echoed back
+    for (const o of ['http://localhost:8000', 'http://127.0.0.1:5500', 'http://[::1]:8080']) {
+      const ok = await fetch(`${base}/angle`, { headers: { Origin: o } });
+      assert.equal(ok.status, 200, o);
+      assert.equal(ok.headers.get('access-control-allow-origin'), o);
+      assert.match(ok.headers.get('vary') || '', /Origin/);
+    }
+
+    // DNS rebinding: attacker hostname resolving to 127.0.0.1 arrives with its own Host header
+    const rebind = await rawHttp(port, 'GET /angle HTTP/1.1\r\nHost: evil.example:' + port + '\r\nConnection: close\r\n\r\n');
+    assert.match(rebind, /^HTTP\/1\.1 403 /);
+    const noHost = await rawHttp(port, 'GET /angle HTTP/1.0\r\n\r\n');
+    assert.match(noHost, /^HTTP\/1\.[01] 403 /);
+    const localHost = await rawHttp(port, 'GET /angle HTTP/1.1\r\nHost: localhost:' + port + '\r\nConnection: close\r\n\r\n');
+    assert.match(localHost, /^HTTP\/1\.1 200 /);
+
+    // SSE fan-out is capped
+    for (let i = 0; i < mod.MAX_SSE_CLIENTS; i++) {
+      held.push(
+        await new Promise((resolve, reject) => {
+          const req = http.get(`${base}/events`, (res) => {
+            assert.equal(res.statusCode, 200);
+            resolve(req);
+          });
+          req.on('error', reject);
+        })
+      );
+    }
+    const overflow = await fetch(`${base}/events`);
+    assert.equal(overflow.status, 503);
+  } finally {
+    held.forEach((r) => r.destroy());
+    await bridge.close();
+  }
+});
+
+test('lid bridge port: page and server agree, and no other local server in the repo uses it', async () => {
+  const fs = require('node:fs');
+  const mod = await import(pathToFileURL(path.join(__dirname, 'lid-bridge.mjs')).href);
+  const { BRIDGE_ORIGIN } = require('./lid-angle.js');
+  assert.notEqual(mod.DEFAULT_PORT, 8791, 'cells/stick-s3/bridge.mjs listens on 127.0.0.1:8791');
+  assert.notEqual(mod.DEFAULT_PORT, 8792, 'cells/left-grille/cal-collector.mjs listens on 127.0.0.1:8792');
+  assert.equal(BRIDGE_ORIGIN, `http://${mod.DEFAULT_HOST}:${mod.DEFAULT_PORT}`);
+  const cellsDir = path.join(__dirname, '..');
+  const portRe = new RegExp(`\\b${mod.DEFAULT_PORT}\\b`);
+  for (const cell of fs.readdirSync(cellsDir)) {
+    const dir = path.join(cellsDir, cell);
+    if (!fs.statSync(dir).isDirectory()) continue;
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith('.mjs') || f === 'lid-bridge.mjs' || /\.test\./.test(f)) continue;
+      const text = fs.readFileSync(path.join(dir, f), 'utf8');
+      assert.ok(!portRe.test(text), `cells/${cell}/${f} also uses port ${mod.DEFAULT_PORT}`);
+    }
+  }
+});
+
+test('lid-bridge.mjs start() spawns the HID helper only after the port is bound', async () => {
+  const mod = await import(pathToFileURL(path.join(__dirname, 'lid-bridge.mjs')).href);
+  const first = mod.createBridgeServer({ host: '127.0.0.1', port: 0, disableHardware: true });
+  const { port } = await first.start();
+  // With hardware disabled, "helper started" is observable as the 'Hardware probe disabled' snapshot.
+  assert.equal(first.getSnapshot().reason, 'Hardware probe disabled');
+  const second = mod.createBridgeServer({ host: '127.0.0.1', port, disableHardware: true });
+  try {
+    await assert.rejects(second.start(), /EADDRINUSE/);
+    assert.equal(
+      second.getSnapshot().reason,
+      'Initializing IOHIDManager bridge…',
+      'a bridge that failed to bind must not have started its helper'
+    );
+  } finally {
+    await second.close().catch(() => {});
+    await first.close();
   }
 });
 
@@ -868,5 +983,294 @@ test('mountLidAngleCell skips eager hidden mount probe, wakes on lg-secondary-op
     global.EventSource = prevES;
     global.fetch = prevFetch;
     global.LeftGrilleLab = prevLab;
+  }
+});
+
+function makeBareNode() {
+  return {
+    children: [],
+    dataset: {},
+    style: {},
+    hidden: false,
+    textContent: '',
+    classList: { add() {}, contains: () => false },
+    appendChild(c) {
+      this.children.push(c);
+      return c;
+    },
+    removeChild() {},
+    get firstChild() {
+      return null;
+    },
+    setAttribute() {},
+    getAttribute: () => null,
+    addEventListener() {},
+    closest: () => null,
+    focus() {}
+  };
+}
+
+test('SONAR: armed-without-echo is labelled, and turning SONAR off releases a mic that SONAR itself armed', async () => {
+  const { mountLidAngleCell } = require('./lid-angle.js');
+  function el() {
+    const listeners = {};
+    let cls = '';
+    return {
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      textContent: '',
+      get className() {
+        return cls;
+      },
+      set className(v) {
+        cls = String(v);
+      },
+      classList: { add(c) { cls += ' ' + c; }, contains: (c) => cls.split(' ').includes(c) },
+      appendChild(c) {
+        this.children.push(c);
+        return c;
+      },
+      removeChild() {},
+      get firstChild() {
+        return null;
+      },
+      setAttribute(k, v) {
+        if (k === 'class') cls = String(v);
+      },
+      getAttribute: () => null,
+      addEventListener(t, fn) {
+        (listeners[t] = listeners[t] || []).push(fn);
+      },
+      fire(t) {
+        return Promise.all((listeners[t] || []).map((fn) => fn({})));
+      },
+      closest: () => null,
+      focus() {}
+    };
+  }
+  const find = (n, c) => {
+    if (n.classList && n.classList.contains(c)) return n;
+    for (const k of n.children || []) {
+      const f = find(k, c);
+      if (f) return f;
+    }
+    return null;
+  };
+  const prevDoc = global.document;
+  global.document = { createElement: el, createElementNS: el, createTextNode: () => ({}) };
+  try {
+    let stateCb = null;
+    let tx = 'off';
+    const stopCalls = [];
+    const bus = {
+      registerTxGenerator() {},
+      subscribeAudio: () => () => {},
+      onStateChange(fn) {
+        stateCb = fn;
+        fn({ state: 'idle', sampleRate: 48000, txMode: tx });
+        return () => {};
+      },
+      getTxMode: () => tx,
+      setTxMode(m) {
+        tx = m;
+        stateCb({ state: 'listening', sampleRate: 48000, txMode: tx });
+      },
+      async requestArm(m) {
+        tx = m;
+        stateCb({ state: 'listening', sampleRate: 48000, txMode: tx });
+        return true;
+      },
+      stopAll(opts) {
+        stopCalls.push(opts);
+        tx = 'off';
+        stateCb({ state: 'idle', sampleRate: 48000, txMode: 'off' });
+      }
+    };
+    const cell = el();
+    const handle = mountLidAngleCell(cell, bus, { autoProbeHid: false, storage: createMockStorage() });
+    const sonarBtn = find(cell, 'la-btn--sonar');
+    const badge = find(cell, 'la-source-badge');
+    await sonarBtn.fire('click');
+    assert.equal(badge.textContent, 'SONAR · NO ECHO', 'armed with no echo yet is not a sonar reading');
+    await sonarBtn.fire('click');
+    assert.deepEqual(stopCalls, [{ dispatchClose: false }], 'SONAR armed the mic, so SONAR off releases it');
+    assert.equal(badge.textContent, 'READY');
+
+    // When something else armed the bus, SONAR off only stops the lid ping
+    stateCb({ state: 'listening', sampleRate: 48000, txMode: 'off' });
+    await sonarBtn.fire('click');
+    await sonarBtn.fire('click');
+    assert.equal(stopCalls.length, 1);
+    assert.equal(tx, 'off');
+
+    // SONAR armed the mic, then chirp sonar took over the TX: ownership is gone
+    stateCb({ state: 'idle', sampleRate: 48000, txMode: 'off' });
+    await sonarBtn.fire('click');
+    bus.setTxMode('chirp');
+    await sonarBtn.fire('click'); // back to lid-ping
+    await sonarBtn.fire('click'); // off: must not kill the mic chirp sonar is using
+    assert.equal(stopCalls.length, 1);
+    assert.equal(tx, 'off');
+    handle.destroy();
+  } finally {
+    global.document = prevDoc;
+  }
+});
+
+test('LidCalibration and mountLidAngleCell survive a localStorage global that throws (blocked site data)', () => {
+  const { mountLidAngleCell } = require('./lid-angle.js');
+  const prevDesc = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  const prevDoc = global.document;
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    get() {
+      const err = new Error('The operation is insecure.');
+      err.name = 'SecurityError';
+      throw err;
+    }
+  });
+  global.document = {
+    createElement: makeBareNode,
+    createElementNS: makeBareNode,
+    createTextNode: () => ({})
+  };
+  try {
+    const cal = LidCalibration.load();
+    assert.equal(cal.isCalibrated, false);
+    assert.doesNotThrow(() => cal.setOpenAnchor(-19.5));
+    assert.doesNotThrow(() => cal.reset());
+    const handle = mountLidAngleCell(makeBareNode(), null, { autoProbeHid: false });
+    assert.ok(handle && handle.calibration, 'cell must still mount');
+    handle.destroy();
+  } finally {
+    if (prevDesc) Object.defineProperty(globalThis, 'localStorage', prevDesc);
+    else delete globalThis.localStorage;
+    global.document = prevDoc;
+  }
+});
+
+test('mountLidAngleCell closes the bridge event stream while the tab is hidden and reconnects on return', async () => {
+  const { mountLidAngleCell } = require('./lid-angle.js');
+  const docListeners = {};
+  const winListeners = {};
+  let visibility = 'visible';
+  const prev = {
+    document: global.document,
+    window: global.window,
+    EventSource: global.EventSource,
+    fetch: global.fetch,
+    LeftGrilleLab: global.LeftGrilleLab
+  };
+  const sources = [];
+  let fetches = 0;
+  global.document = {
+    get visibilityState() {
+      return visibility;
+    },
+    createElement: makeBareNode,
+    createElementNS: makeBareNode,
+    createTextNode: () => ({}),
+    addEventListener(type, fn) {
+      (docListeners[type] = docListeners[type] || []).push(fn);
+    },
+    removeEventListener(type, fn) {
+      docListeners[type] = (docListeners[type] || []).filter((f) => f !== fn);
+    }
+  };
+  global.window = {
+    addEventListener(type, fn) {
+      (winListeners[type] = winListeners[type] || []).push(fn);
+    },
+    removeEventListener(type, fn) {
+      winListeners[type] = (winListeners[type] || []).filter((f) => f !== fn);
+    }
+  };
+  global.EventSource = class {
+    constructor(url) {
+      this.url = url;
+      this.closed = false;
+      sources.push(this);
+    }
+    addEventListener() {}
+    close() {
+      this.closed = true;
+    }
+  };
+  global.fetch = async () => {
+    fetches++;
+    return { ok: true, json: async () => ({ available: true, angleDeg: 101.5, source: 'iohid' }) };
+  };
+  global.LeftGrilleLab = { isSecondaryOpen: () => true };
+  const settle = () => new Promise((r) => setTimeout(r, 5));
+  const setVisibility = async (v) => {
+    visibility = v;
+    (docListeners.visibilitychange || []).forEach((fn) => fn({}));
+    await settle();
+  };
+  try {
+    const cell = makeBareNode();
+    const handle = mountLidAngleCell(cell, null, { storage: createMockStorage() });
+    await settle();
+    assert.equal(fetches, 1);
+    assert.equal(sources.length, 1);
+    assert.equal(sources[0].closed, false);
+
+    await setVisibility('hidden');
+    assert.equal(sources[0].closed, true, 'hidden tab must close the SSE stream');
+    assert.equal(fetches, 1);
+
+    await setVisibility('visible');
+    assert.equal(fetches, 2, 'visible again re-probes the bridge once');
+    assert.equal(sources.length, 2);
+    assert.equal(sources[1].closed, false);
+
+    // Bridge dies while open: the hardware note must not stay, and exactly one retry follows
+    const findCls = (n, c) => {
+      if (n && n.className === c) return n;
+      for (const k of (n && n.children) || []) {
+        const f = findCls(k, c);
+        if (f) return f;
+      }
+      return null;
+    };
+    const note = findCls(cell, 'la-cal-note');
+    assert.match(note.textContent, /IOHID/);
+    const realSetTimeout = global.setTimeout;
+    let retryFn = null;
+    global.setTimeout = (fn, ms) => {
+      if (ms === 2500) {
+        retryFn = fn;
+        return 0;
+      }
+      return realSetTimeout(fn, ms);
+    };
+    try {
+      sources[1].onerror();
+    } finally {
+      global.setTimeout = realSetTimeout;
+    }
+    assert.doesNotMatch(note.textContent, /IOHID/, 'stale hardware note after the bridge went away');
+    assert.equal(typeof retryFn, 'function', 'one bounded retry is scheduled');
+    global.fetch = async () => {
+      fetches++;
+      throw new TypeError('Failed to fetch');
+    };
+    retryFn();
+    await settle();
+    assert.equal(fetches, 3);
+    assert.equal(sources.length, 2, 'failed retry opens no stream and schedules nothing more');
+
+    // After the page closes, visibility changes must not reconnect anything
+    (winListeners['lg-secondary-close'] || []).forEach((fn) => fn({}));
+    assert.equal(sources[1].closed, true);
+    await setVisibility('hidden');
+    await setVisibility('visible');
+    assert.equal(fetches, 3);
+    assert.equal(sources.length, 2);
+    handle.destroy();
+  } finally {
+    Object.assign(global, prev);
   }
 });
