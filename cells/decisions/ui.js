@@ -8,6 +8,21 @@
 
   const CHOICE_SWATCHES = ['#141413', '#5c5c58', '#9e9e99', '#cfcfca', '#e3e3de'];
 
+  // Tile 1 scenario tabs: what each preset in presets.js loads (input + its three questions).
+  // Workbench question types (the API's names) in plain words.
+  const TYPE_TIPS = {
+    noul: 'Yes/no question (noul): answered as a probability of yes.',
+    choice: 'Pick-one question (choice): a probability for each option.',
+    score: 'Rubric question (score): a probability per level, averaged into one score.'
+  };
+
+  const PRESET_TIPS = {
+    receipt: 'Receipt photo: breaks expense policy, which expense bucket, ready to auto-approve.',
+    support: 'Support email: page on-call now, which team owns it, how severe.',
+    ui_qa: 'Checkout screenshot: ready to ship, main visual flaw, overall polish.',
+    release: 'Pull request: needs a migration guide, version bump, production blast radius.'
+  };
+
   let nextCustomId = 1;
 
   function el(tag, attrs, children) {
@@ -308,7 +323,7 @@
     };
 
     const liveRegion = el('div', {
-      className: 'dc-sr-only',
+      className: 'ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
@@ -320,6 +335,9 @@
 
     cells.forEach(function (c) {
       clearNode(c);
+      // Shared tile anatomy (ui/base.css): size container "ui-tile" for the compact/tiny steps.
+      // index.html is not ours to edit, so the class is added here and removed in unmount().
+      c.classList.add('ui-tile');
     });
     cells[0].appendChild(liveRegion);
     if (inputEl && inputWrap) inputEl.appendChild(inputWrap);
@@ -337,7 +355,7 @@
     }
 
     const dialog = el('dialog', {
-      className: 'dc-dialog',
+      className: 'ui-dialog dc-dialog',
       'aria-labelledby': 'dc-wb-heading'
     });
     document.body.appendChild(dialog);
@@ -614,17 +632,16 @@
         pinEl.setAttribute('aria-valuenow', fmtProb(nextThreshold));
         pinEl.setAttribute('aria-valuetext', pct + ' cutoff (' + (isYes ? 'YES' : 'NO') + ')');
         fillEl.classList.toggle('is-below', !isYes);
-        trackEl.title = 'Drag to move Yes/No cutoff (' + pct + ')';
 
         if (controls.cutoffEl) {
-          controls.cutoffEl.textContent = 'Cutoff: ' + pct + ' (drag)';
+          controls.cutoffEl.textContent = 'Cutoff ' + pct;
         }
         if (controls.pillEl) {
           controls.pillEl.textContent = (isYes ? 'YES' : 'NO') + ' · ' + fmtPct(prob);
           controls.pillEl.classList.toggle('is-no', !isYes);
         }
         if (controls.tickEl) {
-          controls.tickEl.textContent = 'Cutoff ' + pct + ' (drag)';
+          controls.tickEl.textContent = 'Cutoff ' + pct;
         }
         if (controls.verdictEl) {
           controls.verdictEl.textContent = noulBand(prob, nextThreshold);
@@ -734,42 +751,54 @@
           app.result &&
           app.result.mode === 'live'
       );
+      const connecting = Boolean(!app.error && app.isRunning && app.mode === 'live');
       const modeKey = app.error ? 'error' : verifiedLive ? 'live' : 'simulated';
+      // Pill states (ui/NOTES.md green rule): green only after a live call really returned;
+      // a saved key that has not answered yet is idle "Key set"; error and an in-flight call are rust.
       const modeLabel = app.error
-        ? 'API Error'
+        ? 'API error'
         : verifiedLive
-          ? 'Live API'
-          : app.isRunning && app.mode === 'live'
+          ? 'Live'
+          : connecting
             ? 'Connecting…'
-            : 'Demo Data';
+            : hasSavedKey && app.mode === 'live'
+              ? 'Key set'
+              : 'Demo data';
+      const modeTone = app.error || connecting ? 'attention' : verifiedLive ? 'ok' : 'idle';
+      const modeTip = app.error
+        ? 'The last live call failed. Click to see why and fix it.'
+        : verifiedLive
+          ? 'Answers come live from Gemini with your key. Click to manage the key.'
+          : connecting
+            ? 'Sending the request to Gemini now. Click to open the studio.'
+            : hasSavedKey && app.mode === 'live'
+              ? 'Key saved; no live answer yet. Click to manage the key.'
+              : hasSavedKey
+                ? 'Answers are simulated in this browser. Click to manage your saved key.'
+                : 'Answers are simulated in this browser. Click to add a Gemini key.';
 
-      const header = el('header', { className: 'dc-card-header' }, [
-        el('div', { className: 'dc-card-brand' }, [
-          el('span', { className: 'dc-step-pill dc-step-pill--lead', textContent: '1 · INPUT' }),
-          el('span', { className: 'dc-card-title', textContent: 'Gemini Decisions' })
-        ]),
-        el('div', { className: 'dc-card-actions' }, [
+      const header = el('header', { className: 'ui-tile-head dc-head' }, [
+        el('span', { className: 'ui-tile-step', textContent: '1 · Input' }),
+        el('span', { className: 'ui-tile-title ui-hide-compact', textContent: 'Gemini Decisions' }),
+        el('div', { className: 'ui-tile-actions' }, [
           el(
             'button',
             {
               type: 'button',
-              className: 'dc-mode-pill',
-              dataset: { mode: modeKey, focusRole: 'mode-pill' },
-              title:
-                hasSavedKey && app.mode === 'live'
-                  ? 'Using your Gemini API key — click to manage'
-                  : 'Local preview — click to add your Gemini API key',
+              className: 'ui-pill dc-mode-pill',
+              dataset: { mode: modeKey, tone: modeTone, focusRole: 'mode-pill', tip: modeTip },
+              'aria-label': 'Mode: ' + modeLabel,
               onClick: function () {
                 openWorkbench('mode-pill', { openKeyPopover: true, initialTab: 'results' });
               }
             },
-            [el('span', { className: 'dc-dot', 'aria-hidden': 'true' }), modeLabel]
+            [el('span', { className: 'ui-pill-label', textContent: modeLabel })]
           ),
           !scoreEl
             ? el('button', {
                 type: 'button',
-                className: 'dc-icon-btn',
-                dataset: { focusRole: 'expand-btn' },
+                className: 'ui-btn ui-btn--sm ui-hide-tiny',
+                dataset: { focusRole: 'expand-btn', tip: 'Edit the questions, text and image, then run again.' },
                 textContent: 'Customize ↗',
                 onClick: function () {
                   openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
@@ -782,31 +811,17 @@
       const activePreset = Presets.getPreset(app.state.presetId);
       const activeVariant = activePreset.variants[app.state.variantIndex] || activePreset.variants[0];
 
-      // Readable Specimen Stage
+      // Specimen (the tile's hero): heading on the shared left edge, then the image with its
+      // two-line description beside it, or the input text on its own.
       const specimenStage = el('div', { className: 'dc-specimen-stage' });
       if (app.state.image && app.state.image.dataUrl) {
         specimenStage.appendChild(
-          el(
-            'button',
-            {
-              type: 'button',
-              className: 'dc-specimen-img-btn',
-              dataset: { focusRole: 'specimen-img' },
-              'aria-label': 'Inspect or replace specimen image in Workbench',
-              onClick: function () {
-                app.mediaExpanded = true;
-                openWorkbench('specimen-img', { openKeyPopover: false, initialTab: 'results' });
-              }
-            },
-            [el('img', { src: app.state.image.dataUrl, alt: app.state.image.name })]
-          )
-        );
-        const copyCol = el('div', { className: 'dc-specimen-copy' }, [
           el('div', {
             className: 'dc-specimen-heading',
             textContent: app.customTextEdited ? app.state.image.name : (activeVariant.title || activePreset.title)
           })
-        ]);
+        );
+        const copyCol = el('div', { className: 'dc-specimen-copy ui-hide-tiny' });
         if (!app.customTextEdited && Array.isArray(activeVariant.bullets)) {
           copyCol.appendChild(
             el(
@@ -820,31 +835,45 @@
         } else {
           copyCol.appendChild(el('div', { className: 'dc-specimen-quote', textContent: app.state.inputText }));
         }
-        specimenStage.appendChild(copyCol);
+        specimenStage.appendChild(
+          el('div', { className: 'dc-specimen-row' }, [
+            el(
+              'button',
+              {
+                type: 'button',
+                className: 'dc-specimen-img-btn',
+                dataset: { focusRole: 'specimen-img', tip: 'Open the studio to inspect or replace this image.' },
+                'aria-label': 'Inspect or replace specimen image in Workbench',
+                onClick: function () {
+                  app.mediaExpanded = true;
+                  openWorkbench('specimen-img', { openKeyPopover: false, initialTab: 'results' });
+                }
+              },
+              [el('img', { src: app.state.image.dataUrl, alt: app.state.image.name })]
+            ),
+            copyCol
+          ])
+        );
       } else {
         specimenStage.appendChild(
-          el('div', { className: 'dc-specimen-copy' }, [
-            el('div', {
-              className: 'dc-specimen-heading',
-              textContent: app.customTextEdited ? 'Custom Text Input' : (activeVariant.title || activePreset.title)
-            }),
-            el('div', {
-              className: 'dc-specimen-quote',
-              textContent: app.state.inputText,
-              title: app.state.inputText
-            })
-          ])
+          el('div', {
+            className: 'dc-specimen-heading',
+            textContent: app.customTextEdited ? 'Custom Text Input' : (activeVariant.title || activePreset.title)
+          })
+        );
+        specimenStage.appendChild(
+          el('div', { className: 'dc-specimen-quote dc-specimen-quote--solo', textContent: app.state.inputText })
         );
       }
 
-      // Giant A/B Flip Switch
+      // A/B flip: same questions, the other input.
       const nextFlipBtns = activePreset.variants.map(function (v, idx) {
         return el('button', {
           type: 'button',
           className: 'dc-flip-btn',
           'aria-pressed': String(idx === app.state.variantIndex),
           textContent: v.buttonLabel || v.label,
-          title: 'Test: ' + v.summary,
+          dataset: { tip: 'Run the same questions on: ' + v.summary + '.' },
           onClick: function () {
             switchVariant(idx);
           }
@@ -853,7 +882,7 @@
       const flipRow = el(
         'div',
         {
-          className: 'dc-flip-row',
+          className: 'ui-seg dc-flip-row ui-hide-tiny',
           role: 'group',
           'aria-label': 'Compare example inputs',
           onMouseenter: function () {
@@ -874,40 +903,27 @@
         nextFlipBtns
       );
 
-      const body = el('div', { className: 'dc-cell-body dc-input-body' }, [
-        el('div', {
-          className: 'dc-explainer',
-          textContent: 'Pick an input below — Gemini answers all 3 rules in 1 call.'
-        }),
-        specimenStage,
-        flipRow
-      ]);
+      const body = el('div', { className: 'ui-tile-body dc-cell-body dc-input-body' }, [specimenStage, flipRow]);
 
       const nextPresetBtns = Presets.LIST.map(function (p) {
         return el('button', {
           type: 'button',
-          className: 'dc-preset-btn',
+          className: 'ui-btn ui-btn--sm ui-btn--quiet dc-preset-btn',
           'aria-pressed': String(p.id === app.state.presetId),
           textContent: p.shortLabel,
+          dataset: { tip: PRESET_TIPS[p.id] || 'Switch all three tiles to the ' + p.title + ' example.' },
           onClick: function () {
             switchPreset(p.id, 0);
           }
         });
       });
 
-      const footer = el('footer', { className: 'dc-card-footer' }, [
+      const footer = el('footer', { className: 'ui-tile-foot dc-input-foot' }, [
         el(
           'div',
           { className: 'dc-preset-tabs', role: 'group', 'aria-label': 'Example scenarios' },
           nextPresetBtns
-        ),
-        verdictEl || scoreEl
-          ? el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true' }, [
-              'Outputs ',
-              // Rotated to point down in the stacked phone layout (decisions.css), where tiles 2 and 3 sit below.
-              el('span', { className: 'dc-step-arrow-glyph', textContent: '→' })
-            ])
-          : null
+        )
       ]);
 
       renderedFlipBtns = nextFlipBtns;
@@ -946,20 +962,39 @@
     }
 
     // Provenance tag for tiles 2 and 3. It must stay visible at every tile size (unlike
-    // .dc-api-whisper / .dc-proof-meta, which compact container queries hide), and it follows the
+    // the step-3 footer, which the < 320 px container step hides), and it follows the
     // result on screen, not app.mode: while a live call is "Connecting…" the old demo numbers are
     // still what is shown.
     function buildResultTag() {
       if (app.error || !app.result) return null;
       const isDemo = app.result.mode !== 'live';
       if (!isDemo && !app.dirty) return null;
-      return el('span', {
-        className: 'dc-result-tag' + (isDemo ? ' is-demo' : ''),
-        textContent: (isDemo ? 'Demo' : 'Live') + (app.dirty ? ' · edited' : ''),
-        title:
-          (isDemo ? 'Demo data: a local simulation, not a gemini-decision-1 response.' : 'Live gemini-decision-1 result.') +
-          (app.dirty ? ' Workbench edits are not run yet — click Run in Customize ↗.' : '')
-      });
+      // Idle grey pill; rust when the tiles no longer match the edited input (it needs a Run).
+      return el(
+        'span',
+        {
+          className: 'ui-pill dc-result-tag' + (isDemo ? ' is-demo' : ''),
+          dataset: {
+            tone: app.dirty ? 'attention' : 'idle',
+            tip: app.dirty
+              ? 'These answers predate your studio edits. Open Customize and press Run.'
+              : 'Simulated in this browser, not a Gemini answer. Add a key to go live.'
+          }
+        },
+        // Below 320 px the label shortens ("Demo" keeps its word, "Live · edited" becomes "edited")
+        // so the step label and Customize still fit; the tone and tip keep the full meaning.
+        [
+          el(
+            'span',
+            { className: 'ui-pill-label' },
+            !app.dirty
+              ? ['Demo']
+              : isDemo
+                ? ['Demo', el('span', { className: 'ui-hide-compact', textContent: ' · edited' })]
+                : [el('span', { className: 'ui-hide-compact', textContent: 'Live · ' }), 'edited']
+          )
+        ]
+      );
     }
 
     function emptyAnswerText(type, label, renderQuestions, hasPending) {
@@ -977,36 +1012,50 @@
         : 'No ' + label + ' question active — enable in Customize ↗';
     }
 
+    // Empty / invalid answer slot. data-state: "invalid" (the API answered, but not usably: rust),
+    // "pending" (edited, not run yet) or "off" (no such question enabled).
+    function emptyAnswerEl(type, label, renderQuestions, hasPending) {
+      const text = emptyAnswerText(type, label, renderQuestions, hasPending);
+      const state = /^No valid /.test(text) ? 'invalid' : hasPending ? 'pending' : 'off';
+      return el('div', { className: 'dc-empty-state', dataset: { state: state } }, [
+        el('span', {
+          className: 'ui-label',
+          textContent: state === 'invalid' ? 'No answer' : state === 'pending' ? 'Not run yet' : 'Off'
+        }),
+        el('span', { className: 'dc-empty-text', textContent: text })
+      ]);
+    }
+
     // =========================================================================
     // CELL 2 (01B) — YES/NO CHECK (noul) + PICK A CATEGORY (choice)
     // =========================================================================
     function renderVerdictCell() {
       if (!verdictEl || !verdictWrap) return;
-      const header = el('header', { className: 'dc-card-header' }, [
-        el('div', { className: 'dc-card-brand' }, [
-          el('span', { className: 'dc-step-pill', textContent: '2 · CHECK & ROUTE' }),
-          el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: '→' })
-        ]),
-        el('div', { className: 'dc-card-actions' }, [
-          buildResultTag(),
-          el('span', { className: 'dc-api-whisper', textContent: 'noul · choice', title: 'Gemini Decisions API primitives: noul (Yes/No) and choice (Category)' })
-        ])
+      // No "→" step arrow: when the strip wraps (phone, Motion reflow) tile 3 is not to the right.
+      const header = el('header', { className: 'ui-tile-head dc-head' }, [
+        el('span', { className: 'ui-tile-step' }, ['2 · Check', el('span', { className: 'ui-hide-tiny', textContent: ' & route' })]),
+        el('span', {
+          className: 'ui-tile-title ui-hide-compact',
+          textContent: 'Yes/no + category',
+          dataset: { tip: 'Two decision types in one call: a yes/no check (noul) and a pick-one category (choice).' }
+        }),
+        el('div', { className: 'ui-tile-actions' }, [buildResultTag()])
       ]);
 
-      const body = el('div', { className: 'dc-cell-body dc-verdict-body' });
+      const body = el('div', { className: 'ui-tile-body dc-cell-body dc-verdict-body' });
 
       if (app.error) {
         body.appendChild(
           el('div', { className: 'dc-card-error', role: 'alert' }, [
             el('div', { className: 'dc-card-error-title', textContent: app.error.headline }),
-            el('div', { textContent: app.error.remediation }),
+            el('div', { className: 'dc-card-error-text', textContent: app.error.remediation }),
             el('div', { className: 'dc-card-error-actions' }, [
               // Retrying without a key repeats the same error, so the button is only offered when it can help.
               app.error.code !== 'MISSING_KEY'
                 ? el('button', {
                     type: 'button',
-                    className: 'dc-btn dc-btn--sm',
-                    dataset: { focusRole: 'verdict-retry' },
+                    className: 'ui-btn ui-btn--sm',
+                    dataset: { focusRole: 'verdict-retry', tip: 'Send the same request to Gemini again.' },
                     textContent: 'Retry Live',
                     onClick: function () {
                       runEvaluation({ resetGhost: false });
@@ -1016,8 +1065,8 @@
               isKeyError(app.error)
                 ? el('button', {
                     type: 'button',
-                    className: 'dc-btn dc-btn--sm',
-                    dataset: { focusRole: 'verdict-key-btn' },
+                    className: 'ui-btn ui-btn--sm',
+                    dataset: { focusRole: 'verdict-key-btn', tip: 'Open the studio with the key form ready.' },
                     textContent: 'Update API Key',
                     onClick: function () {
                       openWorkbench('verdict-key-btn', { openKeyPopover: true, initialTab: 'results' });
@@ -1026,8 +1075,13 @@
                 : null,
               el('button', {
                 type: 'button',
-                className: 'dc-btn dc-btn--sm',
-                dataset: { focusRole: 'verdict-demo' },
+                className: 'ui-btn ui-btn--sm',
+                dataset: {
+                  focusRole: 'verdict-demo',
+                  tip: app.error.code === 'MISSING_KEY'
+                    ? 'Show simulated answers instead; no key needed.'
+                    : 'Show simulated answers instead; your key stays saved.'
+                },
                 textContent: 'Switch to Demo',
                 onClick: function () {
                   app.mode = 'simulated';
@@ -1074,14 +1128,14 @@
           });
           const track = el('div', {
             className: 'dc-noul-track',
-            title: 'Drag to move Yes/No cutoff (' + fmtPct(thresh) + ')'
+            dataset: { tip: 'Drag the marker to move the cutoff between NO and YES.' }
           });
           track.appendChild(fillEl);
           if (prev && prev.type === 'noul') {
             track.appendChild(
               el('div', {
                 className: 'dc-noul-ghost',
-                title: 'Previous: ' + fmtPct(prev.noul),
+                dataset: { tip: "Previous run's probability of yes: " + fmtPct(prev.noul) + '.' },
                 style: { left: Math.round(prev.noul * 100) + '%' }
               })
             );
@@ -1090,7 +1144,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
-            dataset: { focusRole: 'cutoff-pin' },
+            dataset: { focusRole: 'cutoff-pin', tip: 'Cutoff between NO and YES. Drag it or use the arrow keys.' },
             'aria-label': 'Yes/No cutoff for ' + (noulQ.cardQuestion || qk),
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
@@ -1108,9 +1162,10 @@
 
           const pillEl = el('span', {
             className: 'dc-verdict-pill' + (isYes ? '' : ' is-no'),
+            dataset: { tip: "Gemini's probability of yes; the cutoff turns it into YES or NO." },
             textContent: (isYes ? 'YES' : 'NO') + ' · ' + fmtPct(ans.noul)
           });
-          const cutoffEl = el('span', { textContent: 'Cutoff: ' + fmtPct(thresh) + ' (drag)' });
+          const cutoffEl = el('span', { className: 'dc-cutoff-label', textContent: 'Cutoff ' + fmtPct(thresh) });
 
           bindThresholdDrag('card', {
             trackEl: track,
@@ -1123,33 +1178,37 @@
           });
 
           body.appendChild(
-            el('div', { className: 'dc-half' }, [
-              el('div', { className: 'dc-eyebrow-row' }, [
-                el('span', { className: 'dc-eyebrow', textContent: 'Yes / No Check' }),
-                deltaPts ? el('span', { className: 'dc-delta-chip', textContent: deltaPts }) : null
-              ]),
+            el('div', { className: 'dc-half dc-half--noul' }, [
               el('div', { className: 'dc-q-headline' }, [
                 el('span', {
                   className: 'dc-plain-q',
                   textContent: noulQ.cardQuestion || noulQ.instructions || qk,
-                  title: noulQ.instructions
+                  dataset: { tip: noulQ.instructions || null }
                 }),
+                deltaPts
+                  ? el('span', {
+                      className: 'dc-delta-chip ui-hide-compact',
+                      dataset: { tip: 'Change since the previous run, in percentage points.' },
+                      textContent: deltaPts
+                    })
+                  : null,
                 pillEl
               ]),
               track,
-              el('div', { className: 'dc-verdict-subrow' }, [
+              el('div', { className: 'dc-verdict-subrow ui-hide-tiny' }, [
                 cutoffEl,
-                el('span', { className: 'dc-mono', textContent: '1%–99% calibrated' })
+                el('span', {
+                  className: 'ui-hide-compact',
+                  dataset: { tip: 'Gemini reports yes between 1% and 99%, never a flat 0% or 100%.' },
+                  textContent: '1–99% calibrated'
+                })
               ])
             ])
           );
         } else {
           body.appendChild(
-            el('div', { className: 'dc-half' }, [
-              el('div', {
-                className: 'dc-empty-state',
-                textContent: emptyAnswerText('noul', 'Yes/No', renderQuestions, hasPendingNoul)
-              })
+            el('div', { className: 'dc-half dc-half--noul' }, [
+              emptyAnswerEl('noul', 'Yes/No', renderQuestions, hasPendingNoul)
             ])
           );
         }
@@ -1173,7 +1232,7 @@
           ans.ranked.slice(0, SHOWN).forEach(function (r, idx) {
             const isWin = r.key === winnerKey;
             bars.appendChild(
-              el('div', { className: 'dc-cat-row' + (isWin ? ' is-winner' : ''), title: r.description || r.key }, [
+              el('div', { className: 'dc-cat-row' + (isWin ? ' is-winner' : ''), dataset: { tip: r.description || r.key } }, [
                 el('span', { className: 'dc-cat-name', textContent: optionHumanLabel(choiceQ, r.key) }),
                 el('div', { className: 'dc-cat-track' }, [
                   el('div', {
@@ -1187,27 +1246,25 @@
           });
 
           body.appendChild(
-            el('div', { className: 'dc-half' }, [
-              el('div', { className: 'dc-eyebrow-row' }, [
-                el('span', { className: 'dc-eyebrow', textContent: 'Pick One Category' }),
-                el('span', {
-                  className: 'dc-mono',
-                  style: { fontSize: '9.5px', color: 'var(--dc-ink-3)' },
-                  textContent: hiddenCount
-                    ? '+' + hiddenCount + ' more · ' + hiddenPct + '%'
-                    : winnerLabel + ' ' + winnerPct + '%',
-                  title: hiddenCount
-                    ? ans.ranked.slice(SHOWN).map(function (r, i) {
-                        return optionHumanLabel(choiceQ, r.key) + ' ' + catPcts[SHOWN + i] + '%';
-                      }).join(' · ')
-                    : null
-                })
-              ]),
+            el('div', { className: 'dc-half dc-half--choice' }, [
               el('div', { className: 'dc-q-headline' }, [
                 el('span', {
                   className: 'dc-plain-q',
                   textContent: choiceQ.cardQuestion || choiceQ.instructions || qk,
-                  title: choiceQ.instructions
+                  dataset: { tip: choiceQ.instructions || null }
+                }),
+                el('span', {
+                  className: 'dc-cat-extra ui-hide-tiny',
+                  textContent: hiddenCount
+                    ? '+' + hiddenCount + ' more · ' + hiddenPct + '%'
+                    : winnerLabel + ' ' + winnerPct + '%',
+                  dataset: {
+                    tip: hiddenCount
+                      ? 'Not shown: ' + ans.ranked.slice(SHOWN).map(function (r, i) {
+                          return optionHumanLabel(choiceQ, r.key) + ' ' + catPcts[SHOWN + i] + '%';
+                        }).join(', ') + '.'
+                      : 'Top category and its probability.'
+                  }
                 })
               ]),
               bars
@@ -1215,11 +1272,8 @@
           );
         } else {
           body.appendChild(
-            el('div', { className: 'dc-half' }, [
-              el('div', {
-                className: 'dc-empty-state',
-                textContent: emptyAnswerText('choice', 'Category', renderQuestions, hasPendingChoice)
-              })
+            el('div', { className: 'dc-half dc-half--choice' }, [
+              emptyAnswerEl('choice', 'Category', renderQuestions, hasPendingChoice)
             ])
           );
         }
@@ -1260,19 +1314,24 @@
     // =========================================================================
     function renderScoreCell() {
       if (!scoreEl || !scoreWrap) return;
-      const header = el('header', { className: 'dc-card-header' }, [
-        el('div', { className: 'dc-card-brand' }, [
-          el('span', { className: 'dc-step-pill', textContent: '3 · RUBRIC & PROOF' })
-        ]),
-        el('div', { className: 'dc-card-actions' }, [
-          el('span', { className: 'dc-api-whisper', textContent: 'score', title: 'Gemini Decisions API primitive: ordered rubric score' }),
+      // The result tag sits in the header too: the footer (with its "Demo · 0 words generated"
+      // badge) is hidden below 320 px, and demo numbers must stay labelled at every size.
+      const header = el('header', { className: 'ui-tile-head dc-head' }, [
+        el('span', { className: 'ui-tile-step' }, ['3 · Rubric', el('span', { className: 'ui-hide-compact', textContent: ' & proof' })]),
+        el('span', {
+          className: 'ui-tile-title ui-hide-compact',
+          textContent: 'Score',
+          dataset: { tip: 'One rubric score (score): probabilities over ordered levels, averaged into one number.' }
+        }),
+        el('div', { className: 'ui-tile-actions' }, [
+          buildResultTag(),
           el(
             'button',
             {
               type: 'button',
-              className: 'dc-icon-btn',
-              dataset: { focusRole: 'expand-btn' },
-              'aria-label': 'Open Decisions API Workbench to customize questions, upload images, or view JSON',
+              className: 'ui-btn ui-btn--sm ui-hide-tiny',
+              dataset: { focusRole: 'expand-btn', tip: 'Edit the questions, text and image, then run again.' },
+              'aria-label': 'Customize: open the Decisions studio',
               onClick: function () {
                 openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
               }
@@ -1282,17 +1341,18 @@
         ])
       ]);
 
-      const body = el('div', { className: 'dc-cell-body dc-score-body' });
+      const body = el('div', { className: 'ui-tile-body dc-cell-body dc-score-body' });
       const mainArea = el('div', { className: 'dc-score-main' });
 
       if (app.error) {
         mainArea.appendChild(
-          el('div', { className: 'dc-empty-state' }, [
-            el('div', { textContent: 'Live evaluation paused — resolve API error in Cell 2 or Customize.' }),
+          el('div', { className: 'dc-empty-state', dataset: { state: 'error' } }, [
+            el('span', { className: 'ui-label', textContent: 'Paused' }),
+            el('span', { className: 'dc-empty-text', textContent: 'No score while the live call is failing. Fix it in step 2 or the studio.' }),
             el('button', {
               type: 'button',
-              className: 'dc-btn dc-btn--sm',
-              dataset: { focusRole: 'score-open-wb' },
+              className: 'ui-btn ui-btn--sm',
+              dataset: { focusRole: 'score-open-wb', tip: 'Open the studio to see the error and fix it.' },
               textContent: 'Open Workbench',
               onClick: function () {
                 openWorkbench('score-open-wb', { openKeyPopover: false, initialTab: 'results' });
@@ -1332,31 +1392,43 @@
           const levelPcts = Schema.toDisplayPercents(ans.levels.map(function (l) { return l.prob; }));
 
           mainArea.appendChild(
-            el('div', { className: 'dc-eyebrow-row' }, [
-              el('span', { className: 'dc-eyebrow', textContent: 'Rubric Score (' + ans.min + '–' + ans.max + ')' }),
-              el('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' } }, [
-                deltaStr ? el('span', { className: 'dc-delta-chip', textContent: deltaStr }) : null,
-                cert
-                  ? el('span', {
-                      className: 'dc-certainty-tag',
-                      textContent: cert,
-                      title: 'Distribution spread σ = ' + ans.stdDev.toFixed(2)
-                    })
-                  : null
-              ])
+            el('div', { className: 'dc-q-headline' }, [
+              el('span', {
+                className: 'dc-plain-q',
+                textContent: scoreQ.cardQuestion || scoreQ.instructions || qk,
+                dataset: { tip: scoreQ.instructions || null }
+              })
             ])
-          );
-
-          mainArea.appendChild(
-            el('div', { className: 'dc-plain-q', textContent: scoreQ.cardQuestion || scoreQ.instructions || qk, title: scoreQ.instructions })
           );
 
           mainArea.appendChild(
             el('div', { className: 'dc-score-hero-row' }, [
               el('div', { className: 'dc-score-hero-left' }, [
-                el('span', { className: 'dc-score-big', textContent: ans.score.toFixed(1) }),
+                el('span', {
+                  className: 'ui-readout ui-readout--hero dc-score-big',
+                  textContent: ans.score.toFixed(1),
+                  dataset: { tip: 'Weighted average level, from ' + ans.min + ' to ' + ans.max + '.' }
+                }),
                 el('span', { className: 'dc-score-denom', textContent: '/ ' + ans.max }),
-                peakName ? el('span', { className: 'dc-score-tier', textContent: '· ' + peakName }) : null
+                peakName ? el('span', { className: 'dc-score-tier', textContent: peakName }) : null
+              ]),
+              el('div', { className: 'dc-score-meta ui-hide-tiny' }, [
+                deltaStr
+                  ? el('span', {
+                      className: 'dc-delta-chip',
+                      dataset: { tip: 'Change in score since the previous run.' },
+                      textContent: deltaStr
+                    })
+                  : null,
+                cert
+                  ? el('span', {
+                      className: 'dc-certainty-tag ui-hide-compact',
+                      textContent: cert,
+                      dataset: {
+                        tip: 'Spread of the level probabilities: σ = ' + ans.stdDev.toFixed(2) + ' levels; lower is surer.'
+                      }
+                    })
+                  : null
               ])
             ])
           );
@@ -1368,7 +1440,7 @@
           ans.levels.forEach(function (lvl, idx) {
             const isPeak = lvl.index === ans.peakIndex;
             barsGrid.appendChild(
-              el('div', { className: 'dc-card-bar-col', title: lvl.index + ': ' + lvl.description + ' (' + levelPcts[idx] + '%)' }, [
+              el('div', { className: 'dc-card-bar-col', dataset: { tip: levelPcts[idx] + '% · ' + lvl.description } }, [
                 el('span', { className: 'dc-card-bar-pct', textContent: levelPcts[idx] + '%' }),
                 el('div', {
                   className: 'dc-card-bar' + (isPeak ? ' is-peak' : ''),
@@ -1380,7 +1452,7 @@
           barsGrid.appendChild(
             el('div', {
               className: 'dc-card-ev-pointer',
-              title: 'Weighted average: ' + ans.score.toFixed(2) + ' / ' + ans.max,
+              dataset: { tip: 'Weighted average score: ' + ans.score.toFixed(2) + ' of ' + ans.max + '.' },
               style: { left: evPct + '%' }
             })
           );
@@ -1395,19 +1467,14 @@
               el('span', {
                 className: 'dc-card-bar-lbl' + (isPeak ? ' is-peak' : ''),
                 textContent: shortLevelLabel(scoreQ, lvl, idx),
-                title: lvl.description
+                dataset: { tip: lvl.description }
               })
             );
           });
 
           mainArea.appendChild(el('div', { className: 'dc-card-chart' }, [barsGrid, labelsGrid]));
         } else {
-          mainArea.appendChild(
-            el('div', {
-              className: 'dc-empty-state',
-              textContent: emptyAnswerText('score', 'Rubric', renderQuestions, hasPendingScore)
-            })
-          );
+          mainArea.appendChild(emptyAnswerEl('score', 'Rubric', renderQuestions, hasPendingScore));
         }
       }
 
@@ -1427,30 +1494,41 @@
           : 'no API call · ' + answersText;
       // In Demo the badge itself carries the label (a separate tag wraps the strip onto two lines
       // in the 177px phone tile and squeezes the chart).
+      // "0 words generated" is a claim about the result, not a connection: a plain readout, never green.
       const proofLeftChildren = app.error
         ? [el('span', { className: 'dc-proof-meta', textContent: 'Live error · no active result' })]
         : [
             el('span', {
-              className: 'dc-zero-badge' + (resultIsLive ? '' : ' is-demo'),
+              className: 'ui-readout dc-zero-badge' + (resultIsLive ? '' : ' is-demo'),
               textContent: (resultIsLive ? '' : 'Demo · ') + outTok + ' words generated',
-              title:
-                (resultIsLive
-                  ? 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text.'
-                  : 'Demo data: simulated total_output_tokens: ' + outTok + '. Add a Gemini API key to see a live gemini-decision-1 response.') +
-                (app.dirty ? ' Workbench edits are not run yet.' : '')
+              dataset: {
+                tip:
+                  (resultIsLive
+                    ? 'Gemini returned only probabilities: total_output_tokens is ' + outTok + '.'
+                    : 'Simulated in this browser: no request, so no tokens.') +
+                  (app.dirty ? ' Studio edits are not run yet.' : '')
+              }
             }),
-            el('span', { className: 'dc-proof-meta', textContent: (app.dirty ? 'edited · ' : '') + timingText,
-              title: (app.dirty ? 'Workbench edits not run yet · ' : '') + timingText })
+            el('span', {
+              className: 'dc-proof-meta',
+              textContent: (app.dirty ? 'edited · ' : '') + timingText,
+              dataset: {
+                tip: app.isRunning
+                  ? 'Waiting for the live response.'
+                  : resultIsLive
+                    ? 'Round-trip time; all ' + answersText + ' came from one API request.'
+                    : 'Demo answers are computed locally; no API request was sent.'
+              }
+            })
           ];
 
-      const proofStrip = el('footer', { className: 'dc-proof-strip' }, [
+      const proofStrip = el('footer', { className: 'ui-tile-foot dc-proof-strip' }, [
         el('div', { className: 'dc-proof-left' }, proofLeftChildren),
         el('button', {
           type: 'button',
-          className: 'dc-link-btn',
-          dataset: { focusRole: 'json-btn' },
+          className: 'ui-btn ui-btn--sm ui-btn--quiet dc-link-btn',
+          dataset: { focusRole: 'json-btn', tip: 'Open the exact request JSON and cURL command.' },
           textContent: 'JSON ↗',
-          title: 'Inspect exact v1beta/decisions Request JSON and cURL',
           onClick: function () {
             openWorkbench('json-btn', { openKeyPopover: false, initialTab: 'request' });
           }
@@ -1458,13 +1536,13 @@
       ]);
 
       body.appendChild(mainArea);
-      body.appendChild(proofStrip);
 
       const focusRole = focusedRoleIn(scoreEl);
       clearNode(scoreWrap);
       scoreWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
       scoreWrap.appendChild(header);
       scoreWrap.appendChild(body);
+      scoreWrap.appendChild(proofStrip);
       restoreTileFocus(scoreEl, focusRole);
     }
 
@@ -1479,6 +1557,7 @@
       const presetSelect = el('select', {
         className: 'dc-select',
         'aria-label': 'Choose preset scenario',
+        dataset: { tip: 'Load an example: its input and three questions; the cutoff resets to 50%.' },
         onChange: function (e) {
           switchPreset(e.target.value, 0);
         }
@@ -1488,15 +1567,16 @@
       });
       wbRefs.presetSelect = presetSelect;
 
-      const variantSeg = el('div', { className: 'dc-seg', role: 'group', 'aria-label': 'Input variant' });
+      const variantSeg = el('div', { className: 'ui-seg dc-seg', role: 'group', 'aria-label': 'Input variant' });
       wbRefs.variantSeg = variantSeg;
 
-      const modeSeg = el('div', { className: 'dc-seg', role: 'group', 'aria-label': 'Execution mode' });
+      const modeSeg = el('div', { className: 'ui-seg dc-seg', role: 'group', 'aria-label': 'Execution mode' });
       wbRefs.modeSeg = modeSeg;
 
       const keyBtn = el('button', {
         type: 'button',
-        className: 'dc-btn',
+        className: 'ui-btn dc-key-btn',
+        dataset: { tip: 'Add, replace or clear your Gemini API key.' },
         'aria-haspopup': 'dialog',
         'aria-controls': 'dc-key-popover',
         'aria-expanded': 'false',
@@ -1524,7 +1604,8 @@
 
       const runBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--primary',
+        className: 'ui-btn ui-btn--primary dc-run-btn',
+        dataset: { tipKey: '⌘↵' },
         onClick: function () {
           runEvaluation({ resetGhost: false });
         }
@@ -1533,26 +1614,24 @@
 
       const closeBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--ghost',
-        'aria-label': 'Close Workbench',
-        textContent: '×',
+        className: 'ui-btn',
+        dataset: { tip: 'Back to the grid.', tipKey: 'Esc' },
+        textContent: 'Close',
         onClick: closeWorkbench
       });
 
-      const bar = el('div', { className: 'dc-wb-bar' }, [
-        el('div', { className: 'dc-wb-bar-left' }, [
-          el('span', { className: 'dc-index', textContent: '01' }),
-          el('h2', { id: 'dc-wb-heading', className: 'dc-wb-title', textContent: 'Decisions API Studio' }),
-          el('span', { className: 'dc-model-chip', textContent: Schema.MODEL }),
-          presetSelect,
-          variantSeg
-        ]),
-        el('div', { className: 'dc-wb-bar-right' }, [
-          modeSeg,
-          keyAnchor,
-          runBtn,
-          closeBtn
-        ])
+      // Studio bar: identity on the left, the input pickers, then mode, key, Run (the one black
+      // button) and Close, always last on the right.
+      const bar = el('header', { className: 'ui-studio-bar dc-wb-bar' }, [
+        el('span', { className: 'ui-tile-index', textContent: '01' }),
+        el('h2', { id: 'dc-wb-heading', className: 'ui-studio-title', textContent: 'Decisions API Studio' }),
+        el('span', {
+          className: 'ui-label dc-model-chip',
+          textContent: Schema.MODEL,
+          dataset: { tip: 'The Decisions model every request from this studio uses.' }
+        }),
+        el('div', { className: 'dc-wb-pickers' }, [presetSelect, variantSeg]),
+        el('div', { className: 'ui-studio-actions' }, [modeSeg, keyAnchor, runBtn, closeBtn])
       ]);
 
       const leftPane = el('div', { className: 'dc-pane dc-pane--left' });
@@ -1571,7 +1650,8 @@
       if (!wbRefs.runBtn) return;
       const validation = validationOpt || getValidation();
       wbRefs.runBtn.disabled = app.isRunning || !validation.valid;
-      wbRefs.runBtn.className = 'dc-btn ' + (app.mode === 'live' ? 'dc-btn--live' : 'dc-btn--primary');
+      // Always the one black button; live vs demo is in its label and tip, not a second colour.
+      wbRefs.runBtn.className = 'ui-btn ui-btn--primary dc-run-btn';
       clearNode(wbRefs.runBtn);
       const label = app.isRunning
         ? 'Running…'
@@ -1581,9 +1661,13 @@
             ? 'Run Live'
             : 'Run Demo';
       wbRefs.runBtn.appendChild(document.createTextNode(label));
-      if (!app.isRunning && validation.valid) {
-        wbRefs.runBtn.appendChild(el('span', { className: 'dc-kbd', textContent: '⌘↵' }));
-      }
+      wbRefs.runBtn.dataset.tip = app.isRunning
+        ? 'A live request is in flight; wait for its answer.'
+        : !validation.valid
+          ? 'Fix the highlighted fields on the left to run.'
+          : app.mode === 'live'
+            ? 'Send every active question to Gemini in one request.'
+            : 'Simulate every active question in this browser; no request is sent.';
     }
 
     function updateActiveQuestionsCountLabel() {
@@ -1645,9 +1729,9 @@
           'Uses your standard ',
           el('strong', { textContent: 'Gemini API key' }),
           ' (no separate Decisions API key required). Sent directly from your browser via ',
-          el('code', { className: 'dc-mono', textContent: 'x-goog-api-key' }),
+          el('code', { className: 'dc-code', textContent: 'x-goog-api-key' }),
           ' to ',
-          el('code', { className: 'dc-mono', textContent: 'generativelanguage.googleapis.com' }),
+          el('code', { className: 'dc-code', textContent: 'generativelanguage.googleapis.com' }),
           '. ',
           el('a', {
             href: 'https://aistudio.google.com/apikey',
@@ -1679,7 +1763,8 @@
 
       const toggleVisBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--sm',
+        className: 'ui-btn dc-key-vis-btn',
+        dataset: { tip: 'Show or hide the key while you check it.' },
         textContent: app.keyVisible ? 'Hide' : 'Show',
         onClick: function () {
           app.keyVisible = !app.keyVisible;
@@ -1689,7 +1774,12 @@
       });
       wbRefs.keyToggleVisBtn = toggleVisBtn;
 
-      pop.appendChild(el('div', { className: 'dc-key-input-row' }, [input, toggleVisBtn]));
+      pop.appendChild(
+        el('div', { className: 'dc-field' }, [
+          el('span', { className: 'ui-label', 'aria-hidden': 'true', textContent: 'Gemini API key' }),
+          el('div', { className: 'dc-key-input-row' }, [input, toggleVisBtn])
+        ])
+      );
 
       const persistCheck = el('input', {
         type: 'checkbox',
@@ -1699,7 +1789,7 @@
       pop.appendChild(
         el('label', { className: 'dc-checkbox-row' }, [
           persistCheck,
-          'Remember in this browser (localStorage); off = tab session only'
+          'Remember in this browser (off: this tab only)'
         ])
       );
 
@@ -1734,16 +1824,19 @@
         runEvaluation({ resetGhost: true });
       };
 
+      // Not black: Run in the studio bar is the one primary. The commit action gets an ink outline.
       const saveBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--live dc-btn--sm',
+        className: 'ui-btn dc-key-save',
+        dataset: { tip: 'Save the key and run all questions live now. Empty clears it.', tipKey: 'Enter' },
         textContent: 'Save & Go Live',
         onClick: saveAndGoLive
       });
 
       const clearBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--sm',
+        className: 'ui-btn ui-btn--quiet',
+        dataset: { tip: existing ? 'Forget the key and switch to demo data.' : 'No key is saved yet.' },
         textContent: 'Clear Key',
         disabled: !existing,
         onClick: function () {
@@ -1759,8 +1852,9 @@
 
       const closePopBtn = el('button', {
         type: 'button',
-        className: 'dc-btn dc-btn--ghost dc-btn--sm',
-        textContent: 'Close',
+        className: 'ui-btn ui-btn--quiet',
+        dataset: { tip: 'Close this form without saving.', tipKey: 'Esc' },
+        textContent: 'Cancel',
         onClick: function () {
           closeKeyPopover(true);
         }
@@ -1768,7 +1862,7 @@
 
       pop.appendChild(
         el('div', { className: 'dc-key-footer' }, [
-          el('div', { style: { display: 'flex', gap: '6px' } }, [clearBtn, closePopBtn]),
+          el('div', { className: 'dc-key-footer-left' }, [clearBtn, closePopBtn]),
           saveBtn
         ])
       );
@@ -1785,8 +1879,7 @@
         wbRefs.variantSeg.appendChild(
           el('button', {
             type: 'button',
-            className: 'dc-seg-btn',
-            dataset: { fk: 'variant-' + idx },
+            dataset: { fk: 'variant-' + idx, tip: 'Run the same questions on: ' + v.summary + '.' },
             'aria-pressed': String(idx === app.state.variantIndex),
             textContent: v.label,
             onClick: function () {
@@ -1801,8 +1894,15 @@
         wbRefs.modeSeg.appendChild(
           el('button', {
             type: 'button',
-            className: 'dc-seg-btn',
-            dataset: { fk: 'mode-' + m },
+            dataset: {
+              fk: 'mode-' + m,
+              tip:
+                m === 'simulated'
+                  ? 'Simulate answers in this browser; nothing is sent.'
+                  : Client.KeyStore.get()
+                    ? 'Send requests to Gemini with your saved key.'
+                    : 'Needs a Gemini API key; click to add one.'
+            },
             'aria-pressed': String(app.mode === m),
             textContent: m === 'live' ? 'Live API' : 'Demo Data',
             onClick: function (e) {
@@ -1828,6 +1928,14 @@
       wbRefs.keyBtn.textContent = key
         ? 'Key ' + Client.KeyStore.mask(key) + storeSuffix
         : '+ Gemini API Key';
+      // The tip explains the storage suffix; it never contains the key or its mask.
+      wbRefs.keyBtn.dataset.tip = !key
+        ? 'Add your Gemini API key to run live.'
+        : storeType === 'local'
+          ? 'Key saved in this browser. Click to replace or clear it.'
+          : storeType === 'memory'
+            ? 'Key kept in page memory until reload. Click to replace or clear it.'
+            : 'Key kept for this tab only. Click to replace or clear it.';
 
       renderKeyPopover();
       updateRunButton();
@@ -1952,7 +2060,7 @@
 
       const sampleSelect = el('select', {
         className: 'dc-select',
-        dataset: { fk: 'sample' },
+        dataset: { fk: 'sample', tip: 'Swap in one of the built-in receipt or checkout images.' },
         'aria-label': 'Load built-in sample image',
         onChange: function (e) {
           const val = e.target.value;
@@ -1995,7 +2103,7 @@
               {
                 type: 'button',
                 className: 'dc-media-thumb-btn',
-                dataset: { fk: 'thumb' },
+                dataset: { fk: 'thumb', tip: app.mediaExpanded ? 'Shrink the preview.' : 'Enlarge the preview.' },
                 'aria-label': app.mediaExpanded ? 'Shrink specimen preview' : 'Expand specimen preview',
                 onClick: function () {
                   app.mediaExpanded = !app.mediaExpanded;
@@ -2008,7 +2116,7 @@
                   src: app.state.image.dataUrl,
                   alt: app.state.image.name
                 }),
-                el('span', { className: 'dc-media-zoom-hint', textContent: app.mediaExpanded ? '−' : '⤢' })
+                el('span', { className: 'dc-media-zoom-hint', 'aria-hidden': 'true', textContent: app.mediaExpanded ? '−' : '⤢' })
               ]
             ),
             el('div', { className: 'dc-media-meta' }, [
@@ -2033,19 +2141,23 @@
       } else {
         mediaBox.appendChild(
           el('div', {
-            className: 'dc-key-note',
+            className: 'dc-key-note' + (app.uploadNotice ? ' dc-media-notice' : ''),
             textContent: app.uploadNotice || 'Drop or paste (⌘V) an image for multimodal evaluation, or choose a built-in canvas sample.'
           })
         );
       }
 
-      const resSeg = el('div', { className: 'dc-seg', role: 'group', 'aria-label': 'Image resolution' });
+      const resSeg = el('div', { className: 'ui-seg ui-seg--mono dc-seg', role: 'group', 'aria-label': 'Image resolution' });
       Schema.RESOLUTIONS.forEach(function (res) {
         resSeg.appendChild(
           el('button', {
             type: 'button',
-            className: 'dc-seg-btn',
-            dataset: { fk: 'res-' + res },
+            dataset: {
+              fk: 'res-' + res,
+              tip: app.state.image
+                ? 'How finely Gemini reads the image: ' + res + ' (higher costs more input tokens).'
+                : 'Add an image first; detail only applies to images.'
+            },
             disabled: !app.state.image,
             'aria-pressed': String(app.state.resolution === res),
             textContent: res,
@@ -2060,12 +2172,12 @@
 
       mediaBox.appendChild(
         el('div', { className: 'dc-media-controls' }, [
-          el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } }, [
+          el('div', { className: 'dc-row' }, [
             fileInput,
             el('button', {
               type: 'button',
-              className: 'dc-btn dc-btn--sm',
-              dataset: { fk: 'upload' },
+              className: 'ui-btn ui-btn--sm',
+              dataset: { fk: 'upload', tip: 'Choose a PNG, JPEG, WebP or GIF; large images are downscaled.' },
               textContent: app.state.image ? 'Replace Image' : 'Upload Image',
               onClick: function () {
                 fileInput.click();
@@ -2075,8 +2187,8 @@
             app.state.image
               ? el('button', {
                   type: 'button',
-                  className: 'dc-btn dc-btn--ghost dc-btn--sm',
-                  dataset: { fk: 'rm-image', fkFallback: 'upload' },
+                  className: 'ui-btn ui-btn--sm ui-btn--quiet',
+                  dataset: { fk: 'rm-image', fkFallback: 'upload', tip: 'Drop the image and send text only.' },
                   textContent: 'Remove',
                   onClick: function () {
                     app.uploadSeq++;
@@ -2089,8 +2201,8 @@
                 })
               : null
           ]),
-          el('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, [
-            el('span', { className: 'dc-section-label', textContent: 'Detail' }),
+          el('div', { className: 'dc-row' }, [
+            el('span', { className: 'ui-label', textContent: 'Detail' }),
             resSeg
           ])
         ])
@@ -2099,6 +2211,7 @@
       const inputArea = el('textarea', {
         className: 'dc-textarea',
         rows: '3',
+        id: 'dc-wb-input-text',
         dataset: { fk: 'input-text' },
         'aria-label': 'Shared input text',
         placeholder: 'Shared text context evaluated against all active questions in one forward pass…',
@@ -2113,11 +2226,11 @@
 
       const inputSection = el('section', { className: 'dc-section' }, [
         el('div', { className: 'dc-section-head' }, [
-          el('span', { className: 'dc-section-label', textContent: 'Shared Multimodal Input' }),
+          el('label', { className: 'dc-section-label', for: 'dc-wb-input-text', textContent: 'Shared input' }),
           el('span', {
-            className: 'dc-mono',
-            style: { fontSize: '10.5px', color: 'var(--dc-ink-3)' },
-            textContent: app.state.image ? 'image + text' : 'text only'
+            className: 'ui-label dc-quiet-meta',
+            textContent: app.state.image ? 'image + text' : 'text only',
+            dataset: { tip: 'What every question sees: the text below plus the image, if any.' }
           })
         ]),
         inputArea,
@@ -2137,7 +2250,7 @@
         const enabledCheck = el('input', {
           type: 'checkbox',
           checked: q.enabled !== false,
-          dataset: { fk: 'q-' + qid + '-enabled' },
+          dataset: { fk: 'q-' + qid + '-enabled', tip: 'Include this question in the next run.' },
           'aria-label': 'Enable question ' + q.key,
           onChange: function (e) {
             q.enabled = e.target.checked;
@@ -2163,8 +2276,8 @@
 
         const removeQBtn = el('button', {
           type: 'button',
-          className: 'dc-btn dc-btn--ghost dc-btn--sm',
-          dataset: { fk: 'q-' + qid + '-rm', fkFallback: 'add-noul' },
+          className: 'ui-btn ui-btn--sm ui-btn--quiet ui-btn--icon',
+          dataset: { fk: 'q-' + qid + '-rm', fkFallback: 'add-noul', tip: 'Remove this question.' },
           'aria-label': 'Remove question ' + q.key,
           textContent: '×',
           onClick: function () {
@@ -2176,8 +2289,8 @@
         card.appendChild(
           el('div', { className: 'dc-q-head' }, [
             enabledCheck,
-            el('span', { className: 'dc-type-tag', textContent: q.type }),
-            keyInput,
+            el('span', { className: 'dc-type-tag', textContent: q.type, dataset: { tip: TYPE_TIPS[q.type] || null } }),
+            el('label', { className: 'dc-q-key' }, [el('span', { className: 'ui-label', textContent: 'Key' }), keyInput]),
             removeQBtn
           ])
         );
@@ -2196,7 +2309,7 @@
           }
         });
         fields[qid + '|instructions'] = instInput;
-        card.appendChild(instInput);
+        card.appendChild(el('label', { className: 'dc-field' }, [el('span', { className: 'ui-label', textContent: 'Question' }), instInput]));
 
         if (q.type === 'noul') {
           const tdInput = el('input', {
@@ -2225,12 +2338,12 @@
           });
           card.appendChild(
             el('div', { className: 'dc-q-subgrid' }, [
-              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'When Yes (true_description)' }), tdInput]),
-              el('div', null, [el('span', { className: 'dc-field-label', textContent: 'When No (false_description)' }), fdInput])
+              el('label', { className: 'dc-field' }, [el('span', { className: 'ui-label', textContent: 'When yes', dataset: { tip: 'Sent as criteria.true_description.' } }), tdInput]),
+              el('label', { className: 'dc-field' }, [el('span', { className: 'ui-label', textContent: 'When no', dataset: { tip: 'Sent as criteria.false_description.' } }), fdInput])
             ])
           );
         } else if (q.type === 'choice') {
-          const optWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } });
+          const optWrap = el('div', { className: 'dc-stack' }, [el('span', { className: 'ui-label', textContent: 'Options: key, when to pick it' })]);
           if (!Array.isArray(q.options)) q.options = [];
           q.options.forEach(function (opt, oIdx) {
             if (!opt || typeof opt !== 'object') return;
@@ -2267,8 +2380,12 @@
                 optDescInput,
                 el('button', {
                   type: 'button',
-                  className: 'dc-btn dc-btn--ghost dc-btn--sm',
-                  dataset: { fk: 'q-' + qid + '-opt-' + oIdx + '-rm', fkFallback: 'q-' + qid + '-add-opt' },
+                  className: 'ui-btn ui-btn--sm ui-btn--quiet ui-btn--icon',
+                  dataset: {
+                    fk: 'q-' + qid + '-opt-' + oIdx + '-rm',
+                    fkFallback: 'q-' + qid + '-add-opt',
+                    tip: q.options.length <= 2 ? 'A category question needs at least two options.' : 'Remove this option.'
+                  },
                   textContent: '×',
                   disabled: q.options.length <= 2,
                   'aria-label': 'Remove option ' + (oIdx + 1),
@@ -2284,7 +2401,7 @@
             el('div', null, [
               el('button', {
                 type: 'button',
-                className: 'dc-btn dc-btn--sm',
+                className: 'ui-btn ui-btn--sm',
                 dataset: { fk: 'q-' + qid + '-add-opt' },
                 textContent: '+ Add Option',
                 onClick: function () {
@@ -2316,7 +2433,7 @@
           );
           card.appendChild(optWrap);
         } else if (q.type === 'score') {
-          const lvlWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } });
+          const lvlWrap = el('div', { className: 'dc-stack' }, [el('span', { className: 'ui-label', textContent: 'Rubric levels, lowest first' })]);
           if (!Array.isArray(q.levels)) q.levels = [];
           q.levels.forEach(function (lvl, lIdx) {
             const lvlInput = el('input', {
@@ -2339,8 +2456,12 @@
                 lvlInput,
                 el('button', {
                   type: 'button',
-                  className: 'dc-btn dc-btn--ghost dc-btn--sm',
-                  dataset: { fk: 'q-' + qid + '-lvl-' + lIdx + '-rm', fkFallback: 'q-' + qid + '-add-lvl' },
+                  className: 'ui-btn ui-btn--sm ui-btn--quiet ui-btn--icon',
+                  dataset: {
+                    fk: 'q-' + qid + '-lvl-' + lIdx + '-rm',
+                    fkFallback: 'q-' + qid + '-add-lvl',
+                    tip: q.levels.length <= 2 ? 'A rubric needs at least two levels.' : 'Remove this level.'
+                  },
                   textContent: '×',
                   disabled: q.levels.length <= 2,
                   'aria-label': 'Remove level ' + lIdx,
@@ -2357,7 +2478,7 @@
             el('div', null, [
               el('button', {
                 type: 'button',
-                className: 'dc-btn dc-btn--sm',
+                className: 'ui-btn ui-btn--sm',
                 dataset: { fk: 'q-' + qid + '-add-lvl' },
                 textContent: '+ Add Rubric Level',
                 onClick: function () {
@@ -2437,10 +2558,10 @@
       const questionsSection = el('section', { className: 'dc-section' }, [
         el('div', { className: 'dc-section-head' }, [
           questionsCountLabel,
-          el('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } }, [
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-noul' }, textContent: '+ Yes/No (noul)', onClick: function () { addQuestion('noul'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-choice' }, textContent: '+ Category (choice)', onClick: function () { addQuestion('choice'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-score' }, textContent: '+ Rubric (score)', onClick: function () { addQuestion('score'); } })
+          el('div', { className: 'dc-row' }, [
+            el('button', { type: 'button', className: 'ui-btn ui-btn--sm', dataset: { fk: 'add-noul', tip: 'Add a ' + TYPE_TIPS.noul.charAt(0).toLowerCase() + TYPE_TIPS.noul.slice(1) }, textContent: '+ Yes/No (noul)', onClick: function () { addQuestion('noul'); } }),
+            el('button', { type: 'button', className: 'ui-btn ui-btn--sm', dataset: { fk: 'add-choice', tip: 'Add a ' + TYPE_TIPS.choice.charAt(0).toLowerCase() + TYPE_TIPS.choice.slice(1) }, textContent: '+ Category (choice)', onClick: function () { addQuestion('choice'); } }),
+            el('button', { type: 'button', className: 'ui-btn ui-btn--sm', dataset: { fk: 'add-score', tip: 'Add a ' + TYPE_TIPS.score.charAt(0).toLowerCase() + TYPE_TIPS.score.slice(1) }, textContent: '+ Rubric (score)', onClick: function () { addQuestion('score'); } })
           ])
         ]),
         validationBox,
@@ -2461,13 +2582,13 @@
           el('div', { className: 'dc-error-panel', role: 'alert' }, [
             el('h4', { textContent: app.error.headline }),
             el('p', { textContent: app.error.detail }),
-            el('p', { style: { fontWeight: '600' }, textContent: app.error.remediation }),
-            el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, [
+            el('p', { className: 'dc-error-fix', textContent: app.error.remediation }),
+            el('div', { className: 'dc-row' }, [
               app.error.code !== 'MISSING_KEY'
                 ? el('button', {
                     type: 'button',
-                    className: 'dc-btn dc-btn--sm',
-                    dataset: { fk: 'err-retry' },
+                    className: 'ui-btn ui-btn--sm',
+                    dataset: { fk: 'err-retry', tip: 'Send the same request to Gemini again.' },
                     textContent: 'Retry Live',
                     onClick: function () {
                       runEvaluation({ resetGhost: false });
@@ -2477,8 +2598,8 @@
               isKeyError(app.error)
                 ? el('button', {
                     type: 'button',
-                    className: 'dc-btn dc-btn--sm',
-                    dataset: { fk: 'err-key' },
+                    className: 'ui-btn ui-btn--sm',
+                    dataset: { fk: 'err-key', tip: 'Open the key form to paste a working key.' },
                     textContent: 'Update API Key',
                     onClick: function (e) {
                       e.stopPropagation();
@@ -2490,8 +2611,14 @@
                 : null,
               el('button', {
                 type: 'button',
-                className: 'dc-btn dc-btn--sm',
-                dataset: { fk: 'err-demo', fkFallback: 'tab-results' },
+                className: 'ui-btn ui-btn--sm',
+                dataset: {
+                  fk: 'err-demo',
+                  fkFallback: 'tab-results',
+                  tip: app.error.code === 'MISSING_KEY'
+                    ? 'Show simulated answers instead; no key needed.'
+                    : 'Show simulated answers instead; your key stays saved.'
+                },
                 textContent: 'Switch to Demo Data',
                 onClick: function () {
                   app.mode = 'simulated';
@@ -2534,7 +2661,7 @@
                   el('span', { className: 'dc-type-tag', textContent: String(q.type) }),
                   el('span', { className: 'dc-res-key', textContent: qk })
                 ]),
-                el('div', { className: 'dc-key-note', textContent: 'No valid answer in the response (' + invalidKeys[qk] + '). See Raw Response.' })
+                el('div', { className: 'dc-key-note dc-invalid-note', textContent: 'No valid answer in the response (' + invalidKeys[qk] + '). See Raw Response.' })
               ])
             );
           }
@@ -2550,13 +2677,16 @@
             className: 'dc-noul-fill' + (isYes ? '' : ' is-below'),
             style: { width: Math.round(ans.noul * 100) + '%' }
           });
-          const track = el('div', { className: 'dc-noul-track dc-noul-wb-track' });
+          const track = el('div', {
+            className: 'dc-noul-track dc-noul-wb-track',
+            dataset: { tip: 'Drag the marker to move the cutoff between NO and YES.' }
+          });
           track.appendChild(fillEl);
           if (prev && prev.type === 'noul') {
             track.appendChild(
               el('div', {
                 className: 'dc-noul-ghost',
-                title: 'Previous run: ' + fmtPct(prev.noul),
+                dataset: { tip: "Previous run's probability of yes: " + fmtPct(prev.noul) + '.' },
                 style: { left: Math.round(prev.noul * 100) + '%' }
               })
             );
@@ -2565,7 +2695,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
-            dataset: { fk: 'wb-pin-' + qk },
+            dataset: { fk: 'wb-pin-' + qk, tip: 'Cutoff between NO and YES. Drag it or use the arrow keys.' },
             'aria-label': 'Decision cutoff for ' + qk,
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
@@ -2580,9 +2710,10 @@
               style: { left: Math.round(ans.noul * 100) + '%' }
             })
           );
-          const tickEl = el('span', { textContent: 'Cutoff ' + fmtPct(thresh) + ' (drag)' });
+          const tickEl = el('span', { textContent: 'Cutoff ' + fmtPct(thresh) });
           const verdictEl = el('span', {
             className: 'dc-verdict-badge' + (isYes ? '' : ' is-no'),
+            dataset: { tip: 'Distance from the cutoff: MARGINAL within 12 points; HIGH past 78% or under 22%.' },
             textContent: noulBand(ans.noul, thresh)
           });
 
@@ -2603,7 +2734,13 @@
                   el('div', { className: 'dc-res-key-row' }, [
                     el('span', { className: 'dc-type-tag', textContent: 'noul · Yes/No' }),
                     el('span', { className: 'dc-res-key', textContent: qk }),
-                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: deltaStr }) : null
+                    deltaStr
+                      ? el('span', {
+                          className: 'dc-delta-chip',
+                          dataset: { tip: 'Change since the previous run, in percentage points.' },
+                          textContent: deltaStr
+                        })
+                      : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
@@ -2620,7 +2757,11 @@
               ]),
               el('div', { className: 'dc-verdict-row' }, [
                 verdictEl,
-                el('span', { className: 'dc-mono', textContent: 'confidence ' + fmtPct(ans.confidence) })
+                el('span', {
+                  className: 'dc-mono',
+                  dataset: { tip: "The API's own confidence field for this answer." },
+                  textContent: 'confidence ' + fmtPct(ans.confidence)
+                })
               ])
             ])
           );
@@ -2632,7 +2773,7 @@
             ribbon.appendChild(
               el('div', {
                 className: 'dc-choice-seg',
-                title: optionHumanLabel(q, r.key) + ': ' + fmtPct(r.prob),
+                dataset: { tip: optionHumanLabel(q, r.key) + ': ' + fmtPct(r.prob) + '.' },
                 style: {
                   width: Math.max(2, r.prob * 100) + '%',
                   background: CHOICE_SWATCHES[idx % CHOICE_SWATCHES.length]
@@ -2652,7 +2793,7 @@
               Number.isFinite(prevP)
                 ? el('div', {
                     className: 'dc-bar-ghost',
-                    title: 'Previous: ' + fmtPct(prevP),
+                    dataset: { tip: "Previous run's probability: " + fmtPct(prevP) + '.' },
                     style: { left: Math.round(Schema.clamp(prevP, 0, 1) * 100) + '%' }
                   })
                 : null
@@ -2661,8 +2802,8 @@
             rows.appendChild(
               el('div', { className: 'dc-choice-item' }, [
                 el('div', { className: 'dc-choice-label' }, [
-                  el('span', { className: 'dc-choice-opt-key', textContent: optionHumanLabel(q, r.key), title: r.key }),
-                  r.description ? el('span', { className: 'dc-choice-opt-desc', textContent: r.description, title: r.description }) : null
+                  el('span', { className: 'dc-choice-opt-key', textContent: optionHumanLabel(q, r.key), dataset: { tip: 'Option key: ' + r.key + '.' } }),
+                  r.description ? el('span', { className: 'dc-choice-opt-desc', textContent: r.description, dataset: { tip: r.description } }) : null
                 ]),
                 barTrack,
                 el('span', { className: 'dc-choice-prob', textContent: (r.prob * 100).toFixed(1) + '%' })
@@ -2681,9 +2822,10 @@
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
                 el('div', { className: 'dc-res-hero' }, [
-                  el('span', { className: 'dc-hero-num', style: { fontSize: '16px' }, textContent: optionHumanLabel(q, winnerKey) }),
+                  el('span', { className: 'dc-hero-num dc-hero-num--word', textContent: optionHumanLabel(q, winnerKey) }),
                   el('span', {
                     className: 'dc-hero-sub',
+                    dataset: { tip: 'Σp: the probabilities added up. Lead: winner minus runner-up.' },
                     textContent: 'Σp ' + ans.sum.toFixed(3) + ' · lead +' + Math.round(ans.margin * 100) + ' pts'
                   })
                 ])
@@ -2704,7 +2846,7 @@
           const levelPcts = Schema.toDisplayPercents(ans.levels.map(function (l) { return l.prob; }));
           ans.levels.forEach(function (lvl, idx) {
             hist.appendChild(
-              el('div', { className: 'dc-hist-col', title: 'Level ' + lvl.index + ': ' + levelPcts[idx] + '%' }, [
+              el('div', { className: 'dc-hist-col', dataset: { tip: 'Level ' + lvl.index + ': ' + levelPcts[idx] + '% probability.' } }, [
                 el('span', { className: 'dc-hist-pct', textContent: levelPcts[idx] + '%' }),
                 el('div', {
                   className: 'dc-hist-bar' + (lvl.index === ans.peakIndex ? ' is-peak' : ''),
@@ -2724,7 +2866,7 @@
           ruler.appendChild(
             el('div', {
               className: 'dc-ev-pointer',
-              title: 'Expected score = ' + ans.score.toFixed(2),
+              dataset: { tip: 'Weighted average score: ' + ans.score.toFixed(2) + ' of ' + ans.max + '.' },
               style: { left: evPct + '%' }
             })
           );
@@ -2735,7 +2877,7 @@
               el('div', { className: 'dc-rubric-row' + (lvl.index === ans.peakIndex ? ' is-peak' : '') }, [
                 el('span', { className: 'dc-mono', textContent: String(lvl.index) }),
                 el('span', { textContent: lvl.description }),
-                el('span', { className: 'dc-mono', style: { textAlign: 'right' }, textContent: levelPcts[idx] + '%' })
+                el('span', { className: 'dc-mono dc-num-right', textContent: levelPcts[idx] + '%' })
               ])
             );
           });
@@ -2747,7 +2889,13 @@
                   el('div', { className: 'dc-res-key-row' }, [
                     el('span', { className: 'dc-type-tag', textContent: 'score · Rubric' }),
                     el('span', { className: 'dc-res-key', textContent: qk }),
-                    deltaStr ? el('span', { className: 'dc-delta-chip', textContent: 'Δ ' + deltaStr }) : null
+                    deltaStr
+                      ? el('span', {
+                          className: 'dc-delta-chip',
+                          dataset: { tip: 'Change in score since the previous run.' },
+                          textContent: 'Δ ' + deltaStr
+                        })
+                      : null
                   ]),
                   el('div', { className: 'dc-res-inst', textContent: q.instructions })
                 ]),
@@ -2755,6 +2903,7 @@
                   el('span', { className: 'dc-hero-num', textContent: ans.score.toFixed(2) }),
                   el('span', {
                     className: 'dc-hero-sub',
+                    dataset: { tip: 'σ: spread of the level probabilities, in levels; lower is surer.' },
                     textContent: '/ ' + ans.max + (certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum) ? ' · ' + certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum) : '') + ' (σ ' + ans.stdDev.toFixed(2) + ')'
                   })
                 ])
@@ -2806,7 +2955,11 @@
             ? 'LIVE ERROR · ' + (app.error.httpStatus ? 'HTTP ' + app.error.httpStatus : app.error.code)
             : 'DEMO DATA · Add a Gemini API key to call gemini-decision-1 live';
 
-      const provBanner = el('div', { className: 'dc-provenance', dataset: { mode: provMode } }, [
+      // Provenance: idle grey for demo, green only for a live call that returned, rust for an error.
+      const provBanner = el('div', {
+        className: 'dc-provenance',
+        dataset: { mode: provMode, tone: provMode === 'live' ? 'ok' : provMode === 'error' ? 'attention' : 'idle' }
+      }, [
         el('div', { className: 'dc-provenance-left' }, [
           el('span', { className: 'dc-dot', 'aria-hidden': 'true' }),
           provLabel
@@ -2815,10 +2968,16 @@
           ? el('div', { className: 'dc-telemetry-chips' }, [
               el('span', {
                 className: 'dc-chip dc-chip--hero',
+                dataset: { tip: 'Words the model generated for this request: none, only probabilities.' },
                 textContent: 'output_tokens: ' + usage.total_output_tokens
               }),
               el('span', {
                 className: 'dc-chip',
+                dataset: {
+                  tip: provMode === 'simulated'
+                    ? 'Estimated input tokens (~): the demo does not call the API.'
+                    : 'Input tokens billed for this request, by modality.'
+                },
                 textContent: (provMode === 'simulated' ? '~' : '') + 'in: ' + usage.total_input_tokens + (modSummary ? ' (' + modSummary + ')' : '')
               })
             ])
@@ -2832,7 +2991,7 @@
       ];
       const tabs = el(
         'div',
-        { className: 'dc-tabs', role: 'tablist', 'aria-label': 'Output inspector' },
+        { className: 'ui-seg dc-tabs', role: 'tablist', 'aria-label': 'Output inspector' },
         tabSpecs.map(function (entry, idx) {
           const isSelected = app.activeTab === entry[0];
           return el('button', {
@@ -2840,7 +2999,6 @@
             type: 'button',
             role: 'tab',
             dataset: { fk: 'tab-' + entry[0] },
-            className: 'dc-tab-btn',
             tabindex: isSelected ? '0' : '-1',
             'aria-selected': String(isSelected),
             'aria-controls': 'dc-tabpanel',
@@ -2866,7 +3024,7 @@
         id: 'dc-tabpanel',
         role: 'tabpanel',
         'aria-labelledby': 'dc-tab-' + app.activeTab,
-        style: { display: 'flex', flexDirection: 'column', gap: '10px' }
+        className: 'dc-tabpanel'
       });
       wbRefs.tabContent = tabContent;
       wbRefs.requestPre = null;
@@ -2882,8 +3040,8 @@
 
         const copyBtn = el('button', {
           type: 'button',
-          className: 'dc-btn dc-btn--sm',
-          dataset: { fk: 'copy-req' },
+          className: 'ui-btn ui-btn--sm dc-copy-btn',
+          dataset: { fk: 'copy-req', tip: 'Copy exactly what is shown below; the key stays redacted.' },
           textContent: app.requestFormat === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
             const latestBody = Schema.buildRequestBody(app.state);
@@ -2918,11 +3076,10 @@
         });
 
         const toolbar = el('div', { className: 'dc-code-toolbar' }, [
-          el('div', { className: 'dc-seg' }, [
+          el('div', { className: 'ui-seg dc-seg', role: 'group', 'aria-label': 'Request format' }, [
             el('button', {
               type: 'button',
-              className: 'dc-seg-btn',
-              dataset: { fk: 'fmt-json' },
+              dataset: { fk: 'fmt-json', tip: 'The POST body sent to v1beta/decisions.' },
               'aria-pressed': String(app.requestFormat === 'json'),
               textContent: 'JSON Body',
               onClick: function () {
@@ -2932,8 +3089,7 @@
             }),
             el('button', {
               type: 'button',
-              className: 'dc-seg-btn',
-              dataset: { fk: 'fmt-curl' },
+              dataset: { fk: 'fmt-curl', tip: 'A terminal command; the key reads $GEMINI_API_KEY, never yours.' },
               'aria-pressed': String(app.requestFormat === 'curl'),
               textContent: 'cURL (redacted)',
               onClick: function () {
@@ -2942,12 +3098,12 @@
               }
             })
           ]),
-          el('div', { style: { display: 'flex', alignItems: 'center', gap: '10px' } }, [
+          el('div', { className: 'dc-row' }, [
             app.state.image
               ? el('label', { className: 'dc-checkbox-row' }, [
                   el('input', {
                     type: 'checkbox',
-                    dataset: { fk: 'b64' },
+                    dataset: { fk: 'b64', tip: 'Show the full image data instead of a shortened placeholder.' },
                     checked: app.includeBase64,
                     onChange: function (e) {
                       app.includeBase64 = e.target.checked;
@@ -2983,8 +3139,8 @@
 
         const copyRespBtn = el('button', {
           type: 'button',
-          className: 'dc-btn dc-btn--sm',
-          dataset: { fk: 'copy-resp' },
+          className: 'ui-btn ui-btn--sm dc-copy-btn',
+          dataset: { fk: 'copy-resp', tip: 'Copy the response JSON shown below.' },
           textContent: 'Copy Response',
           onClick: function () {
             copyToClipboard(rawStr, dialog.open ? dialog : document.body)
@@ -3248,7 +3404,7 @@
       renderedPresetBtns = [];
       cells.forEach(function (c) {
         if (!c) return;
-        c.classList.remove('is-scanning', 'is-loading', 'is-dimmed', 'is-peer-highlight');
+        c.classList.remove('is-scanning', 'is-loading', 'is-dimmed', 'is-peer-highlight', 'ui-tile');
         clearNode(c);
         if (c.__dcUnmount === unmount) {
           delete c.__dcUnmount;
