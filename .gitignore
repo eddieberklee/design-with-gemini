@@ -8,7 +8,9 @@
 .vscode/
 
 # Agent worktrees
+.worktrees
 .worktrees/
+.worktrees.noindex/
 
 # Secrets & local env
 .env
