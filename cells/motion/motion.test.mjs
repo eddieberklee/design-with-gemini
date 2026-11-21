@@ -278,6 +278,10 @@ test('Hardened bridge server blocks traversal/dotfiles/malformed URIs/oversized 
     // Legitimate web assets work
     const okHtml = await fetch(`http://127.0.0.1:${st.httpPort}/cells/motion/phone.html`);
     assert.equal(okHtml.status, 200);
+    // phone.html takes its tokens from ../../ui/base.css; the bridge must serve it to the iPhone
+    const okTokens = await fetch(`http://127.0.0.1:${st.httpPort}/ui/base.css`);
+    assert.equal(okTokens.status, 200);
+    assert.match(await okTokens.text(), /--ui-paper/);
 
     // Oversized POST returns 413; invalid session returns 400
     const bigPost = await fetch(`http://127.0.0.1:${st.httpPort}/api/motion/send?s=TEST99AA&role=phone`, {
@@ -919,5 +923,61 @@ test('mountMotionCell opens no relay link when no scannable QR URL exists (file:
   const unmount = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
   assert.equal(h.links.opened, 0, 'no public broker connection while the tile can only show SETUP');
   assert.equal(h.intervals(), 0);
+  unmount();
+});
+
+test('mountMotionCell pill and footer show a designed, truthful look for every link state', () => {
+  function views(h) {
+    const header = h.cellEl.children[0];
+    const pill = header.children[2].children[0];
+    const footLink = h.cellEl.children[2].children[0];
+    return {
+      label: pill.children[0].textContent,
+      tone: pill['data-tone'],
+      tip: pill['data-tip'],
+      name: pill['aria-label'],
+      foot: footLink.textContent,
+      footTip: footLink['data-tip']
+    };
+  }
+
+  const setup = makeUiHarness({ protocol: 'file:', hostname: '', origin: 'null', pathname: '/x/index.html' });
+  const unmountSetup = setup.win.MotionGrid.UI.mountMotionCell(setup.cellEl);
+  let v = views(setup);
+  assert.equal(v.label, 'SETUP');
+  assert.equal(v.tone, 'attention');
+  assert.match(v.tip, /No HTTPS link/);
+  assert.equal(v.name, 'Phone link: SETUP', 'pill keeps a spoken name when the tiny tile hides its label');
+  assert.match(v.foot, /^NO LINK · [A-Z0-9]{4}$/);
+  assert.match(v.footTip, /No relay is open/);
+  unmountSetup();
+
+  const h = makeUiHarness(HTTPS_ORIGIN);
+  const unmount = h.win.MotionGrid.UI.mountMotionCell(h.cellEl);
+  v = views(h);
+  assert.equal(v.label, 'LINKING');
+  assert.equal(v.tone, 'attention');
+
+  h.links.last.opts.onStatus('ready', { transport: 'mqtt' });
+  v = views(h);
+  assert.equal(v.label, 'SCAN QR');
+  assert.equal(v.tone, 'idle', 'a ready relay with no phone is idle grey, never green');
+  assert.match(v.tip, /show the QR code/);
+  assert.match(v.foot, /^MQTT WSS · /);
+  assert.match(v.footTip, /public MQTT relay/);
+
+  h.links.last.opts.onStatus('failed', { transport: 'mqtt' });
+  v = views(h);
+  assert.equal(v.label, 'OFFLINE');
+  assert.equal(v.tone, 'attention');
+  assert.match(v.tip, /Click to retry/);
+  assert.match(v.foot, /^MQTT WSS OFFLINE · /);
+  assert.match(v.footTip, /gave up/);
+
+  h.links.last.opts.onMessage({ t: 'hello', v: 1 });
+  v = views(h);
+  assert.equal(v.label, 'PHONE LIVE');
+  assert.equal(v.tone, 'ok', 'green only while a phone really talks to the page');
+  assert.match(v.tip, /paired/);
   unmount();
 });

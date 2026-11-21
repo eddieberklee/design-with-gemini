@@ -1,41 +1,25 @@
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  -webkit-tap-highlight-color: transparent;
-}
+/* Cell 03 phone controller (phone.html). Tokens and ui-pill / ui-label / ui-readout / ui-slider
+   come from ../../ui/base.css; this file sizes them for a hand: every tap target is 44 px. */
 
-:root {
-  --bg: #111110;
-  --surface: #1b1b19;
-  --surface-2: #242421;
-  --border: #2e2e2a;
-  --ink: #f7f7f5;
-  --ink-2: #a5a59e;
-  --ink-3: #8c8c85;
-  --accent: #e85d2a;
-  --accent-dim: rgba(232, 93, 42, 0.18);
-  --live: #10b981;
-  --warn: #f59e0b;
-  --focus: #60a5fa;
-  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, monospace;
-}
-
-:is(button, input):focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-html, body {
+html,
+body {
   height: 100%;
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--sans);
+}
+
+body {
+  padding: 0;                 /* base.css pads the grid page; the phone page is edge to edge */
+  background: var(--ui-paper);
+  color: var(--ui-ink);
   overscroll-behavior: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:is(button, input):focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .ph-app {
@@ -43,126 +27,124 @@ html, body {
   max-width: 480px;
   margin-inline: auto;
   padding:
-    calc(10px + env(safe-area-inset-top))
-    calc(16px + env(safe-area-inset-right))
-    calc(12px + env(safe-area-inset-bottom))
-    calc(16px + env(safe-area-inset-left));
+    calc(var(--ui-2) + env(safe-area-inset-top))
+    calc(var(--ui-4) + env(safe-area-inset-right))
+    calc(var(--ui-3) + env(safe-area-inset-bottom))
+    calc(var(--ui-4) + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--ui-3);
 }
 
-/* Header */
+/* Header ------------------------------------------------------------------------------- */
+
 .ph-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ui-2);
+  min-height: 44px;
 }
 
 .ph-brand {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.ph-index {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ink-3);
-  padding: 2px 6px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  align-items: baseline;
+  gap: var(--ui-2);
+  min-width: 0;
 }
 
 .ph-title {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  font: 600 var(--ui-fs-4) / 1.2 var(--ui-sans);
+  letter-spacing: -0.01em;
 }
 
+/* Status pill: LIVE (green) only while the desktop answers; waiting is grey; failed is rust. */
 .ph-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--warn);
+  height: 24px;
+  padding: 0 10px 0 9px;
+  cursor: default;
+}
+
+button.ph-status::after {
+  inset: -10px -6px;          /* 44 px tall tap target for OFFLINE · TAP */
 }
 
 .ph-status[data-state="ready"] {
-  color: var(--live);
-  border-color: rgba(16, 185, 129, 0.35);
+  color: var(--ui-positive);
+  border-color: color-mix(in srgb, var(--ui-positive) 30%, transparent);
+  background: var(--ui-positive-tint);
 }
 
-.ph-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.ph-status[data-state="ready"]::before {
+  background: var(--ui-positive);
 }
 
-/* Non-HTTPS warning banner */
+.ph-status[data-state="warn"] {
+  color: var(--ui-accent);
+  border-color: color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  background: var(--ui-accent-tint);
+  cursor: pointer;
+}
+
+.ph-status[data-state="warn"]::before {
+  background: var(--ui-accent);
+}
+
+/* Non-HTTPS banner --------------------------------------------------------------------- */
+
 .ph-banner {
-  padding: 9px 12px;
-  border-radius: 8px;
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
-  color: #fde68a;
-  font-size: 11.5px;
-  line-height: 1.38;
+  padding: var(--ui-2) var(--ui-3);
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-accent-tint);
+  font: 400 var(--ui-fs-2) / 1.45 var(--ui-sans);
+  color: var(--ui-ink);
+}
+
+.ph-banner[hidden] {
+  display: none;
 }
 
 .ph-banner strong {
   display: block;
   margin-bottom: 2px;
-  color: #fef3c7;
+  font-weight: 600;
+  color: var(--ui-accent);
 }
 
 .ph-banner code {
-  font-family: var(--mono);
-  font-size: 10.5px;
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
 }
 
-/* Stage */
+/* Stage: the dial is the hero ---------------------------------------------------------- */
+
 .ph-stage {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--ui-4);
 }
 
 .ph-dial-wrap {
   position: relative;
-  width: min(72vw, 31dvh, 260px);
+  width: min(78vw, 38dvh, 320px);
   aspect-ratio: 1 / 1;
+  border: 1px solid var(--ui-hairline);
   border-radius: 50%;
-  background: radial-gradient(circle at 50% 42%, #20201d 0%, #151513 72%);
-  border: 1px solid var(--border);
-  box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.55), 0 14px 36px rgba(0, 0, 0, 0.45);
+  background: var(--ui-surface);
   display: flex;
   align-items: center;
   justify-content: center;
   touch-action: none;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color var(--ui-dur) var(--ui-ease), box-shadow var(--ui-dur) var(--ui-ease);
 }
 
-.ph-dial-wrap.is-clutched {
-  border-color: var(--accent);
-  box-shadow: inset 0 2px 14px rgba(0, 0, 0, 0.55), 0 0 0 3px var(--accent-dim);
+.ph-dial-wrap.is-clutched {        /* clutch held: motion is being applied */
+  border-color: var(--ui-accent);
+  box-shadow: 0 0 0 4px var(--ui-accent-tint);
 }
 
 .ph-dial-svg {
@@ -173,59 +155,62 @@ html, body {
   pointer-events: none;
 }
 
+.ph-ring { stroke: var(--ui-line); }
+#ph-arc-bg { stroke: var(--ui-hairline); }
+#ph-arc-active { stroke: var(--ui-ink); }
+.ph-detent { stroke: var(--ui-ink-3); }
+.ph-guide { stroke: var(--ui-hairline); }
+.ph-needle-line { stroke: var(--ui-ink); }
+#ph-bubble { stroke: var(--ui-accent); }   /* the live sensor position */
+
 .ph-dial-center {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 3px;
+  gap: var(--ui-1);
   pointer-events: none;
   text-align: center;
 }
 
 .ph-size-px {
-  font-family: var(--mono);
+  font: 500 var(--ui-fs-5) / 1 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  line-height: 1;
+  letter-spacing: -0.02em;
 }
 
 .ph-scale-val {
-  font-family: var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--ui-surface);  /* opaque: the bubble ring rests at the dial centre under it */
+  font: 500 var(--ui-fs-3) / 1.3 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--accent);
-  /* Opaque chip: the same-colour bubble reticle rests at dial centre, directly under this line */
-  background: #181816;
-  border-radius: 4px;
-  padding: 0 5px;
+  color: var(--ui-ink-2);
 }
 
 .ph-cols-meta {
-  font-family: var(--mono);
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 10px;
-  color: var(--ink-2);
+  letter-spacing: var(--ui-caps-track);
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
 }
 
-/* iOS Permission Gate Overlay */
+/* iOS permission gate ------------------------------------------------------------------ */
+
 .ph-gate {
   position: absolute;
-  inset: -4px;
+  inset: -1px;
   z-index: 5;
   border-radius: 50%;
-  background: rgba(17, 17, 16, 0.93);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--ui-surface) 95%, transparent);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 18px;
+  gap: var(--ui-2);
+  padding: var(--ui-4);
   text-align: center;
 }
 
@@ -233,92 +218,93 @@ html, body {
   display: none;
 }
 
-.ph-enable-btn {
+.ph-enable-btn {                   /* the page's one primary action */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
-  width: 164px;
-  height: 66px;
-  border-radius: 999px;
+  gap: 3px;
+  min-width: 156px;
+  height: 56px;
+  padding: 0 var(--ui-6);
   border: 0;
-  background: var(--accent);
-  color: #ffffff;
+  border-radius: 999px;
+  background: var(--ui-ink);
+  color: var(--ui-surface);
   cursor: pointer;
-  box-shadow: 0 10px 26px rgba(232, 93, 42, 0.4);
-  transition: transform 120ms ease;
+  transition: transform var(--ui-dur) var(--ui-ease);
 }
 
 .ph-enable-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.97);
 }
 
 .ph-enable-kicker {
-  font-family: var(--mono);
-  font-size: 9px;
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.88;
+  color: var(--ui-hairline);
 }
 
 .ph-enable-main {
-  font-size: 16px;
-  font-weight: 700;
-  letter-spacing: -0.01em;
+  font: 600 var(--ui-fs-4) / 1.1 var(--ui-sans);
 }
 
 .ph-gate-note {
-  font-size: 11px;
-  line-height: 1.3;
-  color: var(--ink-2);
-  max-width: 196px;
+  max-width: 200px;
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
 }
 
 .ph-dismiss-btn {
+  min-height: 44px;
+  padding: 0 var(--ui-3);
   border: 0;
   background: transparent;
-  color: var(--ink-2);
-  font-family: var(--mono);
-  font-size: 10px;
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
   text-decoration: underline;
-  padding: 4px 8px;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
-/* 3-Axis Impulse Meters */
+/* Motion meters: label + value over a hairline track with a centre tick ---------------- */
+
 .ph-meters {
   width: 100%;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--ui-4);
 }
 
 .ph-meter {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 6px 8px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--ui-1);
+  min-width: 0;
 }
 
 .ph-meter-head {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 9.5px;
-  color: var(--ink-2);
+  gap: var(--ui-1);
 }
 
 .ph-meter-track {
   position: relative;
   height: 6px;
-  border-radius: 3px;
-  background: #2b2b28;
-  overflow: hidden;
+}
+
+.ph-meter-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-hairline);
 }
 
 .ph-meter-mid {
@@ -327,122 +313,121 @@ html, body {
   top: 0;
   bottom: 0;
   width: 1px;
-  background: #52524c;
+  background: var(--ui-line);
 }
 
 .ph-meter-fill {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  background: #d6d6cf;
+  top: 2px;
+  height: 2px;
+  background: var(--ui-ink);
 }
 
-.ph-meter-fill.is-accent {
-  background: var(--accent);
-}
+/* Controls (44 px tap targets) ------------------------------------------------------------ */
 
-/* Bottom Controls (44pt Apple HIG tap targets) */
 .ph-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ui-2);
 }
 
 .ph-mode-hint {
+  min-height: 1.4em;
   text-align: center;
-  font-size: 11.5px;
-  color: var(--ink-2);
-  min-height: 16px;
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
 }
 
 .ph-seg {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
-  padding: 4px;
-  border-radius: 10px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius);
+  background: var(--ui-well);
 }
 
 .ph-seg-btn {
   height: 44px;
   border: 0;
-  border-radius: 7px;
+  border-radius: calc(var(--ui-radius) - 2px);
   background: transparent;
-  color: var(--ink-2);
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-3) / 1 var(--ui-sans);
   cursor: pointer;
 }
 
 .ph-seg-btn[aria-pressed="true"] {
-  background: var(--ink);
-  color: var(--bg);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  box-shadow: 0 0 0 1px var(--ui-line), 0 1px 1px rgba(22, 22, 21, 0.05);
 }
 
 .ph-action-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--ui-2);
 }
 
 .ph-btn {
   height: 44px;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: var(--sans);
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 500 var(--ui-fs-3) / 1 var(--ui-sans);
   cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease);
 }
 
 .ph-btn:active {
-  background: var(--surface-2);
+  background: var(--ui-well);
 }
 
-.ph-btn[aria-pressed="true"] {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: #ffd5c5;
+.ph-btn[aria-pressed="true"] {     /* layout locked */
+  background: var(--ui-well);
+  border-color: var(--ui-ink);
 }
 
-.ph-btn--accent {
-  border-color: rgba(232, 93, 42, 0.5);
-  color: #ffb499;
+#ph-clutch-btn[aria-pressed="true"] {   /* clutch armed: rust, like any armed toggle */
+  background: var(--ui-accent-tint);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
 }
 
 .ph-trim {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 9px;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  gap: 2px;
+  padding-top: var(--ui-1);
 }
 
 .ph-trim-head {
   display: flex;
   justify-content: space-between;
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  font-size: 9.5px;
-  color: var(--ink-3);
+  gap: var(--ui-2);
 }
 
 .ph-slider {
-  width: 100%;
-  height: 36px;
-  accent-color: var(--accent);
+  height: 44px;
+}
+
+.ph-slider::-webkit-slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin-top: -11px;
+}
+
+.ph-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .ph-dial-wrap,
-  .ph-enable-btn {
+  .ph-enable-btn,
+  .ph-btn {
     transition: none !important;
   }
 }

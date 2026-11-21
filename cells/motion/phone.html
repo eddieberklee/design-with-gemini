@@ -4,46 +4,48 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#111110">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f5f5f3">
   <title>Motion Grid Controller</title>
+  <!-- Tokens only (--ui-*, ui-pill, ui-label, ui-readout, ui-slider); no tooltip script on the phone. -->
+  <link rel="stylesheet" href="../../ui/base.css">
   <link rel="stylesheet" href="phone.css">
 </head>
 <body>
   <main class="ph-app" id="ph-app">
     <header class="ph-header">
       <div class="ph-brand">
-        <span class="ph-index">03</span>
+        <span class="ui-tile-index ph-index">03</span>
         <span class="ph-title">Motion Grid</span>
       </div>
-      <div class="ph-status" id="ph-status" data-state="connecting">
-        <span class="ph-dot" aria-hidden="true"></span>
-        <span id="ph-status-text">LINKING</span>
-      </div>
+      <!-- A button so OFFLINE · TAP is reachable; phone.js retries only from the failed state. -->
+      <button type="button" class="ui-pill ph-status" id="ph-status" data-state="connecting">
+        <span id="ph-status-text" class="ui-pill-label">LINKING</span>
+      </button>
     </header>
 
     <!-- Non-HTTPS diagnostic banner (shown automatically if iOS opens over HTTP) -->
     <section class="ph-banner" id="ph-https-banner" hidden>
-      <strong>HTTPS Required on iPhone</strong>
-      <p>iOS Safari disables the accelerometer on non-HTTPS URLs. Open the HTTPS tunnel URL from <code>node cells/motion/server.mjs</code>, or use the manual slider below.</p>
+      <strong>HTTPS required on iPhone</strong>
+      <p>iPhone Safari turns motion off on non-HTTPS pages. Open the HTTPS address that <code>node cells/motion/server.mjs</code> prints, or use the manual size slider below.</p>
     </section>
 
     <!-- Central Interactive Instrument Dial & Clutch Pad -->
     <section class="ph-stage">
       <div class="ph-dial-wrap" id="ph-dial-pad" aria-label="Motion dial and clutch touch pad">
         <svg class="ph-dial-svg" viewBox="0 0 240 240" aria-hidden="true">
-          <circle cx="120" cy="120" r="106" fill="none" stroke="#262624" stroke-width="2" />
-          <path id="ph-arc-bg" d="M 45.05 194.95 A 106 106 0 1 1 194.95 194.95" fill="none" stroke="#2c2c29" stroke-width="6" stroke-linecap="round" />
-          <path id="ph-arc-active" d="M 45.05 194.95 A 106 106 0 0 1 120 14" fill="none" stroke="#e85d2a" stroke-width="6" stroke-linecap="round" />
+          <circle class="ph-ring" cx="120" cy="120" r="106" fill="none" stroke-width="1" />
+          <path id="ph-arc-bg" d="M 45.05 194.95 A 106 106 0 1 1 194.95 194.95" fill="none" stroke-width="4" stroke-linecap="round" />
+          <path id="ph-arc-active" d="M 45.05 194.95 A 106 106 0 0 1 120 14" fill="none" stroke-width="4" stroke-linecap="round" />
           <!-- Neutral 1.00x detent tick at 0 deg -->
-          <line x1="120" y1="7" x2="120" y2="21" stroke="#f7f7f5" stroke-width="2" opacity="0.7" />
-          <circle cx="120" cy="120" r="56" fill="none" stroke="#232321" stroke-width="1" stroke-dasharray="3 4" />
-          <line x1="64" y1="120" x2="176" y2="120" stroke="#232321" stroke-width="1" />
-          <line x1="120" y1="64" x2="120" y2="176" stroke="#232321" stroke-width="1" />
+          <line class="ph-detent" x1="120" y1="7" x2="120" y2="21" stroke-width="1.5" />
+          <circle class="ph-guide" cx="120" cy="120" r="56" fill="none" stroke-width="1" stroke-dasharray="3 4" />
+          <line class="ph-guide" x1="64" y1="120" x2="176" y2="120" stroke-width="1" />
+          <line class="ph-guide" x1="120" y1="64" x2="120" y2="176" stroke-width="1" />
           <!-- Ring (not a filled dot): at rest it sits under the centred size/scale readout, which must stay legible -->
-          <circle id="ph-bubble" cx="120" cy="120" r="8" fill="none" stroke="#e85d2a" stroke-width="2.5" opacity="0.9" />
+          <circle id="ph-bubble" cx="120" cy="120" r="8" fill="none" stroke-width="2" />
           <g id="ph-needle" transform="rotate(0 120 120)">
-            <line x1="120" y1="24" x2="120" y2="42" stroke="#e85d2a" stroke-width="3" stroke-linecap="round" />
+            <line class="ph-needle-line" x1="120" y1="24" x2="120" y2="42" stroke-width="2.5" stroke-linecap="round" />
           </g>
         </svg>
 
@@ -56,10 +58,10 @@
         <!-- iOS Permission Gate Overlay -->
         <div class="ph-gate" id="ph-gate">
           <button type="button" class="ph-enable-btn" id="ph-enable-btn">
-            <span class="ph-enable-kicker">iPhone Accelerometer</span>
+            <span class="ph-enable-kicker">iPhone motion</span>
             <span class="ph-enable-main">Enable Motion</span>
           </button>
-          <p class="ph-gate-note" id="ph-gate-note">Tap once to grant motion access, then rotate, lift up/down, or pull phone.</p>
+          <p class="ph-gate-note" id="ph-gate-note">Tap once to allow motion, then twist, raise or lower, or pull the phone.</p>
           <button type="button" class="ph-dismiss-btn" id="ph-dismiss-gate">Use Touch Slider Only</button>
         </div>
       </div>
@@ -67,15 +69,15 @@
       <!-- Live Gesture Impulse Meters -->
       <div class="ph-meters">
         <div class="ph-meter">
-          <div class="ph-meter-head"><span>TILT</span><span id="ph-m-tilt">+0.0°</span></div>
+          <div class="ph-meter-head"><span class="ui-label">Tilt</span><span class="ui-readout ui-readout--quiet" id="ph-m-tilt">+0.0°</span></div>
           <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill is-accent" id="ph-b-tilt"></span></div>
         </div>
         <div class="ph-meter">
-          <div class="ph-meter-head"><span>LIFT ↑↓</span><span id="ph-m-lift">+0.0</span></div>
+          <div class="ph-meter-head"><span class="ui-label">Lift</span><span class="ui-readout ui-readout--quiet" id="ph-m-lift">+0.0</span></div>
           <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill" id="ph-b-lift"></span></div>
         </div>
         <div class="ph-meter">
-          <div class="ph-meter-head"><span>PULL ⇄</span><span id="ph-m-pull">+0.0</span></div>
+          <div class="ph-meter-head"><span class="ui-label">Pull</span><span class="ui-readout ui-readout--quiet" id="ph-m-pull">+0.0</span></div>
           <div class="ph-meter-track"><span class="ph-meter-mid"></span><span class="ph-meter-fill" id="ph-b-pull"></span></div>
         </div>
       </div>
@@ -96,16 +98,16 @@
         <button type="button" class="ph-btn" id="ph-zero-btn">Zero Pose</button>
         <button type="button" class="ph-btn" id="ph-clutch-btn" aria-pressed="false">Clutch: Off</button>
         <button type="button" class="ph-btn" id="ph-layout-btn" aria-pressed="false">Reflow</button>
-        <button type="button" class="ph-btn ph-btn--accent" id="ph-reset-btn">Reset 100%</button>
+        <button type="button" class="ph-btn" id="ph-reset-btn">Reset 100%</button>
       </div>
 
       <!-- Direct Touch Trim Fallback -->
       <div class="ph-trim">
         <div class="ph-trim-head">
-          <span>MANUAL TRIM</span>
-          <span id="ph-session-tag">SESSION</span>
+          <span class="ui-label">Manual size</span>
+          <span class="ui-label" id="ph-session-tag">SESSION</span>
         </div>
-        <input type="range" class="ph-slider" id="ph-slider" min="34" max="215" value="100" aria-label="Manual cell size trim">
+        <input type="range" class="ui-slider ph-slider" id="ph-slider" min="34" max="215" value="100" aria-label="Manual tile size">
       </div>
     </section>
   </main>
