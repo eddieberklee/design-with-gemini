@@ -292,7 +292,7 @@
     const hudTop = el('header', { className: 's3-hud-top' }, [
       el('div', { className: 's3-brand' }, [
         el('span', { className: 's3-index s3-mono', textContent: '07' }),
-        el('span', { className: 's3-title', textContent: 'StickS3 IMU Color' })
+        el('span', { className: 's3-title s3-mono', textContent: 'STICK S3' })
       ]),
       el('div', { className: 's3-top-right' }, [
         el('div', { className: 's3-mode-group', role: 'group', 'aria-label': 'Accelerometer color mapping mode' }, modeBtns),
@@ -302,7 +302,10 @@
       ])
     ]);
 
-    // ---------- 2. Center Gravity Dome SVG Reticle ----------
+    // ---------- 2. Dominant Hero Color Swatch Card (mirrors StickS3 LCD) ----------
+    const swatchModeEl = el('span', { className: 's3-swatch-mode s3-mono', textContent: 'OKLCH' });
+    const swatchLightnessEl = el('span', { className: 's3-swatch-lightness s3-mono', textContent: 'L84' });
+
     const domeRingHalo = svgEl('circle', { class: 's3-dome-halo', cx: '50', cy: '50', r: '42' });
     const domeRing = svgEl('circle', { class: 's3-dome-ring', cx: '50', cy: '50', r: '42' });
     const domeInnerRing = svgEl('circle', { class: 's3-dome-ring', cx: '50', cy: '50', r: '21', 'stroke-opacity': '0.35' });
@@ -345,9 +348,6 @@
       'aria-label': 'M5StickS3 3-axis accelerometer tilt dome. Tilt physical StickS3 or drag/arrow-keys to steer cell color. Double-click to zero tare.'
     }, [domeSvg]);
 
-    const centerStage = el('div', { className: 's3-stage' }, [domePad, toastEl]);
-
-    // ---------- 3. Bottom Floating Swiss Capsule ----------
     const hexTextEl = el('span', { textContent: '#D5C8C0' });
     const hexCopyBtn = el('button', {
       type: 'button',
@@ -365,7 +365,26 @@
       hexTextEl
     ]);
 
-    const oklchSpecEl = el('span', { className: 's3-oklch-spec s3-mono', textContent: 'L84 C.02 H000°' });
+    const oklchSpecEl = el('span', { className: 's3-oklch-spec s3-mono', textContent: 'C.02 · H000°' });
+
+    const centerStage = el('div', { className: 's3-stage' }, [
+      el('div', { className: 's3-swatch-top' }, [swatchModeEl, swatchLightnessEl]),
+      el('div', { className: 's3-swatch-center' }, [domePad]),
+      el('div', { className: 's3-swatch-bottom' }, [hexCopyBtn, oklchSpecEl]),
+      toastEl
+    ]);
+
+    // ---------- 3. Bottom Obsidian Telemetry & Key Strip (mirrors StickS3 X/Y/Z bars) ----------
+    const axisBarX = el('span', { className: 's3-axis-fill s3-axis-fill--x' });
+    const axisBarY = el('span', { className: 's3-axis-fill s3-axis-fill--y' });
+    const axisBarZ = el('span', { className: 's3-axis-fill s3-axis-fill--z' });
+
+    const xyzBarsEl = el('div', { className: 's3-xyz-bars s3-mono', 'aria-hidden': 'true' }, [
+      el('span', { className: 's3-axis-mini' }, ['X', el('span', { className: 's3-axis-track' }, [axisBarX])]),
+      el('span', { className: 's3-axis-mini' }, ['Y', el('span', { className: 's3-axis-track' }, [axisBarY])]),
+      el('span', { className: 's3-axis-mini' }, ['Z', el('span', { className: 's3-axis-track' }, [axisBarZ])])
+    ]);
+
     const axesInlineEl = el('span', { className: 's3-axes-inline s3-mono', textContent: 'X+0.00 Y+0.00 Z+1.00g' });
 
     const holdBtn = el('button', {
@@ -407,8 +426,7 @@
 
     const hudBottom = el('footer', { className: 's3-hud-bottom' }, [
       el('div', { className: 's3-readout-cluster' }, [
-        hexCopyBtn,
-        oklchSpecEl,
+        xyzBarsEl,
         axesInlineEl
       ]),
       el('div', { className: 's3-controls-cluster' }, [
@@ -861,8 +879,11 @@
               state.displayColor = spec;
               state.pendingHoldUntil = Date.now() + COMMAND_LEASE_MS;
               rootEl.style.setProperty('--s3-live-hex', spec.hex);
+              centerStage.style.backgroundColor = spec.hex;
+              microWrap.style.backgroundColor = spec.hex;
               hexTextEl.textContent = spec.hex;
               microHexEl.textContent = spec.hex;
+              swatchLightnessEl.textContent = 'L' + String(Math.round(spec.l * 100)).padStart(2, '0');
               link.sendCommand({ cmd: 'hold', h: 1 });
               copyToClipboard(sw.hex);
               showToast('PINNED ' + sw.hex);
@@ -945,6 +966,7 @@
         btn.setAttribute('aria-pressed', idx === nowMode ? 'true' : 'false');
       });
       modeCycleBtn.textContent = modeInfo.shortLabel + ' ↻';
+      swatchModeEl.textContent = modeInfo.shortLabel;
       modeHintEl.textContent = modeInfo.axisHint;
 
       holdBtn.setAttribute('aria-pressed', state.hold ? 'true' : 'false');
@@ -1129,6 +1151,8 @@
       rootEl.style.setProperty('--s3-reticle-stroke', theme.reticleStroke);
       rootEl.style.setProperty('--s3-reticle-halo', theme.reticleHalo);
       rootEl.style.setProperty('--s3-dome-well', theme.domeWell);
+      centerStage.style.backgroundColor = col.hex;
+      microWrap.style.backgroundColor = col.hex;
 
       // Update SVG Gravity Dome coordinates
       const px = 50 + ColorEngine.clamp(state.tx, -1, 1) * 34;
@@ -1147,13 +1171,25 @@
       const kinArcLen = ColorEngine.clamp(state.kin, 0, 1) * kinCircumference;
       kinArc.setAttribute('stroke-dasharray', kinArcLen.toFixed(1) + ' 320');
 
+      // Update StickS3-matched center-zero X / Y / Z bars
+      [
+        { bar: axisBarX, val: state.ax },
+        { bar: axisBarY, val: state.ay },
+        { bar: axisBarZ, val: state.az }
+      ].forEach(function (item) {
+        const norm = ColorEngine.clamp(item.val / 1.25, -1, 1);
+        const halfPct = Math.abs(norm) * 50;
+        item.bar.style.width = halfPct.toFixed(1) + '%';
+        item.bar.style.left = (norm >= 0 ? 50 : (50 - halfPct)).toFixed(1) + '%';
+      });
+
       // Update Tabular Readouts
       hexTextEl.textContent = col.hex;
       microHexEl.textContent = col.hex;
+      swatchLightnessEl.textContent = 'L' + String(Math.round(col.l * 100)).padStart(2, '0');
       oklchSpecEl.textContent =
-        'L' + String(Math.round(col.l * 100)).padStart(2, '0') +
-        ' C.' + String(Math.round(col.c * 100)).padStart(2, '0') +
-        ' H' + pad3(col.h) + '°';
+        'C.' + String(Math.round(col.c * 100)).padStart(2, '0') +
+        ' · H' + pad3(col.h) + '°';
       axesInlineEl.textContent =
         'X' + formatSigned(state.ax) +
         ' Y' + formatSigned(state.ay) +

@@ -68,15 +68,18 @@
 }
 
 /* ==========================================================================
-   1. FULL-BLEED IN-GRID LIVING PIGMENT CELL (4:3)
+   1. STICKS3-MATCHED OBSIDIAN INSTRUMENT CELL + HERO COLOR SWATCH CARD (4:3)
+   Uses .cell.cell--stick-s3 (0,2,0) so index.html <style> .cell { background:#fff }
+   never overrides the cell frame or live color field.
    ========================================================================== */
 
+.cell.cell--stick-s3,
 .cell--stick-s3 {
   --s3-live-hex: #D5C8C0;
   --s3-reticle-ink: #000000;
   --s3-reticle-stroke: rgba(8, 8, 8, 0.62);
   --s3-reticle-halo: rgba(255, 255, 255, 0.42);
-  --s3-dome-well: rgba(255, 255, 255, 0.16);
+  --s3-dome-well: rgba(255, 255, 255, 0.10);
 
   position: relative;
   overflow: hidden;
@@ -87,8 +90,9 @@
   justify-content: space-between;
   padding: 8px;
   gap: 6px;
-  background-color: var(--s3-live-hex);
-  box-shadow: inset 0 0 0 1px rgba(20, 20, 19, 0.08);
+  background: #101010;
+  border-color: #282826;
+  color: #f5f5f3;
   user-select: none;
 }
 
@@ -106,19 +110,15 @@
   box-shadow: 0 0 0 4px var(--s3-paper-solid);
 }
 
-/* ---------- Top Floating Swiss Paper Capsule ---------- */
+/* ---------- Top Obsidian Instrument Header (matches StickS3 LCD top bar) ---------- */
 
 .s3-hud-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  min-height: 28px;
-  padding: 3px 6px 3px 8px;
-  border-radius: 6px;
-  background: var(--s3-paper);
-  border: 1px solid var(--s3-capsule-border);
-  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.06);
+  min-height: 22px;
+  padding: 0 2px;
   z-index: 2;
 }
 
@@ -132,14 +132,15 @@
 .s3-index {
   font-size: 10px;
   font-weight: 600;
-  color: var(--s3-ink-3);
+  color: #9e9e98;
 }
 
 .s3-title {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--s3-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f5f5f3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -152,24 +153,25 @@
   flex-shrink: 0;
 }
 
-/* 4-Mode Segmented Selector inside Top Capsule */
+/* 4-Mode Segmented Selector in Obsidian Header */
 .s3-mode-group {
   display: inline-flex;
   align-items: center;
   padding: 2px;
   border-radius: 5px;
-  background: var(--s3-track);
+  background: #1e1e1c;
+  border: 1px solid #30302d;
   gap: 1px;
 }
 
 .s3-mode-btn {
   border: 0;
   background: transparent;
-  color: var(--s3-ink-2);
+  color: #b8b8b2;
   font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  height: 19px;
+  height: 18px;
   padding: 0 5px;
   border-radius: 3.5px;
   cursor: pointer;
@@ -177,13 +179,12 @@
 }
 
 .s3-mode-btn:hover {
-  color: var(--s3-ink);
+  color: #ffffff;
 }
 
 .s3-mode-btn[aria-pressed="true"] {
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
-  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+  background: #f5f5f3;
+  color: #101010;
 }
 
 /* Compact Mode Cycle Button (shown on medium/narrow containers) */
@@ -194,79 +195,108 @@
   height: 20px;
   padding: 0 6px;
   border-radius: 4px;
-  border: 1px solid var(--s3-border);
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
+  border: 1px solid #383835;
+  background: #1e1e1c;
+  color: #f5f5f3;
   font-size: 9.5px;
   font-weight: 600;
   cursor: pointer;
 }
 
-/* Link Status Pill */
+/* Link Status Pill (matches StickS3 LCD solid emerald / signal / amber badges, >= 5.0:1 WCAG AA) */
 .s3-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   height: 20px;
   padding: 0 7px;
-  border-radius: 999px;
+  border-radius: 4px;
   font-size: 9.5px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.03em;
-  border: 1px solid var(--s3-sim-border);
-  background: var(--s3-sim-bg);
-  color: var(--s3-sim);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #b45309;
+  color: #ffffff;
   white-space: nowrap;
 }
 
 .s3-status-pill.is-live {
-  border-color: var(--s3-live-border);
-  background: var(--s3-live-bg);
-  color: var(--s3-live);
+  background: #047857;
+  color: #ffffff;
 }
 
 .s3-status-pill.is-hold {
-  border-color: rgba(217, 79, 30, 0.35);
-  background: var(--s3-signal-bg);
-  color: var(--s3-signal-ink);
+  background: #b43a10;
+  color: #ffffff;
 }
 
 .s3-status-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: currentColor;
+  background: #ffffff;
   flex-shrink: 0;
 }
 
 .s3-status-pill.is-hold .s3-status-dot {
-  border-radius: 1.5px;
+  border-radius: 1px;
 }
 
 .s3-open-btn {
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: 21px;
+  height: 20px;
   padding: 0 7px;
   border-radius: 4px;
-  border: 1px solid var(--s3-border);
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
+  border: 1px solid #383835;
+  background: #1e1e1c;
+  color: #f5f5f3;
   font-size: 10.5px;
   font-weight: 500;
   cursor: pointer;
 }
 
 .s3-open-btn:hover {
-  border-color: #bcbcb6;
-  background: var(--s3-recess);
+  border-color: #575752;
+  background: #292926;
 }
 
-/* ---------- Center Open-Pigment Stage & Leica/Braun Gravity Dome ---------- */
+/* ---------- Dominant Hero Color Swatch Card (mirrors StickS3 LCD swatch565 card) ---------- */
 
 .s3-stage {
   position: relative;
+  flex: 1;
+  min-height: 0;
+  border-radius: 7px;
+  background-color: var(--s3-live-hex);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+
+.s3-swatch-top,
+.s3-swatch-bottom {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  z-index: 2;
+  color: var(--s3-reticle-ink);
+}
+
+.s3-swatch-mode,
+.s3-swatch-lightness {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--s3-reticle-ink);
+}
+
+.s3-swatch-center {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -276,11 +306,11 @@
 
 .s3-dome-pad {
   position: relative;
-  width: clamp(74px, 31cqi, 124px);
+  width: clamp(50px, 21cqi, 84px);
   aspect-ratio: 1 / 1;
   max-height: 100%;
   border-radius: 50%;
-  background: var(--s3-dome-well);
+  background: transparent;
   cursor: grab;
   touch-action: none;
   display: flex;
@@ -302,13 +332,13 @@
 .s3-dome-halo {
   fill: none;
   stroke: var(--s3-reticle-halo);
-  stroke-width: 3.2;
+  stroke-width: 2.8;
 }
 
 .s3-dome-ring {
   fill: none;
-  stroke: var(--s3-reticle-stroke);
-  stroke-width: 1.35;
+  stroke: var(--s3-reticle-ink);
+  stroke-width: 1.6;
 }
 
 .s3-dome-ring.is-nadir {
@@ -316,19 +346,19 @@
 }
 
 .s3-dome-cross {
-  stroke: var(--s3-reticle-stroke);
-  stroke-width: 1.1;
+  stroke: var(--s3-reticle-ink);
+  stroke-width: 1.3;
 }
 
 .s3-dome-stem-halo {
   stroke: var(--s3-reticle-halo);
-  stroke-width: 3.4;
+  stroke-width: 3.2;
   stroke-linecap: round;
 }
 
 .s3-dome-stem {
   stroke: var(--s3-reticle-ink);
-  stroke-width: 1.6;
+  stroke-width: 1.8;
   stroke-linecap: round;
 }
 
@@ -345,54 +375,32 @@
   stroke: var(--s3-reticle-ink);
   stroke-width: 1.8;
   stroke-linecap: round;
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 /* Transient Hardware Action Banner ("COLOR HELD", "ZERO TARED", "MODE OKLCH") */
 .s3-toast {
   position: absolute;
-  bottom: 4px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: rgba(20, 20, 19, 0.88);
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border-radius: 5px;
+  background: rgba(16, 16, 16, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   color: #ffffff;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   pointer-events: none;
   opacity: 0;
   transition: opacity 140ms ease;
   white-space: nowrap;
+  z-index: 4;
 }
 
 .s3-toast.is-visible {
   opacity: 1;
-}
-
-/* ---------- Bottom Floating Swiss Paper Capsule ---------- */
-
-.s3-hud-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px 6px 3px 8px;
-  border-radius: 6px;
-  background: var(--s3-paper);
-  border: 1px solid var(--s3-capsule-border);
-  box-shadow: 0 1px 2px rgba(20, 20, 19, 0.06);
-  z-index: 2;
-}
-
-.s3-readout-cluster {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .s3-hex-copy {
@@ -402,36 +410,102 @@
   flex-shrink: 0;
   border: 0;
   background: transparent;
-  padding: 2px 4px;
+  padding: 1px 3px;
+  margin-left: -3px;
   border-radius: 4px;
-  color: var(--s3-ink);
-  font-size: 11px;
+  color: var(--s3-reticle-ink);
+  font-size: clamp(13px, 4cqi, 18px);
   font-weight: 700;
+  letter-spacing: 0.01em;
   cursor: pointer;
 }
 
 .s3-hex-copy:hover {
-  background: rgba(20, 20, 19, 0.06);
+  background: var(--s3-dome-well);
 }
 
 .s3-hex-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 2px;
-  background: var(--s3-live-hex);
-  box-shadow: inset 0 0 0 1px rgba(20, 20, 19, 0.22);
-  flex-shrink: 0;
+  display: none;
 }
 
 .s3-oklch-spec {
-  font-size: 9.5px;
-  color: var(--s3-ink-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--s3-reticle-ink);
   white-space: nowrap;
 }
 
+/* ---------- Bottom Obsidian Telemetry & Key Bar (mirrors StickS3 X/Y/Z bars) ---------- */
+
+.s3-hud-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 2px;
+  z-index: 2;
+}
+
+.s3-readout-cluster {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* StickS3 LCD Center-Zero X/Y/Z Mini Bars */
+.s3-xyz-bars {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.s3-axis-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  color: #b8b8b2;
+}
+
+.s3-axis-track {
+  position: relative;
+  width: 34px;
+  height: 6px;
+  border-radius: 2px;
+  background: #242422;
+  overflow: hidden;
+}
+
+.s3-axis-track::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #575752;
+}
+
+.s3-axis-fill {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  left: 50%;
+  width: 0;
+}
+
+.s3-axis-fill--x { background: #f87171; }
+.s3-axis-fill--y { background: #34d399; }
+.s3-axis-fill--z { background: #60a5fa; }
+
 .s3-axes-inline {
   font-size: 9.5px;
-  color: var(--s3-ink-3);
+  color: #a8a8a2;
   white-space: nowrap;
 }
 
@@ -449,9 +523,9 @@
   height: 20px;
   padding: 0 6px;
   border-radius: 4px;
-  border: 1px solid var(--s3-border);
-  background: var(--s3-paper-solid);
-  color: var(--s3-ink);
+  border: 1px solid #383835;
+  background: #1e1e1c;
+  color: #f5f5f3;
   font-size: 9.5px;
   font-weight: 600;
   cursor: pointer;
@@ -459,17 +533,17 @@
 }
 
 .s3-chip-btn:hover {
-  border-color: #bcbcb6;
-  background: var(--s3-recess);
+  border-color: #575752;
+  background: #292926;
 }
 
 .s3-chip-btn[aria-pressed="true"] {
-  background: var(--s3-ink);
-  border-color: var(--s3-ink);
-  color: #ffffff;
+  background: #f5f5f3;
+  border-color: #f5f5f3;
+  color: #101010;
 }
 
-/* Captured Pantone Mini-Swatches inside Bottom Capsule */
+/* Captured Pantone Mini-Swatches inside Bottom Bar */
 .s3-swatch-strip {
   display: flex;
   align-items: center;
@@ -481,8 +555,8 @@
   height: 15px;
   padding: 0;
   border-radius: 3.5px;
-  border: 1.5px solid var(--s3-ink);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55);
+  border: 1.5px solid rgba(255, 255, 255, 0.78);
+  box-shadow: inset 0 0 0 1px rgba(16, 16, 16, 0.45);
   cursor: pointer;
   flex-shrink: 0;
   transition: transform 140ms ease;
@@ -492,33 +566,32 @@
   transform: scale(1.14);
 }
 
-/* Micro Specimen Badge (only visible when Cell 03 shrinks grid <= 235px) */
+/* Micro Specimen Swatch (visible when Cell 03 shrinks grid <= 235px) */
 .s3-micro {
   display: none;
   flex: 1;
   width: 100%;
   padding: 0;
-  border: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 6px;
-  background: transparent;
+  background-color: var(--s3-live-hex);
   cursor: pointer;
   align-items: center;
   justify-content: center;
 }
 
 .s3-micro-pill {
-  padding: 4px 9px;
-  border-radius: 6px;
-  background: var(--s3-paper);
-  border: 1px solid var(--s3-capsule-border);
-  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 11.5px;
   font-weight: 700;
-  color: var(--s3-ink);
+  color: var(--s3-reticle-ink);
 }
 
 /* ---------- 5-Tier @container Queries (140px .. 960px resilience) ---------- */
 
-@container s3-card (max-width: 500px) {
+@container s3-card (max-width: 520px) {
   .s3-axes-inline {
     display: none;
   }
@@ -537,9 +610,11 @@
   .s3-index,
   .s3-open-label,
   .s3-oklch-spec,
-  .s3-tare-btn {
+  .s3-tare-btn,
+  .s3-xyz-bars {
     display: none;
   }
+  .cell.cell--stick-s3,
   .cell--stick-s3 {
     padding: 6px;
     gap: 4px;

@@ -22,7 +22,7 @@
 4. **`cells/stick-s3/transport.js` (`StickS3Color.Transport`)**:
    - Unified multi-transport link supporting (a) Local USB Bridge WebSocket + SSE fallback, (b) Direct Browser Web Serial (`0x303A`), and (c) Wireless Web Bluetooth (`4fafc201-1fb5-459e-8fcc-c5c9c331914b`) when running unplugged on battery.
 5. **`cells/stick-s3/ui.js` & `cells/stick-s3/stick-s3.css` (`StickS3Color.UI`)**:
-   - Full-bleed living pigment grid cell + Leica/Braun SVG Gravity Dome + `<dialog class="s3-dialog">` Studio Workbench with CSS-3D rotating StickS3 twin, live `135×240` LCD mirror `<canvas>`, 60-sample 3-axis oscilloscope, and untainted `<canvas>` PNG Tear-Sheet exporter.
+   - Mirrors the physical M5StickS3 LCD UI directly in the 4:3 grid cell: `.cell.cell--stick-s3` (`#101010` obsidian bezel, specificity `(0,2,0)` so `index.html`'s inline `.cell { background: #ffffff }` never overrides it) frames a dominant `.s3-stage` hero rounded live color swatch card (`var(--s3-live-hex)` + inline `backgroundColor`) displaying top-corner `OKLCH`/`Lxx` stamps, a clean center tilt reticle, large bottom-left `#HEX` copy stamp, and bottom-bar coral/emerald/cobalt `X/Y/Z` center-zero telemetry bars, plus the `<dialog class="s3-dialog">` Studio Workbench with CSS-3D rotating StickS3 twin, live `135×240` LCD mirror `<canvas>`, 60-sample 3-axis oscilloscope, and untainted `<canvas>` PNG Tear-Sheet exporter.
 
 ---
 

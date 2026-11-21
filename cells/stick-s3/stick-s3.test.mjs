@@ -943,3 +943,31 @@ test('Bridge rejects malformed URI (%ZZ), blocks foreign Origin, ignores ingest 
     await bridge.close();
   }
 });
+
+test('CSS specificity & StickS3-matched hero swatch card: .cell.cell--stick-s3 beats .cell and .s3-stage paints live color', () => {
+  const css = fs.readFileSync(path.join(__dirname, 'stick-s3.css'), 'utf8');
+  assert.match(css, /\.cell\.cell--stick-s3\b/, 'Must use .cell.cell--stick-s3 (0,2,0) to beat index.html .cell { background: #ffffff }');
+
+  const h = createUiVmHarness({ reducedMotion: true });
+  const cellEl = h.document.createElement('section');
+  cellEl.id = 'cell-stick-s3';
+  cellEl.className = 'cell cell--stick-s3';
+  h.document.body.appendChild(cellEl);
+  const handle = h.sandbox.StickS3Color.UI.mount(cellEl);
+  try {
+    const ws = h.wsInstances[0];
+    ws.openNow();
+    ws.receiveJson({
+      t: 's3', seq: 1, ax: 0.6, ay: 0.2, az: 0.77,
+      tx: 0.6, ty: 0.2, kin: 0.1, m: 0, h: 1, hex: '#2A9D8F', bat: 75, ev: ''
+    });
+    h.stepFrame(16);
+    const stageEl = cellEl.querySelector('.s3-stage');
+    assert.equal(stageEl.style.backgroundColor, '#2A9D8F');
+    assert.ok(cellEl.querySelector('.s3-swatch-mode'));
+    assert.ok(cellEl.querySelector('.s3-swatch-lightness'));
+    assert.equal(cellEl.querySelectorAll('.s3-axis-fill').length, 3);
+  } finally {
+    handle.destroy();
+  }
+});
