@@ -174,7 +174,7 @@ async function runTests() {
   assert.equal(crossEnv.ns.KeyStore.get(), '');
   assert.equal(crossEnv.ns.KeyStore.getStorageType(), 'none');
 
-  // 10. Stage 0 auth halt prevents firing remaining 17 probes on 401 AND redacts echoed key
+  // 10. Stage 0 auth halt prevents firing remaining 17 probes on Google HTTP 400 "API key not valid." AND redacts echoed key
   let fetchCalls = 0;
   const nonAizaKey = 'custom-secret-token-9999';
   const authEnv = loadMatrixModules({
@@ -182,9 +182,15 @@ async function runTests() {
       fetchCalls += 1;
       return {
         ok: false,
-        status: 401,
+        status: 400,
         headers: { get: () => null },
-        text: async () => JSON.stringify({ error: { code: 401, message: 'Rejected key ' + nonAizaKey } })
+        text: async () => JSON.stringify({
+          error: {
+            code: 400,
+            message: 'API key not valid. Please pass a valid API key. (' + nonAizaKey + ')',
+            details: [{ reason: 'API_KEY_INVALID' }]
+          }
+        })
       };
     }
   });
@@ -193,9 +199,34 @@ async function runTests() {
     onResult: () => {}
   });
   assert.equal(haltOutcome.haltedOnAuth, true);
+  assert.equal(haltOutcome.modelsResult.badge, 'INVALID KEY');
   assert.equal(fetchCalls, 1);
   assert.equal(haltOutcome.modelsResult.summary.includes(nonAizaKey), false);
   assert.equal(JSON.stringify(haltOutcome.modelsResult.raw).includes(nonAizaKey), false);
+
+  // 10b. Live WebSocket 1007 with "API key not valid" classifies as fail / INVALID KEY (not SETUP 1007)
+  class InvalidKeyWs {
+    constructor() {
+      this.readyState = 0;
+      setTimeout(() => {
+        this.readyState = 1;
+        if (this.onopen) this.onopen({});
+        setTimeout(() => {
+          this.readyState = 3;
+          if (this.onclose) this.onclose({ code: 1007, reason: 'API key not valid. Please pass a valid API key.' });
+        }, 5);
+      }, 5);
+    }
+    send() {}
+    close() {}
+  }
+  const wsBadKeyEnv = loadMatrixModules({ WebSocket: InvalidKeyWs });
+  const wsBadRes = await wsBadKeyEnv.ns.Probes.runSingleProbe('live_ws', {
+    apiKey: fakeKey,
+    catalog: catalog
+  });
+  assert.equal(wsBadRes.status, 'fail');
+  assert.equal(wsBadRes.badge, 'INVALID KEY');
 
   // 11. Live WebSocket sync-close race & close code classification (1006, 1007, 1008)
   class SyncCloseWebSocket {

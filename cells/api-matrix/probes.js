@@ -780,6 +780,18 @@
     return false;
   }
 
+  const INVALID_KEY_RE = /api[_ ]?key\s+(?:is\s+)?(?:not\s+valid|invalid)|api_key_invalid/i;
+
+  function isInvalidKeyError(detail, payload) {
+    if (INVALID_KEY_RE.test(String(detail || ''))) return true;
+    if (payload && payload.error) {
+      try {
+        if (INVALID_KEY_RE.test(JSON.stringify(payload.error))) return true;
+      } catch (_err) {}
+    }
+    return false;
+  }
+
   function classifyHttpError(httpStatus, payload, fallbackText, endpointId) {
     const errObj = payload && payload.error && typeof payload.error === 'object' ? payload.error : {};
     const detail = String(errObj.message || fallbackText || 'HTTP ' + httpStatus);
@@ -792,7 +804,7 @@
         remediation: 'Check your Google AI Studio Gemini API key and save it again.'
       };
     }
-    if (httpStatus === 400 && /api[_ ]?key.*invalid|api_key_invalid/i.test(detail)) {
+    if (httpStatus === 400 && isInvalidKeyError(detail, payload)) {
       return {
         status: 'fail',
         badge: 'INVALID KEY',
@@ -1686,7 +1698,11 @@
         let badge = 'WS ' + code;
         let status = 'fail';
         let remediation = 'Verify a bidiGenerateContent-capable model is available on this key.';
-        if (code === 1006 && !gotOpen) {
+        if (INVALID_KEY_RE.test(reason)) {
+          badge = 'INVALID KEY';
+          status = 'fail';
+          remediation = 'Check your Google AI Studio Gemini API key and save it again.';
+        } else if (code === 1006 && !gotOpen) {
           badge = 'AUTH / 1006';
           remediation = 'WebSocket upgrade failed — check API key validity or network/proxy WebSocket access.';
         } else if (code === 1007) {

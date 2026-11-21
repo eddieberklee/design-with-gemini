@@ -114,6 +114,7 @@
       drawerTab: 'curl', // 'curl' | 'raw'
       modelSearch: '',
       openedFromGrid: false,
+      closingProgrammatically: false,
       drawerReturnTarget: null, // { type: 'endpoint', id } | { type: 'models' }
       activeAudioEl: null
     };
@@ -1454,6 +1455,10 @@
       if (!apiKey) return;
 
       cancelAllRuns();
+      stopActiveAudio();
+      revokeAllMediaUrls();
+      app.results = Object.create(null);
+      app.catalog = Probes.createEmptyCatalog();
       const seq = ++app.runSeq;
       const ac = new AbortController();
       app.batchAbort = ac;
@@ -1562,14 +1567,22 @@
       stopActiveAudio();
       app.drawerMode = null;
       app.drawerReturnTarget = null;
+      if (refs.mainWrap) refs.mainWrap.inert = false;
+      if (refs.scrim) refs.scrim.hidden = true;
       renderSecondaryGridCards();
       renderDrawer();
-      if (target && target.type === 'endpoint' && refs.gridContainer) {
-        const cardBtn = refs.gridContainer.querySelector('[data-endpoint-id="' + target.id + '"] .am-inspect-btn');
-        if (cardBtn) cardBtn.focus();
-      } else if (target && target.type === 'models' && refs.topbar) {
-        const modelsBtn = refs.topbar.querySelector('[data-action="models"]');
-        if (modelsBtn) modelsBtn.focus();
+      function focusTarget() {
+        if (target && target.type === 'endpoint' && refs.gridContainer) {
+          const cardBtn = refs.gridContainer.querySelector('[data-endpoint-id="' + target.id + '"] .am-inspect-btn');
+          if (cardBtn) cardBtn.focus();
+        } else if (target && target.type === 'models' && refs.topbar) {
+          const modelsBtn = refs.topbar.querySelector('[data-action="models"]');
+          if (modelsBtn) modelsBtn.focus();
+        }
+      }
+      focusTarget();
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(focusTarget);
       }
     }
 
@@ -1596,7 +1609,10 @@
       app.drawerMode = null;
       app.drawerReturnTarget = null;
       if (refs.mainWrap) refs.mainWrap.inert = false;
-      if (dialog.open) dialog.close();
+      if (dialog.open) {
+        app.closingProgrammatically = true;
+        dialog.close();
+      }
       renderPrimaryCell();
       const triggerEl = rootEl.querySelector('.am-cell-trigger');
       if (triggerEl && typeof triggerEl.focus === 'function') {
@@ -1631,13 +1647,22 @@
 
     // Fallback cleanup if browser closes <dialog> natively without firing cancel.
     dialog.addEventListener('close', function () {
+      if (app.closingProgrammatically) {
+        app.closingProgrammatically = false;
+        return;
+      }
       stopActiveAudio();
       app.drawerMode = null;
+      app.drawerReturnTarget = null;
       if (refs.mainWrap) refs.mainWrap.inert = false;
       if (location.hash === '#api-matrix' && history && typeof history.replaceState === 'function') {
         try { history.replaceState(null, '', location.pathname + location.search); } catch (_e) {}
       }
       renderPrimaryCell();
+      const triggerEl = rootEl.querySelector('.am-cell-trigger');
+      if (triggerEl && typeof triggerEl.focus === 'function') {
+        triggerEl.focus();
+      }
     });
 
     dialog.addEventListener('keydown', function (e) {

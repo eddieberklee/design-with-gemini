@@ -778,6 +778,24 @@
 }
 
 @media (max-width: 639px) {
+  .am-shell {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .am-topbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    padding: 8px 12px;
+    gap: 6px;
+  }
+
+  .am-grid-scroll {
+    flex: none;
+    overflow-y: visible;
+  }
+
   .am-sec-grid {
     grid-template-columns: 1fr;
   }
