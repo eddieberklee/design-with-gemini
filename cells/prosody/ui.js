@@ -32,6 +32,21 @@
     return Math.max(min, Math.min(max, val));
   }
 
+  function cleanWord(word) {
+    return String(word || '').replace(/[^a-zA-Z0-9']/g, '').toLowerCase();
+  }
+
+  // An API key never contains whitespace; a pasted value with an inner space or newline is a paste
+  // error and would otherwise be stored and sent verbatim (URL-encoded) in the Live socket URL.
+  function keyInputProblem(raw) {
+    const cleaned = String(raw || '').trim();
+    if (!cleaned) return 'Paste a Gemini API key (AIza…) first. Use Clear to remove the saved key.';
+    if (/\s/.test(cleaned)) return 'That key contains spaces or line breaks. Paste the key only.';
+    return '';
+  }
+
+  const MARQUEE_PLACEHOLDER = 'Detected words stream here…';
+
   function mount(container) {
     if (!container) return function () {};
 
@@ -49,6 +64,7 @@
       connecting: false,
       streaming: false,
       liveSession: null,
+      sessionKey: '',
       mediaStream: null,
       audioCtx: null,
       source: null,
@@ -120,10 +136,14 @@
     const keySaveBtn = el('button', 'ps-btn-primary', 'Save');
     keySaveBtn.type = 'button';
 
+    const keyNotice = el('div', 'ps-key-notice', '');
+    keyNotice.setAttribute('role', 'alert');
+
     keyActions.appendChild(keyClearBtn);
     keyActions.appendChild(keyCloseBtn);
     keyActions.appendChild(keySaveBtn);
     keyPanel.appendChild(keyInput);
+    keyPanel.appendChild(keyNotice);
     keyPanel.appendChild(keyActions);
 
     // --- Center Stage ---
@@ -143,7 +163,7 @@
     // Live Word Marquee Ribbon at bottom of stage
     const marqueeWrap = el('div', 'ps-marquee');
     const marqueeTrack = el('div', 'ps-marquee-track');
-    marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', 'Detected words stream here…'));
+    marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', MARQUEE_PLACEHOLDER));
     marqueeWrap.appendChild(marqueeTrack);
 
     stage.appendChild(metricsCorner);
@@ -200,23 +220,31 @@
     container.appendChild(footer);
 
     // --- Rendering helpers ---
+    // 'LIVE' only while a Gemini Live session is actually streaming; a saved key alone is 'KEY SET'
+    // (the demo chips still simulate until the mic session is up).
     function syncBadge() {
       if (unmounted) return;
       const hasKey = Boolean(NS.Client.KeyStore.get());
       modeBadge.classList.toggle('ps-badge--live', hasKey);
-      badgeLabel.textContent = hasKey ? 'LIVE' : 'SIM · +KEY';
+      badgeLabel.textContent = state.streaming ? 'LIVE' : hasKey ? 'KEY SET' : 'SIM · +KEY';
+    }
+
+    function setKeyNotice(text) {
+      keyNotice.textContent = text || '';
     }
 
     function openKeyPanel() {
       keyPanel.classList.add('is-open');
       modeBadge.setAttribute('aria-expanded', 'true');
       keyInput.value = NS.Client.KeyStore.get();
+      setKeyNotice('');
       if (typeof keyInput.focus === 'function') keyInput.focus();
     }
 
     function closeKeyPanel(restoreFocus) {
       keyPanel.classList.remove('is-open');
       modeBadge.setAttribute('aria-expanded', 'false');
+      setKeyNotice('');
       if (restoreFocus && typeof modeBadge.focus === 'function') modeBadge.focus();
     }
 
@@ -230,9 +258,9 @@
       const placeholder = marqueeTrack.querySelector('.ps-marquee-placeholder');
       if (placeholder) placeholder.remove();
 
-      const empLower = String(emphasizedWord || '').toLowerCase();
+      const empLower = cleanWord(emphasizedWord);
       words.forEach(function (word) {
-        const clean = word.replace(/[^a-zA-Z0-9']/g, '').toLowerCase();
+        const clean = cleanWord(word);
         const isEmp = Boolean(empLower && clean && (clean === empLower || clean.indexOf(empLower) >= 0));
         const span = el('span', isEmp ? 'ps-marquee-word ps-marquee-word--em' : 'ps-marquee-word', word);
         marqueeTrack.appendChild(span);
@@ -245,13 +273,20 @@
       marqueeWrap.scrollLeft = marqueeWrap.scrollWidth;
     }
 
+    function clearMarquee() {
+      marqueeTrack.textContent = '';
+      marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', MARQUEE_PLACEHOLDER));
+      marqueeWrap.scrollLeft = 0;
+    }
+
     function highlightLastEmphasizedWord(emphasizedWord) {
-      if (!emphasizedWord) return;
-      const empLower = emphasizedWord.toLowerCase();
+      const empLower = cleanWord(emphasizedWord);
+      if (!empLower) return;
       const children = marqueeTrack.children;
       for (let i = children.length - 1; i >= 0; i--) {
         const node = children[i];
-        const clean = node.textContent.replace(/[^a-zA-Z0-9']/g, '').toLowerCase();
+        if (!node.classList.contains('ps-marquee-word')) continue;
+        const clean = cleanWord(node.textContent);
         if (clean && (clean === empLower || clean.indexOf(empLower) >= 0)) {
           node.classList.add('ps-marquee-word--em');
           break;
@@ -259,16 +294,45 @@
       }
     }
 
+    // Free box inside the stage padding. The padding reserves the metrics corner / delta pill at the
+    // top and the marquee at the bottom, and changes with the @container rules in prosody.css.
+    function stageInnerBox() {
+      const cw = stage.clientWidth;
+      const ch = stage.clientHeight;
+      if (!(cw > 0) || !(ch > 0)) return null;
+      let pad = [28, 12, 34, 12];
+      if (typeof global.getComputedStyle === 'function') {
+        try {
+          const cs = global.getComputedStyle(stage);
+          const read = [cs.paddingTop, cs.paddingRight, cs.paddingBottom, cs.paddingLeft].map(parseFloat);
+          if (read.every(Number.isFinite)) pad = read;
+        } catch (_e) {
+          // keep defaults
+        }
+      }
+      return { w: cw - pad[1] - pad[3], h: ch - pad[0] - pad[2] };
+    }
+
+    // One fit ratio for the whole MIN..MAX range: if the 185% button does not fit the stage, every
+    // scale shrinks by the same factor, so each step stays visible instead of saturating at the
+    // stage edge while the % readout keeps climbing.
     function computeButtonDims(scaleVal) {
-      const maxW = stage.clientWidth > 0 ? Math.max(56, stage.clientWidth - 24) : 252;
-      const maxH = stage.clientHeight > 0 ? Math.max(22, stage.clientHeight - 58) : 76;
+      const box = stageInnerBox();
       const rawW = BASE_WIDTH * scaleVal;
       const rawH = BASE_HEIGHT * scaleVal;
-      const fitRatio = Math.min(1, maxW / rawW, maxH / rawH);
+      let fit = 1;
+      let floorW = 56;
+      let floorH = 22;
+      if (box) {
+        fit = Math.min(1, box.w / (BASE_WIDTH * MAX_SCALE), box.h / (BASE_HEIGHT * MAX_SCALE));
+        fit = Math.max(0, fit);
+        floorW = Math.max(40, Math.min(56, box.w));
+        floorH = Math.max(12, Math.min(22, box.h));
+      }
       return {
-        w: Math.max(56, Math.round(rawW * fitRatio)),
-        h: Math.max(22, Math.round(rawH * fitRatio)),
-        f: Math.max(9, Math.round(BASE_FONT * Math.pow(scaleVal * fitRatio, 0.72) * 10) / 10)
+        w: Math.max(floorW, Math.round(rawW * fit)),
+        h: Math.max(floorH, Math.round(rawH * fit)),
+        f: Math.max(9, Math.round(BASE_FONT * Math.pow(scaleVal * fit, 0.72) * 10) / 10)
       };
     }
 
@@ -380,31 +444,43 @@
       if (res.emphasized_word) {
         highlightLastEmphasizedWord(res.emphasized_word);
       }
+      const requested = Number(res.delta_percent);
+      const delta = Number.isFinite(requested) ? requested : 0;
+      let note = res.prosody_note || '';
       if (res.direction === 'reset') {
         state.prevScale = state.scale;
         state.scale = 1.0;
         deltaPill.textContent = 'RESET';
-        deltaPill.classList.add('is-visible');
         NS.Client.SoundFX.playResize('reset', 0);
-      } else if (res.delta_percent !== 0) {
-        const nextScale = clamp(state.scale * (1 + res.delta_percent / 100), MIN_SCALE, MAX_SCALE);
+      } else if (delta !== 0) {
+        const nextScale = clamp(state.scale * (1 + delta / 100), MIN_SCALE, MAX_SCALE);
         if (Math.abs(nextScale - state.scale) < 0.002) {
-          deltaPill.textContent = nextScale >= MAX_SCALE ? 'MAX' : 'MIN';
-          deltaPill.classList.add('is-visible');
+          // Already at a clamp: nothing changed, so no ghost and no claim that the step applied.
+          const atMax = delta > 0;
+          state.prevScale = state.scale;
+          deltaPill.textContent = atMax ? 'MAX' : 'MIN';
+          note = (atMax ? 'Already at max size (' : 'Already at min size (') + Math.round(state.scale * 100) + '%).';
         } else {
+          // Show the change that was applied, which differs from the request at a clamp.
+          const applied = Math.round((nextScale / state.scale - 1) * 100);
+          const clamped = Math.abs(applied - delta) >= 1;
           state.prevScale = state.scale;
           state.scale = nextScale;
-          deltaPill.textContent = (res.delta_percent > 0 ? '+' : '') + res.delta_percent + '%';
-          deltaPill.classList.add('is-visible');
-          NS.Client.SoundFX.playResize(res.direction, res.delta_percent);
+          deltaPill.textContent = (applied > 0 ? '+' : '') + applied + '%';
+          if (clamped) {
+            note =
+              (note ? note + ' · ' : '') +
+              'clamped to ' + (nextScale >= MAX_SCALE ? 'max ' : 'min ') + Math.round(nextScale * 100) + '%';
+          }
+          NS.Client.SoundFX.playResize(res.direction, applied);
         }
       } else {
         state.prevScale = state.scale;
         deltaPill.textContent = '0%';
-        deltaPill.classList.add('is-visible');
       }
+      deltaPill.classList.add('is-visible');
       renderButtonSize();
-      renderReadout(res.prosody_note || 'Applied ' + deltaPill.textContent, false);
+      renderReadout(note || 'Applied ' + deltaPill.textContent, false);
     }
 
     function stopLocalSpeechMirror() {
@@ -504,12 +580,14 @@
         }
       }
 
+      state.sessionKey = '';
       micBtn.classList.remove('is-recording', 'is-processing');
       micBtn.setAttribute('aria-pressed', 'false');
       micLabel.textContent = 'Start Live Mic';
       if (!unmounted) {
         clearTelemetry();
         drawIdleWave();
+        syncBadge();
       }
       if (wasActive && !silent && !unmounted) {
         NS.Client.SoundFX.playStreamToggle(false);
@@ -539,11 +617,12 @@
 
       const myEpoch = ++sessionEpoch;
       state.connecting = true;
+      state.sessionKey = apiKey;
       clearTelemetry();
       micBtn.classList.add('is-processing');
       micBtn.setAttribute('aria-pressed', 'true');
       micLabel.textContent = 'Connecting…';
-      renderReadout('Opening Gemini Live WebSocket…', false);
+      renderReadout('Requesting microphone access…', false);
 
       navigator.mediaDevices
         .getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
@@ -570,13 +649,8 @@
             };
           });
 
-          const AudioCtx = global.AudioContext || global.webkitAudioContext;
-          if (typeof AudioCtx !== 'function') {
-            stopLiveStream(true);
-            renderReadout('Web Audio API is unavailable in this browser context.', true);
-            return;
-          }
-          state.audioCtx = new AudioCtx();
+          renderReadout('Opening Gemini Live WebSocket…', false);
+          state.audioCtx = new AudioCtxInit();
           if (state.audioCtx.state === 'suspended' && typeof state.audioCtx.resume === 'function') {
             const p = state.audioCtx.resume();
             if (p && typeof p.catch === 'function') p.catch(function () {});
@@ -675,7 +749,7 @@
             }
           }
 
-          state.liveSession = NS.Client.createLiveSession(apiKey, {
+          const session = NS.Client.createLiveSession(apiKey, {
             onReady: function (modelName) {
               if (unmounted || myEpoch !== sessionEpoch) return;
               state.connecting = false;
@@ -686,6 +760,7 @@
               micBtn.classList.add('is-recording');
               micBtn.setAttribute('aria-pressed', 'true');
               micLabel.textContent = 'Live · Click to Stop';
+              syncBadge();
               NS.Client.SoundFX.playStreamToggle(true);
               renderTelemetry(txCount, rxCount);
               renderReadout('Live (' + activeModel + ') — speak naturally.', false);
@@ -734,6 +809,14 @@
               }
             }
           });
+          // createLiveSession can fail synchronously (WebSocket constructor throws on both models),
+          // which already ran onClose -> stopLiveStream and bumped the epoch: do not store a dead
+          // session or arm the processor for a session that no longer exists.
+          if (unmounted || myEpoch !== sessionEpoch) {
+            session.close();
+            return;
+          }
+          state.liveSession = session;
 
           processor.onaudioprocess = function (ev) {
             if (unmounted || myEpoch !== sessionEpoch || !state.streaming || !state.liveSession || !state.audioCtx) {
@@ -781,9 +864,12 @@
       state.prevScale = null;
       state.scale = 1.0;
       deltaPill.classList.remove('is-visible');
+      deltaPill.textContent = '';
+      clearMarquee();
       renderButtonSize();
       NS.Client.SoundFX.playResize('reset', 0);
-      renderReadout('Reset to 100% (136×44px).', false);
+      const dims = computeButtonDims(1.0);
+      renderReadout('Reset to 100% (' + dims.w + '×' + dims.h + 'px).', false);
     });
 
     modeBadge.addEventListener('click', function () {
@@ -799,24 +885,27 @@
     });
 
     function saveKeyFromInput() {
-      NS.Client.KeyStore.set(keyInput.value);
+      const problem = keyInputProblem(keyInput.value);
+      if (problem) {
+        setKeyNotice(problem);
+        if (typeof keyInput.focus === 'function') keyInput.focus();
+        return;
+      }
+      // Keep a key that another cell stored as "remember on this device" in localStorage.
+      const keepLocal = NS.Client.KeyStore.getStorageType() === 'local';
+      NS.Client.KeyStore.set(keyInput.value, keepLocal);
       closeKeyPanel(true);
       syncBadge();
-      renderReadout(
-        NS.Client.KeyStore.get() ? 'Live Gemini key saved — click Start Live Mic.' : 'Key cleared (Demo mode).',
-        false
-      );
+      renderReadout('Gemini key saved — click Start Live Mic to stream.', false);
     }
 
     keySaveBtn.addEventListener('click', saveKeyFromInput);
 
+    // Escape is handled once by the panel listener below (keydown bubbles from the input).
     keyInput.addEventListener('keydown', function (ev) {
       if (ev.key === 'Enter') {
         ev.preventDefault();
         saveKeyFromInput();
-      } else if (ev.key === 'Escape') {
-        ev.preventDefault();
-        closeKeyPanel(true);
       }
     });
 
@@ -830,20 +919,30 @@
     keyClearBtn.addEventListener('click', function () {
       NS.Client.KeyStore.clear();
       keyInput.value = '';
+      setKeyNotice('');
       syncBadge();
+      renderReadout('Key cleared — demo chips only.', false);
     });
 
+    // Fired by this cell, api-matrix, decisions (gemini-key-changed), other tabs (storage) and
+    // window focus. An open session compares against the key it started with, so repeated events
+    // for the same key are no-ops.
     function onKeySync() {
+      if (unmounted) return;
+      if ((state.streaming || state.connecting) && NS.Client.KeyStore.get() !== state.sessionKey) {
+        stopLiveStream(false);
+        renderReadout('Gemini key changed or removed — live stream stopped.', false);
+      }
       syncBadge();
     }
 
     function onStorageSync(ev) {
       if (!ev || !ev.key || ev.key === SESSION_KEY || ev.key === LOCAL_KEY) {
-        syncBadge();
+        onKeySync();
       }
     }
 
-    function onWindowResize() {
+    function onStageResize() {
       if (unmounted) return;
       renderButtonSize();
       if (state.streaming) {
@@ -857,24 +956,30 @@
       stopLiveStream(true);
     }
 
+    // Mic capture + socket stop while the tab is hidden; the user restarts explicitly (no silent
+    // reconnect or background mic re-acquire).
+    function onVisibilityChange() {
+      if (unmounted || document.visibilityState !== 'hidden') return;
+      if (state.streaming || state.connecting) {
+        stopLiveStream(true);
+        renderReadout('Live stream stopped while the tab was hidden — click Start Live Mic to resume.', false);
+      }
+    }
+
+    const useResizeObserver = typeof global.ResizeObserver === 'function';
     if (typeof global.addEventListener === 'function') {
       global.addEventListener('focus', onKeySync);
       global.addEventListener('gemini-key-changed', onKeySync);
       global.addEventListener('storage', onStorageSync);
-      global.addEventListener('resize', onWindowResize);
       global.addEventListener('pagehide', onPageHide);
+      global.addEventListener('resize', onStageResize);
+    }
+    if (typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
     }
 
-    if (typeof global.ResizeObserver === 'function') {
-      stageObserver = new global.ResizeObserver(function () {
-        if (unmounted) return;
-        renderButtonSize();
-        if (state.streaming) {
-          syncWaveCanvasSize();
-        } else {
-          drawIdleWave();
-        }
-      });
+    if (useResizeObserver) {
+      stageObserver = new global.ResizeObserver(onStageResize);
       stageObserver.observe(stage);
     }
 
@@ -893,8 +998,11 @@
         global.removeEventListener('focus', onKeySync);
         global.removeEventListener('gemini-key-changed', onKeySync);
         global.removeEventListener('storage', onStorageSync);
-        global.removeEventListener('resize', onWindowResize);
+        global.removeEventListener('resize', onStageResize);
         global.removeEventListener('pagehide', onPageHide);
+      }
+      if (typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       }
       if (container.__prosodyUnmount === unmount) {
         delete container.__prosodyUnmount;

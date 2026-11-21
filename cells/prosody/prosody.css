@@ -152,7 +152,9 @@
     radial-gradient(circle at 1px 1px, #e5e5e5 1px, transparent 0);
   background-size: 16px 16px;
   overflow: hidden;
-  padding: 24px 12px 34px;
+  /* Top/bottom padding reserve the metrics corner + delta pill and the marquee; ui.js:stageInnerBox
+     reads it to size the button, so keep it >= those overlays at every @container step. */
+  padding: 28px 12px 34px;
 }
 
 /* Live Detected-Word Marquee */
@@ -432,14 +434,6 @@
   display: none;
 }
 
-.ps-emphasis {
-  font-weight: 700;
-  color: #b43a10;
-  background: #fff7ed;
-  padding: 0 3px;
-  border-radius: 3px;
-}
-
 .ps-demos {
   display: flex;
   align-items: center;
@@ -485,6 +479,19 @@
   display: none;
   flex-direction: column;
   gap: 8px;
+  /* The cell clips overflow; keep Save reachable in short tiles. */
+  max-height: calc(100% - 44px);
+  overflow-y: auto;
+}
+
+.ps-key-notice {
+  font-size: 10px;
+  line-height: 1.3;
+  color: #b91c1c;
+}
+
+.ps-key-notice:empty {
+  display: none;
 }
 
 .ps-key-panel.is-open {
@@ -570,7 +577,7 @@
     font-size: 9px;
   }
   .ps-stage {
-    padding: 18px 8px 26px;
+    padding: 28px 8px 26px;
   }
   .ps-marquee {
     height: 22px;
@@ -587,6 +594,15 @@
   }
   .ps-wave-canvas {
     height: 22px;
+  }
+  .ps-key-panel {
+    inset: 32px 6px auto 6px;
+    max-height: calc(100% - 36px);
+    padding: 7px;
+    gap: 5px;
+  }
+  .ps-key-panel-desc {
+    display: none;
   }
 }
 
@@ -618,7 +634,7 @@
     right: 6px;
   }
   .ps-stage {
-    padding: 16px 6px 20px;
+    padding: 20px 6px 20px;
   }
   .ps-marquee {
     height: 18px;

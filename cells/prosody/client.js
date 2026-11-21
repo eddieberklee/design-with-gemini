@@ -173,6 +173,12 @@
       safeRemove('localStorage', LOCAL_KEY);
       syncSiblingsAndNotify('', false, 'none');
     },
+    // Same contract as GeminiApiMatrix.KeyStore.getStorageType so a re-save can keep 'local'.
+    getStorageType: function () {
+      if (safeGet('sessionStorage', SESSION_KEY)) return 'session';
+      if (safeGet('localStorage', LOCAL_KEY)) return 'local';
+      return KeyStore.get() ? 'memory' : 'none';
+    },
     isStorageRestricted: function () {
       return storageRestricted;
     }
@@ -231,26 +237,29 @@
       }
     }
 
+    function closeCtx() {
+      if (!ctx) return;
+      const prev = ctx;
+      ctx = null;
+      try {
+        const p = prev.close && prev.close();
+        if (p && typeof p.catch === 'function') p.catch(function () {});
+      } catch (_e) {
+        // ignore
+      }
+    }
+
     return {
       isMuted: function () {
         return muted;
       },
       toggleMute: function () {
         muted = !muted;
+        // A muted cell holds no live audio thread; the next unmuted sound creates a fresh context.
+        if (muted) closeCtx();
         return muted;
       },
-      close: function () {
-        if (ctx) {
-          const prev = ctx;
-          ctx = null;
-          try {
-            const p = prev.close && prev.close();
-            if (p && typeof p.catch === 'function') p.catch(function () {});
-          } catch (_e) {
-            // ignore
-          }
-        }
-      },
+      close: closeCtx,
       playStreamToggle: function (starting) {
         const c = getCtx();
         if (!c) return;
