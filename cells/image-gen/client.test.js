@@ -38,6 +38,20 @@ test('buildGenerateRequest omits imageConfig when omitImageConfig is true', () =
   assert.equal(req.generationConfig.imageConfig, undefined);
 });
 
+test('buildGenerateRequest prepends referenceImages as inlineData parts', () => {
+  const req = client.buildGenerateRequest('Try on this jacket', {
+    aspectRatio: '3:4',
+    referenceImages: [
+      { mimeType: 'image/jpeg', data: 'UEVSU09O' },
+      { mimeType: 'image/png', data: 'UFJPRFVDVA==' }
+    ]
+  });
+  assert.equal(req.contents[0].parts.length, 3);
+  assert.deepEqual(req.contents[0].parts[0], { inlineData: { mimeType: 'image/jpeg', data: 'UEVSU09O' } });
+  assert.deepEqual(req.contents[0].parts[1], { inlineData: { mimeType: 'image/png', data: 'UFJPRFVDVA==' } });
+  assert.deepEqual(req.contents[0].parts[2], { text: 'Try on this jacket' });
+});
+
 test('parseGenerateResponse extracts camelCase inlineData and text', () => {
   const parsed = client.parseGenerateResponse({
     candidates: [

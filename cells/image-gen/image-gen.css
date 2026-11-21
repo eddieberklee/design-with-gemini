@@ -1,98 +1,72 @@
-/* cells/image-gen/image-gen.css — Cell 10: Gemini Image Gen.
-   Tile anatomy, buttons, pill, chips, labels and readouts come from ui/base.css. Only the hero
-   (the stage and its blank sheet in the requested aspect ratio), the key bar, the composer row
-   and the lightbox body live here. */
+/* ==========================================================================
+   cells/image-gen/image-gen.css — Cell 10: Gemini Image Gen
+   Scoped to .cell--image-gen / .ig-* using ui/base.css --ui-* tokens.
+   ========================================================================== */
 
-/* Every ig- part toggled with the hidden attribute must really hide (classes set display). */
+.cell--image-gen {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .cell--image-gen [hidden] {
   display: none !important;
 }
 
-.cell--image-gen a.ui-btn {
-  text-decoration: none;
-}
-
-/* Selects (model in the header, aspect in the composer) */
-.ig-select {
+.ig-model-select {
   appearance: none;
-  min-width: 0;
   height: var(--ui-ctl-h-sm);
-  padding: 0 20px 0 var(--ui-2);
-  border: 1px solid var(--ui-line);
+  max-width: 150px;
+  padding: 0 20px 0 8px;
+  border: 1px solid var(--ui-hairline);
   border-radius: var(--ui-radius-sm);
-  background: var(--ui-surface)
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%2366665f' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E")
+  background: var(--ui-well)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%2366665f' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
     no-repeat right 6px center;
   color: var(--ui-ink-2);
   font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
   text-overflow: ellipsis;
   cursor: pointer;
-  transition: border-color var(--ui-dur) var(--ui-ease);
 }
 
-.ig-select:hover {
-  border-color: var(--ui-ink-3);
+.ig-model-select:hover {
+  border-color: var(--ui-line);
+  color: var(--ui-ink);
 }
 
-.ig-model-select {
-  max-width: 132px;
+.ig-model-select:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
-.ig-aspect {
-  flex: 0 0 auto;
-  height: var(--ui-ctl-h);
-}
-
-/* Pill: reserve the widest label ("Key set", "Running") so the header never shifts. Only above
-   the tiny step, where base.css collapses the pill to its dot. */
-@container ui-tile (min-width: 240px) {
-  .ig-key-btn .ui-pill-label {
-    display: inline-block;
-    min-width: calc(7ch + 0.28em);
-    text-align: center;
-  }
-}
-
-/* Key bar (opens from the pill) and the composer row */
-.ig-key-bar,
-.ig-form {
-  flex: 0 0 auto;
+/* Inline key drawer */
+.ig-key-bar {
   display: flex;
   align-items: center;
-  gap: var(--ui-2);
-  min-width: 0;
-}
-
-.ig-key-bar {
-  padding: var(--ui-2) var(--ui-2) var(--ui-2) var(--ui-3);
+  gap: 6px;
+  padding: 6px var(--ui-3);
   border-bottom: 1px solid var(--ui-hairline);
   background: var(--ui-well);
 }
 
-.ig-key-input,
-.ig-prompt {
+.ig-key-bar[hidden] {
+  display: none;
+}
+
+.ig-key-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: var(--ui-ctl-h);
-  padding: 0 var(--ui-2);
+  height: var(--ui-ctl-h-sm);
+  padding: 0 8px;
   border: 1px solid var(--ui-line);
   border-radius: var(--ui-radius-sm);
   background: var(--ui-surface);
   color: var(--ui-ink);
-  font: 400 var(--ui-fs-3) / 1 var(--ui-sans);
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
 }
 
-.ig-key-input {
-  height: var(--ui-ctl-h-sm);
-  font: 400 var(--ui-fs-2) / 1 var(--ui-mono);
-}
-
-.ig-key-input::placeholder,
-.ig-prompt::placeholder {
-  color: var(--ui-ink-3);
-}
-
-:is(.ig-select, .ig-key-input, .ig-prompt):focus-visible {
+.ig-key-input:focus-visible {
   outline: var(--ui-ring);
   outline-offset: 1px;
 }
@@ -100,150 +74,191 @@
 .ig-key-persist {
   display: inline-flex;
   align-items: center;
-  gap: var(--ui-1);
-  font: 400 var(--ui-fs-2) / 1 var(--ui-sans);
+  gap: 4px;
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
   color: var(--ui-ink-2);
   white-space: nowrap;
   cursor: pointer;
-  accent-color: var(--ui-ink);
 }
 
-.ig-submit {
-  flex: 0 0 auto;
-  min-width: 84px;              /* Generate <-> Cancel without a width jump */
+/* Stage */
+.ig-body {
+  gap: 8px;
+  padding: 8px var(--ui-3);
 }
 
-/* Hero: the stage. Empty = a blank sheet in the requested aspect ratio. */
 .ig-stage {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
-  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: var(--ui-radius-sm);
   background: var(--ui-well);
+  border: 1px solid var(--ui-hairline);
   overflow: hidden;
 }
 
-/* The sheet and the empty-state content share one box. */
-.ig-frame,
-.ig-empty {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: min(100cqw - var(--ui-6), (100cqh - var(--ui-6)) * var(--ig-ar, 1.3333));
-  aspect-ratio: var(--ig-ar, 1.3333);
-  transform: translate(-50%, -50%);
-}
-
-.ig-frame {
-  border: 1px solid var(--ui-line);
-  border-radius: 2px;
-  background: var(--ui-surface);
-  transition: border-color var(--ui-dur) var(--ui-ease);
-}
-
-.ig-frame-ratio {
-  position: absolute;
-  top: 6px;
-  left: var(--ui-2);
-  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ui-ink-3);
-}
-
-.ig-stage[data-busy] .ig-frame {
-  border-color: var(--ui-accent);
-}
-
-.ig-stage--has-image .ig-frame,
-.ig-stage[data-busy] .ig-empty {
-  visibility: hidden;
-}
-
-.ig-img,
-.ig-loading {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+.ig-stage--has-image {
+  background: #141413;
+  border-color: transparent;
 }
 
 .ig-img {
+  width: 100%;
+  height: 100%;
   object-fit: contain;
+  display: block;
   cursor: zoom-in;
 }
 
-.ig-img:focus-visible {
-  outline: var(--ui-ring);
-  outline-offset: -2px;
+.ig-img[hidden] {
+  display: none;
 }
 
-.ig-empty,
-.ig-loading {
+.ig-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--ui-2);
-  padding: var(--ui-6) var(--ui-3);
+  gap: 8px;
+  padding: var(--ui-3);
   text-align: center;
-  overflow: hidden;
+  max-width: 100%;
 }
 
-/* The sheet's own size decides what fits in it (any ratio, key bar open or not). */
-.ig-empty {
-  container: ig-sheet / size;
-  padding: 20px var(--ui-2) var(--ui-2);
+.ig-empty[hidden] {
+  display: none;
 }
 
 .ig-empty-copy {
-  font: 400 var(--ui-fs-3) / 1.35 var(--ui-sans);
-  color: var(--ui-ink-2);
+  font: 400 var(--ui-fs-2) / 1.35 var(--ui-sans);
+  color: var(--ui-ink-3);
 }
 
 .ig-presets {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: var(--ui-1);
-  max-width: 100%;
+  gap: 4px;
 }
 
-/* Loading: elapsed seconds as the hero readout; over a previous image it sits on a veil. */
+/* Loading shimmer overlay */
 .ig-loading {
-  gap: var(--ui-1);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: color-mix(in srgb, var(--ui-surface) 84%, transparent);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   z-index: 2;
 }
 
-.ig-loading .ui-label {
-  color: var(--ui-accent);
+.ig-loading[hidden] {
+  display: none;
 }
 
-.ig-stage--has-image .ig-loading {
-  background: color-mix(in srgb, var(--ui-surface) 84%, transparent);
+.ig-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--ui-line);
+  border-top-color: var(--ui-ink);
+  border-radius: 50%;
+  animation: ig-spin 700ms linear infinite;
 }
 
-/* Error: a rust note along the bottom of the stage. */
+@keyframes ig-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.ig-loading-label {
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-ink-2);
+}
+
+/* Error banner inside stage */
 .ig-error {
   position: absolute;
-  left: var(--ui-2);
-  right: var(--ui-2);
-  bottom: var(--ui-2);
-  max-height: calc(100% - var(--ui-4));
-  overflow: auto;
-  padding: 6px var(--ui-2);
-  border: 1px solid color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 6px 8px;
   border-radius: var(--ui-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--ui-accent) 35%, transparent);
   background: var(--ui-accent-tint);
   color: var(--ui-accent);
-  font: 400 var(--ui-fs-2) / 1.35 var(--ui-sans);
-  overflow-wrap: anywhere;
+  font: 400 var(--ui-fs-1) / 1.35 var(--ui-mono);
+  max-height: 64px;
+  overflow: auto;
   z-index: 3;
+}
+
+.ig-error[hidden] {
+  display: none;
+}
+
+/* Prompt composer */
+.ig-form {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ig-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: var(--ui-ctl-h);
+  padding: 0 9px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-sans);
+}
+
+.ig-prompt::placeholder {
+  color: var(--ui-ink-3);
+}
+
+.ig-prompt:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 1px;
+}
+
+.ig-aspect {
+  flex: 0 0 auto;
+  appearance: none;
+  height: var(--ui-ctl-h);
+  padding: 0 18px 0 7px;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M2.5 3.75L5 6.25L7.5 3.75' fill='none' stroke='%2366665f' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 5px center;
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-1) / 1 var(--ui-mono);
+  cursor: pointer;
+}
+
+.ig-aspect:focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 1px;
 }
 
 .ig-foot-actions {
   display: inline-flex;
-  gap: var(--ui-1);
+  align-items: center;
+  gap: 4px;
 }
 
 /* Lightbox dialog */
@@ -252,55 +267,140 @@
 }
 
 .ig-dialog-body {
+  padding: var(--ui-3);
+  background: #141413;
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding: var(--ui-4);
-  background: var(--ui-well);
+  max-height: calc(100dvh - 150px);
 }
 
 .ig-dialog-img {
   max-width: 100%;
-  max-height: calc(100dvh - 220px);
+  max-height: calc(100dvh - 180px);
   object-fit: contain;
+  display: block;
+  border-radius: var(--ui-radius-sm);
 }
 
 .ig-dialog-meta {
-  display: grid;
-  gap: var(--ui-1);
-  padding: var(--ui-3) var(--ui-4);
+  padding: var(--ui-2) var(--ui-4);
   border-top: 1px solid var(--ui-hairline);
-  font: 400 var(--ui-fs-3) / 1.45 var(--ui-sans);
-  overflow-wrap: anywhere;
-}
-
-.ig-dialog-facts {
   font: 400 var(--ui-fs-1) / 1.4 var(--ui-mono);
-  font-variant-numeric: tabular-nums;
-  color: var(--ui-ink-3);
+  color: var(--ui-ink-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
-/* Small sheet (content box): drop the one-line hint first, then the chips (2 rows need about
-   52 px at 256 px wide, 4 rows about 108 px); an empty sheet then shows only its ratio. */
-@container ig-sheet (max-width: 219px) or (max-height: 119px) {
-  .ig-empty-copy {
+@container ui-tile (max-width: 319px) {
+  .ig-model-select,
+  .ig-aspect {
     display: none;
   }
 }
 
-@container ig-sheet (max-width: 138px) or (max-height: 51px) or ((max-height: 107px) and (max-width: 255px)) {
+@container ui-tile (max-width: 239px) {
   .ig-presets {
     display: none;
   }
 }
 
-/* Tiny tile (phone grid): header + hero only; an open key bar keeps input + Save. */
-@container ui-tile (max-width: 239px) {
-  .ig-key-bar {
-    padding: var(--ui-1) var(--ui-2);
-    gap: var(--ui-1);
-  }
+/* Reference image drop spots (single ref or 2-spot Try-On) */
+.ig-refs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
 
-  .ig-frame {
-    width: min(100cqw - var(--ui-4), (100cqh - var(--ui-4)) * var(--ig-ar, 1.3333));
-  }
+.ig-ref-spot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 4px 6px;
+  border: 1px dashed var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color var(--ui-dur) var(--ui-ease), background-color var(--ui-dur) var(--ui-ease);
+}
+
+.ig-ref-spot:hover,
+.ig-ref-spot.ig-dragover {
+  border-color: var(--ui-accent);
+  background: var(--ui-surface);
+}
+
+.ig-ref-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 3px;
+  object-fit: cover;
+  border: 1px solid var(--ui-hairline);
+  background: var(--ui-surface);
+  flex: 0 0 auto;
+}
+
+.ig-ref-thumb[hidden] {
+  display: none;
+}
+
+.ig-ref-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  color: var(--ui-ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ig-ref-clear {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ui-ink-3);
+  font: 600 12px / 1 var(--ui-sans);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex: 0 0 auto;
+}
+
+.ig-ref-clear:hover {
+  background: var(--ui-well);
+  color: var(--ui-ink);
+}
+
+.ig-ref-clear[hidden] {
+  display: none;
+}
+
+.ig-ref-file {
+  display: none;
+}
+
+.ig-ref-pill-btn {
+  flex: 0 0 auto;
+}
+
+.ig-tryon-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ig-tryon-hint {
+  min-width: 0;
+  font: 400 var(--ui-fs-1) / 1.2 var(--ui-mono);
+  color: var(--ui-ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

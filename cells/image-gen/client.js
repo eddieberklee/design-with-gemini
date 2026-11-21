@@ -221,6 +221,21 @@
   function buildGenerateRequest(prompt, options) {
     const opts = options || {};
     const text = String(prompt || '').trim();
+    const parts = [];
+    if (Array.isArray(opts.referenceImages)) {
+      opts.referenceImages.forEach(function (ref) {
+        if (ref && ref.data) {
+          parts.push({
+            inlineData: {
+              mimeType: ref.mimeType || 'image/jpeg',
+              data: ref.data
+            }
+          });
+        }
+      });
+    }
+    parts.push({ text: text });
+
     const generationConfig = {
       responseModalities: ['TEXT', 'IMAGE']
     };
@@ -233,7 +248,7 @@
       contents: [
         {
           role: 'user',
-          parts: [{ text: text }]
+          parts: parts
         }
       ],
       generationConfig: generationConfig
@@ -311,6 +326,7 @@
     const model = stripModelsPrefix((params && params.model) || DEFAULT_MODELS[0].id);
     const prompt = String((params && params.prompt) || '').trim();
     const aspectRatio = (params && params.aspectRatio) || '4:3';
+    const referenceImages = (params && params.referenceImages) || [];
     const signal = params && params.signal;
 
     if (!apiKey) {
@@ -328,6 +344,7 @@
     async function callOnce(omitImageConfig) {
       const body = buildGenerateRequest(prompt, {
         aspectRatio: aspectRatio,
+        referenceImages: referenceImages,
         omitImageConfig: omitImageConfig
       });
       const res = await fetch(url, {

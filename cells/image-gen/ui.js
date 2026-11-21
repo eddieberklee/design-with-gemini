@@ -20,74 +20,199 @@
     }
   ];
 
-  const GENERATE_TIP = 'Send the prompt to the selected model; each image is billed to your key.';
+  const TRY_ON_PROMPT =
+    'Photorealistic virtual try-on photograph. Place the exact product shown in the second reference image onto the person shown in the first reference image so they are naturally wearing or holding it. Preserve the person\'s exact face, identity, hair, skin tone, body proportions, pose, and environment from the first image, and preserve the product\'s exact design, color, material, logos, and proportions from the second image. Match lighting, shadows, and natural fit seamlessly.';
 
-  function initImageGenCell() {
-    const root = document.getElementById('cell-image-gen');
+  function readImageFile(file, maxDim) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onerror = function () { reject(new Error('Could not read image')); };
+      reader.onload = function () {
+        const img = new Image();
+        img.onerror = function () { reject(new Error('Invalid image file')); };
+        img.onload = function () {
+          const limit = maxDim || 1024;
+          const scale = Math.min(1, limit / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const c = document.createElement('canvas');
+          c.width = w;
+          c.height = h;
+          c.getContext('2d').drawImage(img, 0, 0, w, h);
+          const dataUrl = c.toDataURL('image/jpeg', 0.88);
+          resolve({
+            dataUrl: dataUrl,
+            data: dataUrl.split(',')[1] || '',
+            mimeType: 'image/jpeg',
+            name: file.name || 'image.jpg'
+          });
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function wireRefSpot(spotEl, defaultLabel, onChange) {
+    const thumb = spotEl.querySelector('.ig-ref-thumb');
+    const label = spotEl.querySelector('.ig-ref-label');
+    const clearBtn = spotEl.querySelector('.ig-ref-clear');
+    const input = spotEl.querySelector('.ig-ref-file');
+
+    let current = null;
+
+    function setFile(file) {
+      if (!file || !file.type || file.type.indexOf('image/') !== 0) return;
+      readImageFile(file, 1024).then(function (img) {
+        current = img;
+        thumb.src = img.dataUrl;
+        thumb.hidden = false;
+        label.textContent = img.name;
+        clearBtn.hidden = false;
+        onChange(current);
+      }).catch(function () {});
+    }
+
+    function clear(e) {
+      if (e) e.stopPropagation();
+      current = null;
+      thumb.hidden = true;
+      thumb.removeAttribute('src');
+      label.textContent = defaultLabel;
+      clearBtn.hidden = true;
+      onChange(null);
+    }
+
+    spotEl.addEventListener('click', function () { input.click(); });
+    spotEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        input.click();
+      }
+    });
+    input.addEventListener('change', function () {
+      if (input.files && input.files[0]) {
+        setFile(input.files[0]);
+        input.value = '';
+      }
+    });
+    clearBtn.addEventListener('click', clear);
+
+    ['dragenter', 'dragover'].forEach(function (ev) {
+      spotEl.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        spotEl.classList.add('ig-dragover');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (ev) {
+      spotEl.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        spotEl.classList.remove('ig-dragover');
+      });
+    });
+    spotEl.addEventListener('drop', function (e) {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files[0]) setFile(files[0]);
+    });
+
+    return {
+      get: function () { return current; },
+      clear: clear
+    };
+  }
+
+  function mountImageGenCell(root, cellIndex) {
     const client = global.GeminiImageGen;
     if (!root || !client) return;
+
+    const isTryOn = root.getAttribute('data-mode') === 'try-on';
+    const title = isTryOn ? 'Virtual Try-On' : 'Image Gen';
 
     root.classList.add('ui-tile');
     root.innerHTML = [
       '<header class="ui-tile-head">',
-      '  <span class="ui-tile-index">10</span>',
-      '  <h2 class="ui-tile-title">Image Gen</h2>',
+      '  <span class="ui-tile-index">' + cellIndex + '</span>',
+      '  <h2 class="ui-tile-title">' + title + '</h2>',
       '  <div class="ui-tile-actions">',
-      '    <button type="button" class="ui-pill ig-key-btn" aria-expanded="false">',
-      '      <span class="ui-pill-label">No key</span>',
+      '    <select class="ig-model-select" aria-label="Image generation model"></select>',
+      '    <button type="button" class="ui-pill ig-key-btn" data-tone="attention" aria-expanded="false">',
+      '      <span class="ui-pill-label">Key</span>',
       '    </button>',
-      '    <select class="ig-select ig-model-select ui-hide-compact" aria-label="Image model"',
-      '      data-tip="Gemini model that draws the image; the list updates from your key on first Generate."></select>',
       '  </div>',
       '</header>',
       '<div class="ig-key-bar" hidden>',
       '  <input type="password" class="ig-key-input" placeholder="Paste Gemini API key (AIza...)" autocomplete="off" spellcheck="false" aria-label="Gemini API key">',
-      '  <label class="ig-key-persist ui-hide-tiny" data-tip="Keep the key after this tab closes, stored in this browser.">',
-      '    <input type="checkbox" class="ig-key-persist-cb" checked> Remember</label>',
-      '  <button type="button" class="ui-btn ui-btn--sm ig-key-save" data-tip="Use this key here and in the other Gemini tiles." data-tip-key="Enter">Save</button>',
-      '  <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-key-clear ui-hide-tiny" data-tip="Remove the saved key from every Gemini tile.">Clear</button>',
+      '  <label class="ig-key-persist"><input type="checkbox" class="ig-key-persist-cb" checked> Local</label>',
+      '  <button type="button" class="ui-btn ui-btn--sm ig-key-save">Save</button>',
+      '  <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-key-clear">Clear</button>',
       '</div>',
       '<div class="ui-tile-body ig-body">',
-      '  <div class="ig-stage" style="--ig-ar: 1.3333">',
-      '    <div class="ig-frame" aria-hidden="true"><span class="ig-frame-ratio">4:3</span></div>',
-      '    <img class="ig-img" alt="Generated image preview" role="button" tabindex="0" data-tip="View full size with its prompt and download." hidden>',
+      isTryOn ? [
+        '  <div class="ig-refs">',
+        '    <div class="ig-ref-spot ig-ref-person" role="button" tabindex="0" aria-label="Drop person reference image">',
+        '      <img class="ig-ref-thumb" alt="Person reference" hidden>',
+        '      <span class="ig-ref-label">1 · Person</span>',
+        '      <button type="button" class="ig-ref-clear" aria-label="Clear person" hidden>×</button>',
+        '      <input type="file" class="ig-ref-file" accept="image/*">',
+        '    </div>',
+        '    <div class="ig-ref-spot ig-ref-product" role="button" tabindex="0" aria-label="Drop product reference image">',
+        '      <img class="ig-ref-thumb" alt="Product reference" hidden>',
+        '      <span class="ig-ref-label">2 · Product</span>',
+        '      <button type="button" class="ig-ref-clear" aria-label="Clear product" hidden>×</button>',
+        '      <input type="file" class="ig-ref-file" accept="image/*">',
+        '    </div>',
+        '  </div>'
+      ].join('\n') : '',
+      '  <div class="ig-stage">',
+      '    <img class="ig-img" alt="Generated image preview" hidden>',
       '    <div class="ig-empty">',
-      '      <p class="ig-empty-copy">Write a prompt or pick an example.</p>',
-      '      <div class="ig-presets"></div>',
+      isTryOn
+        ? '      <p class="ig-empty-copy">Drop a person (1) and a product (2), then click Try On.</p>'
+        : '      <p class="ig-empty-copy">Generate with Nano Banana Pro / Gemini native image API.</p><div class="ig-presets"></div>',
       '    </div>',
       '    <div class="ig-loading" hidden>',
-      '      <span class="ui-label">Generating</span>',
-      '      <span class="ui-readout ui-readout--hero"><span class="ig-loading-label">0.0</span><span class="ui-readout-unit">s</span></span>',
+      '      <div class="ig-spinner" aria-hidden="true"></div>',
+      '      <span class="ig-loading-label">Generating 0.0s</span>',
       '    </div>',
       '    <div class="ig-error" role="alert" hidden></div>',
       '  </div>',
-      '  <form class="ig-form ui-hide-tiny">',
-      '    <input type="text" class="ig-prompt" placeholder="Describe an image…" aria-label="Image prompt">',
-      '    <select class="ig-select ig-aspect ui-hide-compact" aria-label="Aspect ratio"',
-      '      data-tip="Requested width to height; a model that rejects it returns its default shape."></select>',
-      '    <button type="submit" class="ui-btn ui-btn--primary ig-submit">Generate</button>',
-      '  </form>',
+      isTryOn ? [
+        '  <div class="ig-tryon-bar">',
+        '    <span class="ig-tryon-hint">Hardcoded human try-on prompt</span>',
+        '    <select class="ig-aspect" aria-label="Aspect ratio"></select>',
+        '    <button type="button" class="ui-btn ui-btn--primary ig-submit">Try On</button>',
+        '  </div>'
+      ].join('\n') : [
+        '  <form class="ig-form">',
+        '    <input type="file" class="ig-ref-file ig-single-ref-file" accept="image/*">',
+        '    <button type="button" class="ui-btn ui-btn--sm ig-ref-pill-btn" title="Attach optional reference image">+ Ref</button>',
+        '    <input type="text" class="ig-prompt" placeholder="Describe an image..." aria-label="Image prompt">',
+        '    <select class="ig-aspect" aria-label="Aspect ratio"></select>',
+        '    <button type="submit" class="ui-btn ui-btn--primary ig-submit">Generate</button>',
+        '  </form>'
+      ].join('\n'),
       '</div>',
       '<footer class="ui-tile-foot">',
-      '  <span class="ig-status ui-truncate">No image yet</span>',
+      '  <span class="ig-status ui-truncate">Ready</span>',
       '  <span class="ig-foot-actions" hidden>',
-      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-full-btn" data-tip="Open the image full size with its prompt and download.">View</button>',
-      '    <a class="ui-btn ui-btn--sm ui-btn--quiet ig-dl-btn" download="gemini-image.png">Download</a>',
+      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-full-btn">Full</button>',
+      '    <a class="ui-btn ui-btn--sm ui-btn--quiet ig-dl-btn" download="gemini-image.png">Save</a>',
       '  </span>',
       '</footer>',
-      '<dialog class="ui-dialog ig-dialog" aria-labelledby="ig-dialog-title">',
-      '  <header class="ui-studio-bar">',
-      '    <span class="ui-tile-index">10</span>',
-      '    <h2 class="ui-studio-title" id="ig-dialog-title">Generated image</h2>',
+      '<dialog class="ui-dialog ig-dialog" aria-label="Generated image full view">',
+      '  <div class="ui-studio-bar">',
+      '    <span class="ui-studio-title">' + title + '</span>',
       '    <div class="ui-studio-actions">',
       '      <a class="ui-btn ui-btn--sm ig-dialog-dl" download="gemini-image.png">Download</a>',
-      '      <button type="button" class="ui-btn ig-dialog-close" data-tip="Back to the grid." data-tip-key="Esc">Close</button>',
+      '      <button type="button" class="ui-btn ui-btn--sm ig-dialog-close">Close</button>',
       '    </div>',
-      '  </header>',
+      '  </div>',
       '  <div class="ig-dialog-body">',
       '    <img class="ig-dialog-img" alt="Full resolution generated image">',
       '  </div>',
-      '  <div class="ig-dialog-meta"><p class="ig-dialog-prompt"></p><p class="ig-dialog-facts"></p></div>',
+      '  <div class="ig-dialog-meta"></div>',
       '</dialog>'
     ].join('\n');
 
@@ -119,39 +244,71 @@
     const dialogClose = root.querySelector('.ig-dialog-close');
     const dialogMeta = root.querySelector('.ig-dialog-meta');
 
-    const runSlot = client.createRunSlot();
+    let activeController = null;
     let timerId = null;
     let lastResult = null;
-    let imageUrl = '';
     let modelsDiscoveredForKey = '';
+    let singleRef = null;
+    let personRefSpot = null;
+    let productRefSpot = null;
+
+    if (isTryOn) {
+      personRefSpot = wireRefSpot(root.querySelector('.ig-ref-person'), '1 · Person', function () {
+        showError('');
+      });
+      productRefSpot = wireRefSpot(root.querySelector('.ig-ref-product'), '2 · Product', function () {
+        showError('');
+      });
+    } else {
+      const refBtn = root.querySelector('.ig-ref-pill-btn');
+      const refFile = root.querySelector('.ig-single-ref-file');
+      refBtn.addEventListener('click', function () {
+        if (singleRef) {
+          singleRef = null;
+          refBtn.textContent = '+ Ref';
+          refBtn.removeAttribute('aria-pressed');
+        } else {
+          refFile.click();
+        }
+      });
+      refFile.addEventListener('change', function () {
+        if (refFile.files && refFile.files[0]) {
+          readImageFile(refFile.files[0], 1024).then(function (img) {
+            singleRef = img;
+            refBtn.textContent = 'Ref ✓';
+            refBtn.setAttribute('aria-pressed', 'true');
+          }).catch(function () {});
+          refFile.value = '';
+        }
+      });
+      ['dragenter', 'dragover'].forEach(function (ev) {
+        stage.addEventListener(ev, function (e) { e.preventDefault(); });
+      });
+      stage.addEventListener('drop', function (e) {
+        e.preventDefault();
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (!f || f.type.indexOf('image/') !== 0) return;
+        readImageFile(f, 1024).then(function (img) {
+          singleRef = img;
+          refBtn.textContent = 'Ref ✓';
+          refBtn.setAttribute('aria-pressed', 'true');
+          statusEl.textContent = 'Reference attached: ' + img.name;
+        }).catch(function () {});
+      });
+    }
 
     function populateModels(models) {
       const current = modelSelect.value;
-      const list = models.slice();
-      // A list refresh must never change the model the next paid click uses.
-      if (current && !list.some(function (m) { return m.id === current; })) {
-        list.unshift({ id: current, label: current });
-      }
       modelSelect.innerHTML = '';
-      list.forEach(function (m) {
+      models.forEach(function (m) {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.label || m.id;
         modelSelect.appendChild(opt);
       });
-      if (current) modelSelect.value = current;
-    }
-
-    // ListModels runs only from an explicit Generate click (never on load, Save or key sync),
-    // once per key, and is not awaited.
-    function discoverModelsOnce(key) {
-      if (!key || key === modelsDiscoveredForKey) return;
-      modelsDiscoveredForKey = key;
-      client.discoverImageModels(key)
-        .then(function (models) {
-          if (models && models.length && client.KeyStore.get() === key) populateModels(models);
-        })
-        .catch(function () {});
+      if (current && models.some(function (m) { return m.id === current; })) {
+        modelSelect.value = current;
+      }
     }
 
     function populateAspects() {
@@ -163,154 +320,57 @@
       });
     }
 
-    // Status pill: grey for no key / key set, rust while generating or after an error,
-    // green only after an image really came back and decoded. Click opens the key bar.
-    let phase = 'idle'; // idle | busy | error | done
-    const PILL = {
-      nokey: { label: 'No key', tone: '', tip: 'No Gemini API key yet. Click to paste one; the Gemini tiles share it.' },
-      idle: { label: 'Key set', tone: '', tip: 'Key saved; Generate is ready. Click to replace or clear the key.' },
-      busy: { label: 'Running', tone: 'attention', tip: 'Waiting for the model; Generate is now Cancel. Click to manage the key.' },
-      error: { label: 'Error', tone: 'attention', tip: 'The last request failed; the reason is shown on the image. Click to manage the key.' },
-      done: { label: 'Done', tone: 'ok', tip: 'The last image came back and decoded. Click to manage the key.' }
-    };
-
-    function renderPill() {
-      const hasKey = Boolean(client.KeyStore.get());
-      const state = phase === 'busy' ? PILL.busy : (!hasKey ? PILL.nokey : PILL[phase]);
-      if (state.tone) keyBtn.setAttribute('data-tone', state.tone);
-      else keyBtn.removeAttribute('data-tone');
-      keyBtn.querySelector('.ui-pill-label').textContent = state.label;
-      keyBtn.setAttribute('aria-label', 'API key, status ' + state.label);
-      keyBtn.setAttribute('data-tip', state.tip);
-    }
-
-    function setPhase(next) {
-      phase = next;
-      renderPill();
-    }
-
     function refreshKeyState() {
-      const key = client.KeyStore.get();
-      const hasKey = Boolean(key);
-      renderPill();
-      keyInput.placeholder = hasKey
-        ? 'Saved ' + client.KeyStore.mask(key) + ' · paste a new key to replace'
-        : 'Paste Gemini API key (AIza...)';
-    }
-
-    function syncAspectFrame() {
-      const parts = String(aspectSelect.value || '4:3').split(':');
-      const ar = Number(parts[0]) / Number(parts[1]);
-      stage.style.setProperty('--ig-ar', Number.isFinite(ar) && ar > 0 ? ar.toFixed(4) : '1.3333');
-      root.querySelector('.ig-frame-ratio').textContent = aspectSelect.value;
+      const hasKey = Boolean(client.KeyStore.get());
+      keyBtn.setAttribute('data-tone', hasKey ? 'ok' : 'attention');
+      keyBtn.querySelector('.ui-pill-label').textContent = hasKey ? 'Key ✓' : 'Key';
+      if (hasKey && client.KeyStore.get() !== modelsDiscoveredForKey) {
+        modelsDiscoveredForKey = client.KeyStore.get();
+        client.discoverImageModels(modelsDiscoveredForKey)
+          .then(function (models) {
+            if (models && models.length) populateModels(models);
+          })
+          .catch(function () {});
+      }
     }
 
     function showError(msg) {
       if (!msg) {
         errorEl.hidden = true;
         errorEl.textContent = '';
-        // The pill must not stay rust pointing at a message that is gone.
-        if (phase === 'error') setPhase('idle');
         return;
       }
       errorEl.textContent = msg;
       errorEl.hidden = false;
     }
 
-    // Elapsed-time ticker: runs only while a request is in flight and the tab is visible.
-    let busySince = 0;
-
-    function tick() {
-      loadingLabel.textContent = ((Date.now() - busySince) / 1000).toFixed(1);
-    }
-
-    function stopTicker() {
-      if (timerId) {
-        global.clearInterval(timerId);
-        timerId = null;
-      }
-    }
-
-    function startTicker() {
-      stopTicker();
-      if (!busySince || document.visibilityState === 'hidden') return;
-      tick();
-      timerId = global.setInterval(tick, 100);
-    }
-
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'hidden') stopTicker();
-      else if (busySince) startTicker();
-    });
-
     function setBusy(busy) {
       if (busy) {
-        busySince = Date.now();
+        const t0 = Date.now();
         loadingEl.hidden = false;
-        stage.setAttribute('data-busy', '');
-        loadingLabel.textContent = '0.0';
+        loadingLabel.textContent = 'Generating 0.0s';
         submitBtn.textContent = 'Cancel';
         submitBtn.setAttribute('aria-pressed', 'true');
-        submitBtn.setAttribute('data-tip', 'Stop waiting and abort this request.');
-        statusEl.textContent = 'Generating with ' + modelSelect.value + '…';
-        startTicker();
-        setPhase('busy');
+        statusEl.textContent = 'Generating with ' + modelSelect.value + '...';
+        timerId = global.setInterval(function () {
+          const sec = ((Date.now() - t0) / 1000).toFixed(1);
+          loadingLabel.textContent = 'Generating ' + sec + 's';
+        }, 100);
       } else {
-        busySince = 0;
-        stopTicker();
+        if (timerId) {
+          global.clearInterval(timerId);
+          timerId = null;
+        }
         loadingEl.hidden = true;
-        stage.removeAttribute('data-busy');
-        submitBtn.textContent = 'Generate';
+        submitBtn.textContent = isTryOn ? 'Try On' : 'Generate';
         submitBtn.removeAttribute('aria-pressed');
-        submitBtn.setAttribute('data-tip', GENERATE_TIP);
-        if (phase === 'busy') setPhase('idle');
       }
     }
 
-    // Resolves once the browser has decoded the image, so a corrupt payload is an error
-    // and never a "successful" broken image.
-    function loadImage(url) {
-      return new Promise(function (resolve, reject) {
-        const probe = new Image();
-        probe.onload = function () { resolve(probe); };
-        probe.onerror = function () {
-          reject(new Error('The returned image could not be decoded.'));
-        };
-        probe.src = url;
-      });
-    }
-
-    function showResult(result, url, dims, prompt) {
-      const previousUrl = imageUrl;
-      imageUrl = url;
-      lastResult = Object.assign({ prompt: prompt, aspectRatio: result.aspectRatio }, result);
-      imgEl.src = url;
-      imgEl.alt = prompt;
-      imgEl.hidden = false;
-      emptyEl.hidden = true;
-      stage.classList.add('ig-stage--has-image');
-
-      const ext = result.mimeType === 'image/jpeg' ? 'jpg' : (result.mimeType === 'image/webp' ? 'webp' : 'png');
-      const filename = 'gemini-' + Date.now() + '.' + ext;
-      dlBtn.href = url;
-      dlBtn.download = filename;
-      dialogImg.src = url;
-      dialogDl.href = url;
-      dialogDl.download = filename;
-      footActions.hidden = false;
-
-      const sec = (result.elapsedMs / 1000).toFixed(1);
-      statusEl.textContent = sec + 's · ' + dims + ' · ' + result.model;
-      dialogMeta.querySelector('.ig-dialog-prompt').textContent = prompt;
-      dialogMeta.querySelector('.ig-dialog-facts').textContent =
-        result.model + ' · ' + dims + ' · ' + result.aspectRatio + ' requested · ' + sec + 's';
-      if (previousUrl) URL.revokeObjectURL(previousUrl);
-      setPhase('done');
-    }
-
-    async function runGeneration() {
-      if (runSlot.busy()) {
-        runSlot.cancel();
+    async function runGeneration(promptText) {
+      if (activeController) {
+        activeController.abort();
+        activeController = null;
         setBusy(false);
         statusEl.textContent = 'Cancelled';
         return;
@@ -325,96 +385,108 @@
         return;
       }
 
-      const prompt = String(promptInput.value || '').trim();
-      if (!prompt) {
-        statusEl.textContent = 'Enter a prompt first';
-        promptInput.focus();
-        return;
+      let prompt = '';
+      let referenceImages = [];
+      if (isTryOn) {
+        const pImg = personRefSpot.get();
+        const prodImg = productRefSpot.get();
+        if (!pImg || !prodImg) {
+          showError('Drop both a Person image (1) and a Product image (2) first.');
+          return;
+        }
+        prompt = TRY_ON_PROMPT;
+        referenceImages = [pImg, prodImg];
+      } else {
+        prompt = String(promptText || (promptInput && promptInput.value) || '').trim();
+        if (!prompt) {
+          if (promptInput) promptInput.focus();
+          return;
+        }
+        if (singleRef) referenceImages = [singleRef];
       }
 
       showError('');
-      const ctrl = runSlot.begin();
-      const aspectRatio = aspectSelect.value;
+      activeController = new AbortController();
       setBusy(true);
-      discoverModelsOnce(key);
 
-      let url = '';
       try {
         const result = await client.generateImage({
           apiKey: key,
           model: modelSelect.value,
           prompt: prompt,
-          aspectRatio: aspectRatio,
-          signal: ctrl.signal
+          aspectRatio: aspectSelect.value,
+          referenceImages: referenceImages,
+          signal: activeController.signal
         });
-        if (!runSlot.isCurrent(ctrl)) return;
-        url = URL.createObjectURL(result.blob);
-        const probe = await loadImage(url);
-        if (!runSlot.isCurrent(ctrl)) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        result.aspectRatio = aspectRatio;
-        showResult(result, url, probe.naturalWidth + '×' + probe.naturalHeight, prompt);
-        url = '';
+
+        const imgUrl = result.blob ? URL.createObjectURL(result.blob) : result.dataUrl;
+        lastResult = Object.assign({ prompt: prompt, aspectRatio: aspectSelect.value, imgUrl: imgUrl }, result);
+        imgEl.src = imgUrl;
+        imgEl.alt = isTryOn ? 'Virtual try-on result' : prompt;
+        imgEl.hidden = false;
+        emptyEl.hidden = true;
+        stage.classList.add('ig-stage--has-image');
+
+        const ext = result.mimeType === 'image/jpeg' ? 'jpg' : (result.mimeType === 'image/webp' ? 'webp' : 'png');
+        const filename = (isTryOn ? 'gemini-tryon-' : 'gemini-') + Date.now() + '.' + ext;
+        dlBtn.href = imgUrl;
+        dlBtn.download = filename;
+        dialogImg.src = imgUrl;
+        dialogDl.href = imgUrl;
+        dialogDl.download = filename;
+        footActions.hidden = false;
+
+        const sec = (result.elapsedMs / 1000).toFixed(1);
+        statusEl.textContent = sec + 's · ' + result.model;
+
+        imgEl.onload = function () {
+          const dims = imgEl.naturalWidth + '×' + imgEl.naturalHeight;
+          statusEl.textContent = sec + 's · ' + dims + ' · ' + result.model;
+          dialogMeta.textContent = result.model + ' · ' + dims + ' · ' + sec + 's';
+        };
       } catch (err) {
-        if (url) URL.revokeObjectURL(url);
-        // A cancelled or replaced run must not write over the state of the run that replaced it.
-        if (!runSlot.isCurrent(ctrl)) return;
         if (err && err.name === 'AbortError') {
           statusEl.textContent = 'Cancelled';
         } else {
           const msg = (err && err.message) ? err.message : String(err);
           showError(msg);
           statusEl.textContent = 'Error';
-          setPhase('error');
         }
       } finally {
-        if (runSlot.finish(ctrl)) setBusy(false);
+        activeController = null;
+        setBusy(false);
       }
     }
 
-    // Preset chips only fill the prompt: generating costs money, so only Generate sends.
-    PRESETS.forEach(function (preset) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'ui-chip';
-      btn.textContent = preset.label;
-      btn.setAttribute('data-tip', 'Fill the prompt with this example; nothing is sent until Generate.');
-      btn.addEventListener('click', function () {
-        promptInput.value = preset.prompt;
-        promptInput.focus();
+    if (presetsEl) {
+      PRESETS.forEach(function (preset) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ui-chip';
+        btn.textContent = preset.label;
+        btn.addEventListener('click', function () {
+          promptInput.value = preset.prompt;
+          runGeneration(preset.prompt);
+        });
+        presetsEl.appendChild(btn);
       });
-      presetsEl.appendChild(btn);
-    });
-
-    function closeKeyBar() {
-      keyBar.hidden = true;
-      keyBtn.setAttribute('aria-expanded', 'false');
-      keyInput.value = '';
-      keyBtn.focus();
     }
 
     keyBtn.addEventListener('click', function () {
-      if (!keyBar.hidden) {
-        closeKeyBar();
-        return;
+      const opening = keyBar.hidden;
+      keyBar.hidden = !opening;
+      keyBtn.setAttribute('aria-expanded', String(opening));
+      if (opening) {
+        keyInput.value = client.KeyStore.get();
+        keyInput.focus();
       }
-      keyBar.hidden = false;
-      keyBtn.setAttribute('aria-expanded', 'true');
-      refreshKeyState();
-      keyInput.focus();
     });
 
     keySaveBtn.addEventListener('click', function () {
-      // Empty Save must not clear the shared key for every cell; Clear does that.
-      if (!keyInput.value.trim()) {
-        keyInput.focus();
-        return;
-      }
       client.KeyStore.set(keyInput.value, keyPersist.checked);
       refreshKeyState();
-      closeKeyBar();
+      keyBar.hidden = true;
+      keyBtn.setAttribute('aria-expanded', 'false');
       showError('');
     });
 
@@ -424,7 +496,6 @@
       modelsDiscoveredForKey = '';
       populateModels(client.DEFAULT_MODELS);
       refreshKeyState();
-      keyInput.focus();
     });
 
     keyInput.addEventListener('keydown', function (e) {
@@ -432,25 +503,21 @@
         e.preventDefault();
         keySaveBtn.click();
       } else if (e.key === 'Escape') {
-        closeKeyBar();
+        keyBar.hidden = true;
+        keyBtn.setAttribute('aria-expanded', 'false');
       }
     });
 
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      runGeneration();
-    });
-
-    aspectSelect.addEventListener('change', syncAspectFrame);
-
-    // A key saved or removed in another cell (gemini-key-changed) or another tab (storage)
-    // only repaints the key state: no request is sent.
-    global.addEventListener('gemini-key-changed', refreshKeyState);
-    global.addEventListener('storage', function (ev) {
-      if (!ev || !ev.key || ev.key === 'dc_gemini_api_key_session' || ev.key === 'dc_gemini_api_key_local') {
-        refreshKeyState();
-      }
-    });
+    if (form) {
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        runGeneration(promptInput.value);
+      });
+    } else {
+      submitBtn.addEventListener('click', function () {
+        runGeneration(TRY_ON_PROMPT);
+      });
+    }
 
     function openLightbox() {
       if (!lastResult || typeof dialog.showModal !== 'function') return;
@@ -458,13 +525,6 @@
     }
 
     imgEl.addEventListener('click', openLightbox);
-    // The footer View button hides on compact tiles; the image itself is the keyboard path there.
-    imgEl.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        openLightbox();
-      }
-    });
     fullBtn.addEventListener('click', openLightbox);
     dialogClose.addEventListener('click', function () { dialog.close(); });
     dialog.addEventListener('click', function (e) {
@@ -473,15 +533,20 @@
 
     populateModels(client.DEFAULT_MODELS);
     populateAspects();
-    syncAspectFrame();
-    submitBtn.setAttribute('data-tip', GENERATE_TIP);
-    submitBtn.setAttribute('data-tip-key', 'Enter');
     refreshKeyState();
   }
 
+  function initAllImageGenCells() {
+    const nodes = document.querySelectorAll('.cell--image-gen');
+    for (let i = 0; i < nodes.length; i++) {
+      const idx = nodes[i].getAttribute('data-cell-index') || String(10 + i);
+      mountImageGenCell(nodes[i], idx);
+    }
+  }
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initImageGenCell);
+    document.addEventListener('DOMContentLoaded', initAllImageGenCells);
   } else {
-    initImageGenCell();
+    initAllImageGenCells();
   }
 })(window);
