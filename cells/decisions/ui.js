@@ -1064,8 +1064,9 @@
             className: 'dc-seg-btn',
             'aria-pressed': String(app.mode === m),
             textContent: m === 'live' ? 'Live API' : 'Simulated',
-            onClick: function () {
+            onClick: function (e) {
               if (m === 'live' && !Client.KeyStore.get()) {
+                e.stopPropagation();
                 // Keep app.mode honest ('simulated') until the user saves a key
                 app.showKeyPopover = true;
                 renderWorkbenchHeaderControls();
@@ -1625,7 +1626,8 @@
                     type: 'button',
                     className: 'dc-btn dc-btn--sm',
                     textContent: 'Update API Key',
-                    onClick: function () {
+                    onClick: function (e) {
+                      e.stopPropagation();
                       app.showKeyPopover = true;
                       renderKeyPopover();
                       if (wbRefs.keyInput) wbRefs.keyInput.focus();
