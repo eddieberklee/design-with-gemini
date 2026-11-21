@@ -562,7 +562,7 @@
       'section',
       {
         id: 'lg-sec-cell-1',
-        className: 'cell lg-instrument-cell',
+        className: 'cell lg-instrument-cell ui-tile',
         'aria-label': 'Left Grille Acoustic Swipe Detector'
       },
       [
@@ -579,7 +579,7 @@
     for (let slot = 2; slot <= 9; slot++) {
       const slotEl = h('section', {
         id: `lg-sec-cell-${slot}`,
-        className: 'cell lg-sec-slot',
+        className: 'cell lg-sec-slot ui-tile',
         dataset: { slot: String(slot) }
       });
       secondarySlotMap[slot] = slotEl;

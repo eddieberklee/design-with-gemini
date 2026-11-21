@@ -397,16 +397,56 @@ body:has(main.grid[hidden]) .mg-hud {
 }
 
 /* ==========================================================================
-   3. SECONDARY GRID CELLS (`#lg-sec-cell-1` .. `#lg-sec-cell-9`)
-   Strict `aspect-ratio: 4 / 3` lock + `position: relative; overflow: hidden; container-type: inline-size;`
+   3. SENSOR CELL FRAME (contract: NOTES.md "Sensor cell frame")
+   Every slot `#lg-sec-cell-N` is `section.cell.ui-tile` (+ `.lg-sec-slot` for 2..9): a 4:3
+   shared-anatomy tile and the `ui-tile` size container. A sensor mounts one absolute stage into
+   it; adding `.lg-cell-stage` to that stage turns it into the tile column
+   (`.ui-tile-head` 36 px / `.ui-tile-body` rest / optional `.ui-tile-foot` 30 px).
    ========================================================================== */
 
-#left-grille-secondary-grid > .cell,
-.lg-sec-slot,
-.lg-instrument-cell {
+#left-grille-secondary-grid {
+  --lg-sig-up: #0052cc;                 /* two-polarity signal pair (up/approach, down/recede) */
+  --lg-sig-up-tint: #e8eefa;
+  --lg-sig-down: var(--ui-accent);
+  --lg-sig-down-tint: var(--ui-accent-tint);
+  grid-template-columns: minmax(0, 1fr); /* 1 column below 720 px: every tile stays >= 320 px */
+  gap: var(--ui-2);
+}
+
+@media (min-width: 720px) {
+  #left-grille-secondary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1200px) {
+  #left-grille-secondary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+#left-grille-secondary-grid > .cell {
   position: relative;
   overflow: hidden;
-  container-type: inline-size;
+}
+
+/* A slot no sensor has mounted into (8 and 9 today) takes no place in the grid. */
+#left-grille-secondary-grid > .lg-sec-slot:empty {
+  display: none;
+}
+
+#left-grille-secondary-grid > .ui-tile > .lg-cell-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font-family: var(--ui-sans);
 }
 
 .lg-inst-stage {
