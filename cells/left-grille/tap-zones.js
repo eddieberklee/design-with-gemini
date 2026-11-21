@@ -1594,9 +1594,9 @@
     // Zone geometry definitions (clean non-overlapping clickable hit regions)
     const zoneRects = {
       'top-left': { x: 14, y: 18, width: 72, height: 68, rx: 6, labelX: 50, labelY: 79 },
-      'left-palm': { x: 14, y: 122, width: 88, height: 68, rx: 6, labelX: 58, labelY: 162 },
-      'trackpad-rim': { x: 108, y: 122, width: 104, height: 68, rx: 6, labelX: 160, labelY: 162 },
-      'right-palm': { x: 218, y: 102, width: 88, height: 88, rx: 6, labelX: 262, labelY: 162 }
+      'left-palm': { x: 14, y: 122, width: 88, height: 68, rx: 6, labelX: 58, labelY: 180 },
+      'trackpad-rim': { x: 108, y: 122, width: 104, height: 68, rx: 6, labelX: 160, labelY: 180 },
+      'right-palm': { x: 218, y: 102, width: 88, height: 88, rx: 6, labelX: 262, labelY: 180 }
     };
 
     const zoneNodes = [];
@@ -1665,6 +1665,7 @@
           'data-zone': zoneId,
           'data-active': 'false',
           'data-cal-target': 'false',
+          'data-tip': TZ_ZONE_TIPS[zoneId],
           'aria-label': `Simulate chassis tap on ${meta.label} (${meta.hint})`
         },
         [hitRect, ripple1, ripple2, targetDot, codeText, nameText, calBadge]
@@ -1787,6 +1788,43 @@
   // Secondary Grid Cell 02 Mount (`mountTapZonesCell`)
   // ---------------------------------------------------------------------------
 
+  // Tooltip copy (ui/NOTES.md section 4). Each text was checked against its handler below.
+  const TZ_TIPS = {
+    arm: 'Turn on the shared grille microphone for every sensor on this page.',
+    armNoBus: 'No shared microphone on this page. Click a zone to simulate a tap.',
+    armLive: 'Listening. Click to pause tap detection here; the shared mic stays on.',
+    armPaused: 'Tap detection is paused here. Click to resume listening.',
+    armRequesting: 'Waiting for microphone permission.',
+    armRetry: 'The microphone failed. Click to ask for it again.',
+    ready: 'Microphone off; factory zones. Click a zone to simulate a tap, or Arm to listen.',
+    readyCal: 'Microphone off; your saved calibration is in use. Click a zone to simulate a tap.',
+    live: 'Listening on the shared microphone for taps on the laptop body.',
+    paused: 'The microphone is on, but this sensor is ignoring it.',
+    arming: 'Waiting for microphone permission.',
+    calibrating: 'Calibrating: tap the highlighted zone. Esc cancels.',
+    sim: 'Showing a simulated tap, not the microphone.',
+    noBus: 'No shared microphone on this page. Clicking a zone still simulates a tap.',
+    micError: 'The microphone request failed. Click Retry to ask again.',
+    vetoLong: 'Ignored a sound longer than a tap, such as speech or a swipe.',
+    vetoGlitch: 'Ignored a sound too short or too slow to be a tap.',
+    wrongZone: 'Calibration wants the highlighted zone next.',
+    cal: 'Tap each of the 4 zones once to fit this laptop; saved in this browser.',
+    calRedo: 'Redo the 4-zone calibration; the new one replaces the saved one.',
+    calCancel: 'Stop calibrating; taps captured in this run are discarded.',
+    calReset: 'Delete the saved calibration and go back to the factory zones.',
+    zone: 'Zone of the last tap, and how closely it matched that zone.',
+    rise: "Rise: time from the tap's start to its peak, in milliseconds.",
+    hf: 'HF tilt: tap energy above 3.5 kHz against the whole tap, in dB.',
+    source: 'Source of the last tap (SIM or MIC, and its length), or which zone set is in use.',
+    compact: 'This tile is too narrow for the Calibrate control. Widen the window.'
+  };
+  const TZ_ZONE_TIPS = {
+    'top-left': 'Simulate a tap on the deck near Esc and the left grille.',
+    'left-palm': 'Simulate a tap on the left palm rest.',
+    'trackpad-rim': 'Simulate a tap on the front edge below the trackpad.',
+    'right-palm': 'Simulate a tap on the right palm rest, across the keyboard.'
+  };
+
   function mountTapZonesCell(cellEl, bus) {
     if (!cellEl) return null;
 
@@ -1817,7 +1855,7 @@
 
     // Screen-reader live region
     const srLive = h('div', {
-      className: 'tz-sr-only',
+      className: 'tz-sr-only ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
@@ -1831,50 +1869,59 @@
       }, 20);
     }
 
-    // 1. Top Bezel
-    const armDot = h('span', { className: 'tz-dot', 'aria-hidden': 'true' });
-    const armText = h('span', { textContent: 'ARM' });
+    // 1. Head: index · title · status pill · Arm (shared sensor cell frame, left-grille NOTES.md)
+    const armText = h('span', { textContent: 'Arm' });
     const armBtn = h(
       'button',
       {
         type: 'button',
-        className: 'tz-btn tz-btn--arm',
+        className: 'tz-btn--arm ui-btn ui-btn--sm',
         dataset: { armed: 'false' },
         'aria-pressed': 'false',
-        title: 'Arm shared 48 kHz microphone bus (or pause local tap detection)',
+        'data-tone': 'idle',
+        'data-tip': bus && typeof bus.requestArm === 'function' ? TZ_TIPS.arm : TZ_TIPS.armNoBus,
         onClick: () => handleArmClick()
       },
-      [armDot, armText]
+      [armText]
     );
 
+    // The pill's label keeps the `tz-status` hook (text + data-veto); tone and tip live on the wrapper.
     const statusPill = h('span', {
-      className: 'tz-status',
-      textContent: savedCal ? 'CAL · TAP MAP' : 'READY · TAP MAP'
+      className: 'ui-pill-label tz-status',
+      textContent: savedCal ? 'READY · CAL' : 'READY'
     });
+    const statusWrap = h(
+      'span',
+      {
+        className: 'ui-pill tz-pill',
+        role: 'note',
+        tabindex: '0',
+        'data-tone': 'idle',
+        'data-tip': savedCal ? TZ_TIPS.readyCal : TZ_TIPS.ready
+      },
+      [statusPill]
+    );
 
     const calBtn = h(
       'button',
       {
         type: 'button',
-        className: 'tz-btn tz-btn--cal',
+        className: 'tz-btn--cal ui-btn ui-btn--sm ui-btn--quiet',
         dataset: { calibrated: savedCal ? 'true' : 'false' },
         'aria-expanded': 'false',
-        title: '1-tap-per-zone quick chassis calibration (saved to localStorage)',
+        'data-tip': savedCal ? TZ_TIPS.calRedo : TZ_TIPS.cal,
         onClick: () => toggleCalibration()
       },
-      ['CAL 4Z']
+      ['Calibrate']
     );
 
-    const bezel = h('div', { className: 'tz-bezel' }, [
-      h('div', { className: 'tz-bezel-group' }, [
-        h('span', { className: 'tz-kicker', textContent: '02' }),
-        h('span', { className: 'tz-title', textContent: 'Tap Zones' }),
-        armBtn
-      ]),
-      h('div', { className: 'tz-bezel-group tz-bezel-group--right' }, [statusPill, calBtn])
+    const bezel = h('header', { className: 'tz-bezel ui-tile-head' }, [
+      h('span', { className: 'ui-tile-index', textContent: '02' }),
+      h('span', { className: 'ui-tile-title', textContent: 'Tap zones' }),
+      h('div', { className: 'ui-tile-actions' }, [statusWrap, armBtn])
     ]);
 
-    // 2. Center Chassis Map Stage + Docked Calibration / Notice Bar
+    // 2. Body hero: the chassis map with the last tap lit + docked calibration bar
     const chassisMap = buildChassisMapSvg((zoneId) => runSimulatedZoneTap(zoneId));
 
     const calBarMsg = h('span', { className: 'tz-cal-msg', textContent: '' });
@@ -1882,8 +1929,8 @@
       'button',
       {
         type: 'button',
-        className: 'tz-mini-btn',
-        title: 'Restore MacBook Pro factory centroids',
+        className: 'tz-mini-btn ui-btn ui-btn--sm',
+        'data-tip': TZ_TIPS.calReset,
         onClick: () => resetCalibration()
       },
       ['Reset']
@@ -1892,53 +1939,58 @@
       'button',
       {
         type: 'button',
-        className: 'tz-mini-btn',
+        className: 'tz-mini-btn ui-btn ui-btn--sm',
+        'data-tip': TZ_TIPS.calCancel,
+        'data-tip-key': 'Escape',
         onClick: () => cancelCalibration(true)
       },
-      ['Done']
+      ['Cancel']
     );
 
     const calBar = h(
       'div',
-      { className: 'tz-cal-bar', hidden: true, role: 'region', 'aria-label': '4-Zone Calibration' },
+      { className: 'tz-cal-bar', hidden: true, role: 'region', 'aria-label': '4-zone calibration' },
       [calBarMsg, h('div', { className: 'tz-cal-actions' }, [calResetBtn, calCancelBtn])]
     );
 
     const mapWell = h('div', { className: 'tz-map-well' }, [chassisMap.svg, calBar]);
 
-    // 3. Bottom Telemetry Strip
-    const zoneVal = h('span', { className: 'tz-metric-val tz-zone-val', textContent: 'TAP CHASSIS' });
-    const confPill = h('span', { className: 'tz-conf-pill', textContent: '—' });
-    const zoneSub = h('span', { className: 'tz-metric-sub', textContent: '4-zone <16kHz DSP' });
-
-    const riseVal = h('span', { className: 'tz-metric-val', textContent: '— ms' });
-    const decaySub = h('span', { className: 'tz-metric-sub', textContent: 'DEC —×' });
-
-    const hfVal = h('span', { className: 'tz-metric-val', textContent: '— dB' });
-    const subBassSub = h('span', { className: 'tz-metric-sub', textContent: 'SUB —dB' });
-
-    const telemetry = h('div', { className: 'tz-telemetry' }, [
-      h('div', { className: 'tz-card tz-card--zone' }, [
-        h('div', { className: 'tz-card-head' }, [
-          h('span', { className: 'tz-label', textContent: 'Zone' }),
-          confPill
-        ]),
-        zoneVal,
-        zoneSub
-      ]),
-      h('div', { className: 'tz-card' }, [
-        h('span', { className: 'tz-label', textContent: 'Rise' }),
-        riseVal,
-        decaySub
-      ]),
-      h('div', { className: 'tz-card' }, [
-        h('span', { className: 'tz-label', textContent: 'HF Tilt' }),
-        hfVal,
-        subBassSub
-      ])
+    // Result line under the map: zone + match on the left, two tap features on the right.
+    const zoneVal = h('span', { className: 'tz-metric-val tz-zone-val', textContent: 'NO TAP YET' });
+    const confPill = h('span', { className: 'tz-conf-pill ui-readout ui-readout--quiet', textContent: '' });
+    const riseVal = h('span', { className: 'tz-metric-val ui-readout', textContent: '— ms' });
+    const hfVal = h('span', { className: 'tz-metric-val ui-readout', textContent: '— dB' });
+    const riseStat = h('span', { className: 'tz-stat', 'data-tip': TZ_TIPS.rise }, [
+      h('span', { className: 'ui-label', textContent: 'Rise' }),
+      riseVal
+    ]);
+    const hfStat = h('span', { className: 'tz-stat', 'data-tip': TZ_TIPS.hf }, [
+      h('span', { className: 'ui-label', textContent: 'HF' }),
+      hfVal
     ]);
 
-    const stage = h('div', { className: 'tz-stage' }, [bezel, mapWell, telemetry, srLive]);
+    const telemetry = h('div', { className: 'tz-telemetry' }, [
+      h('span', { className: 'tz-result', 'data-tip': TZ_TIPS.zone }, [zoneVal, confPill]),
+      h('span', { className: 'tz-stats ui-hide-tiny' }, [riseStat, hfStat])
+    ]);
+
+    // 3. Foot: Calibrate on the left, the source of the last reading on the right
+    const zoneSub = h('span', {
+      className: 'tz-metric-sub ui-readout ui-readout--quiet',
+      'data-tip': TZ_TIPS.source,
+      textContent: savedCal ? 'Calibration saved' : 'Factory zones'
+    });
+
+    const stage = h('div', { className: 'tz-stage lg-cell-stage' }, [
+      bezel,
+      h('div', { className: 'tz-body ui-tile-body' }, [
+        mapWell,
+        telemetry,
+        h('span', { className: 'tz-compact-note ui-label', 'data-tip': TZ_TIPS.compact, textContent: 'Widen to calibrate' })
+      ]),
+      h('footer', { className: 'tz-foot ui-tile-foot' }, [calBtn, zoneSub]),
+      srLive
+    ]);
     cellEl.appendChild(stage);
 
     // -------------------------------------------------------------------------
@@ -1948,6 +2000,9 @@
     function refreshCalBadges() {
       const isCal = engine.classifier.isCalibrated();
       calBtn.dataset.calibrated = isCal ? 'true' : 'false';
+      calBtn.setAttribute('data-tip', calActive ? TZ_TIPS.calCancel : isCal ? TZ_TIPS.calRedo : TZ_TIPS.cal);
+      if (calActive) calBtn.setAttribute('data-tip-key', 'Escape');
+      else if (typeof calBtn.removeAttribute === 'function') calBtn.removeAttribute('data-tip-key');
       for (let i = 0; i < ZONE_ORDER.length; i++) {
         const z = ZONE_ORDER[i];
         const grp = chassisMap.zoneGroups[z];
@@ -1964,26 +2019,42 @@
       }
     }
 
-    function updateStatusLine(overrideText, isVeto) {
+    // One writer for the status pill: label text + data-veto (hooks), wrapper tone + tip.
+    // An override (veto, wrong zone, simulated tap, mic error) passes its own tip and tone.
+    function updateStatusLine(overrideText, isVeto, overrideTip, overrideTone) {
       statusPill.dataset.veto = isVeto ? 'true' : 'false';
+      let text;
+      let tone = 'attention';
+      let tip;
       if (overrideText) {
-        statusPill.textContent = overrideText;
-        return;
-      }
-      if (calActive) {
-        statusPill.textContent = `CAL ${calStepIdx + 1}/4`;
-        return;
-      }
-      if (busState.state === 'listening') {
+        text = overrideText;
+        tip = overrideTip || '';
+        if (overrideTone) tone = overrideTone;
+      } else if (calActive) {
+        text = `CAL ${calStepIdx + 1}/4`;
+        tip = TZ_TIPS.calibrating;
+      } else if (busState.state === 'listening') {
         const srKhz = Math.round((busState.sampleRate || 48000) / 100) / 10;
-        statusPill.textContent = localPaused ? 'PAUSED' : `LIVE · ${srKhz}k`;
+        text = localPaused ? 'PAUSED' : `LIVE · ${srKhz}k`;
+        tip = localPaused ? TZ_TIPS.paused : TZ_TIPS.live;
+        if (localPaused) tone = 'idle';
       } else if (busState.state === 'requesting') {
-        statusPill.textContent = 'ARMING…';
+        text = 'ARMING…';
+        tip = TZ_TIPS.arming;
       } else if (busState.state === 'error') {
-        statusPill.textContent = 'SIM MODE';
+        // Mic denied or failed: same words and tone as nail pad and chirp sonar.
+        const err = busState.error ? String(busState.error).trim() : 'Microphone error.';
+        text = 'SIM ONLY';
+        tip = `${/[.!?]$/.test(err) ? err : `${err}.`} Clicking a zone still simulates a tap.`;
       } else {
-        statusPill.textContent = engine.classifier.isCalibrated() ? 'CAL · TAP MAP' : 'READY · TAP MAP';
+        const isCal = engine.classifier.isCalibrated();
+        text = isCal ? 'READY · CAL' : 'READY';
+        tip = isCal ? TZ_TIPS.readyCal : TZ_TIPS.ready;
+        tone = 'idle';
       }
+      statusPill.textContent = text;
+      statusWrap.setAttribute('data-tone', tone);
+      if (tip) statusWrap.setAttribute('data-tip', tip);
     }
 
     function updateBusUi(st) {
@@ -1999,15 +2070,31 @@
       const isListening = busState.state === 'listening' && !localPaused;
       const isRequesting = busState.state === 'requesting';
 
+      const isPaused = localPaused && busState.state === 'listening';
+      const isError = busState.state === 'error';
       armBtn.dataset.armed = isListening ? 'true' : isRequesting ? 'requesting' : 'false';
       armBtn.setAttribute('aria-pressed', isListening ? 'true' : 'false');
-      armText.textContent = isRequesting ? '…' : isListening ? 'LIVE' : localPaused && busState.state === 'listening' ? 'PAUSED' : 'ARM';
+      // Running (live or asking for the mic) is a rust quiet button, per the sensor frame.
+      armBtn.setAttribute('data-tone', isListening || isRequesting ? 'attention' : 'idle');
+      armText.textContent = isRequesting ? 'Arming…' : isListening ? 'Live' : isPaused ? 'Paused' : isError ? 'Retry' : 'Arm';
+      armBtn.setAttribute(
+        'data-tip',
+        isRequesting
+          ? TZ_TIPS.armRequesting
+          : isListening
+            ? TZ_TIPS.armLive
+            : isPaused
+              ? TZ_TIPS.armPaused
+              : isError
+                ? TZ_TIPS.armRetry
+                : TZ_TIPS.arm
+      );
 
       if (busState.state === 'idle') {
         localPaused = false;
         engine.reset();
       } else if (busState.state === 'error') {
-        zoneSub.textContent = 'Mic unavailable · tap map';
+        zoneSub.textContent = 'Mic unavailable';
       }
       updateStatusLine();
     }
@@ -2016,7 +2103,7 @@
       // An explicit ARM / PAUSE click means the user now wants the mic on its own terms.
       calOwnsArm = false;
       if (!bus || typeof bus.requestArm !== 'function') {
-        updateStatusLine('SIM ONLY', false);
+        updateStatusLine('SIM ONLY', false, TZ_TIPS.noBus);
         return;
       }
       if (busState.state === 'listening') {
@@ -2029,7 +2116,7 @@
       try {
         await bus.requestArm();
       } catch (_) {
-        updateStatusLine('MIC ERROR', true);
+        updateStatusLine('MIC ERROR', true, TZ_TIPS.micError);
       }
     }
 
@@ -2049,7 +2136,9 @@
       const meta = ZONES[targetId];
       calBar.hidden = false;
       calBtn.setAttribute('aria-expanded', 'true');
-      calBarMsg.textContent = `Tap ${calStepIdx + 1}/4: ${meta.label} (${meta.hint})`;
+      // The step count is in the pill; the bar names the zone, the tip says where it is.
+      calBarMsg.textContent = `Tap ${meta.code}: ${meta.label}`;
+      calBarMsg.setAttribute('data-tip', `${meta.label}: ${meta.hint}.`);
       calCancelBtn.textContent = 'Cancel';
       refreshCalBadges();
       updateStatusLine();
@@ -2113,7 +2202,7 @@
       if (typeof calBtn.focus === 'function') {
         calBtn.focus();
       }
-      zoneSub.textContent = 'Factory MBP centroids';
+      zoneSub.textContent = 'Factory zones';
       announce('Tap zone calibration reset to factory defaults.');
     }
 
@@ -2133,7 +2222,7 @@
         if (typeof calBtn.focus === 'function') {
           calBtn.focus();
         }
-        zoneSub.textContent = '4-Zone Cal Locked';
+        zoneSub.textContent = 'Calibration saved';
         announce('4-zone chassis tap calibration saved.');
       } else {
         renderCalPrompt();
@@ -2186,19 +2275,20 @@
       confPill.dataset.accent = meta.accent;
       zoneSub.textContent = sourceTag || (engine.classifier.isCalibrated() ? 'CAL · <16kHz' : 'MBP · <16kHz');
 
+      // Decay and sub-bass ratios used to be two more boxed lines; they now ride in the tips.
       riseVal.textContent = `${features.riseTimeMs.toFixed(1)} ms`;
-      decaySub.textContent = `DEC ${features.decayRatio.toFixed(1)}×`;
+      riseStat.setAttribute('data-tip', `${TZ_TIPS.rise} Ring decay ${features.decayRatio.toFixed(1)}×.`);
 
       hfVal.textContent = `${features.hfAirRatioDb.toFixed(1)} dB`;
-      subBassSub.textContent = `SUB ${features.subBassRatioDb.toFixed(0)}dB`;
+      hfStat.setAttribute('data-tip', `${TZ_TIPS.hf} Sub-bass ${features.subBassRatioDb.toFixed(0)} dB.`);
     }
 
     function handleEngineEvents(events, sourceTag) {
       for (let i = 0; i < events.length; i++) {
         const ev = events[i];
         if (ev.type === 'veto') {
-          const msg = ev.reason === 'sustained' ? 'SPEECH/SWIPE VETO' : 'TRANSIENT VETO';
-          updateStatusLine(msg, true);
+          const sustained = ev.reason === 'sustained';
+          updateStatusLine(sustained ? 'SPEECH VETO' : 'GLITCH VETO', true, sustained ? TZ_TIPS.vetoLong : TZ_TIPS.vetoGlitch);
           if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
           vetoFlashTimer = setTimeout(() => {
             vetoFlashTimer = null;
@@ -2228,7 +2318,7 @@
     function runSimulatedZoneTap(zoneId) {
       if (calActive && zoneId !== ZONE_ORDER[calStepIdx]) {
         const expected = ZONES[ZONE_ORDER[calStepIdx]];
-        updateStatusLine(`TAP ${expected.code} NEXT`, true);
+        updateStatusLine(`TAP ${expected.code} NEXT`, true, TZ_TIPS.wrongZone);
         if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
         vetoFlashTimer = setTimeout(() => {
           vetoFlashTimer = null;
@@ -2272,7 +2362,17 @@
       }
 
       if (collected.length > 0) {
+        const wasCal = calActive;
         handleEngineEvents(collected, 'SIM');
+        // A simulated reading must say so in the pill (calibration shows its own CAL n/4).
+        if (!wasCal) {
+          updateStatusLine('SIM · TAP', false, TZ_TIPS.sim, 'idle');
+          if (vetoFlashTimer) clearTimeout(vetoFlashTimer);
+          vetoFlashTimer = setTimeout(() => {
+            vetoFlashTimer = null;
+            updateStatusLine();
+          }, 1500);
+        }
       }
     }
 

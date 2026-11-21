@@ -1345,6 +1345,49 @@
     );
   }
 
+  // Tooltip copy (ui/NOTES.md section 4). Each text was checked against its handler below.
+  const NP_TIPS = {
+    arm: 'Turn on the shared grille microphone for every sensor on this page.',
+    armNoBus: 'No shared microphone on this page; click to play a synthetic nail tap.',
+    armLive: 'Listening. Click to turn the shared microphone off for every sensor.',
+    armRequesting: 'Waiting for microphone permission. Click to cancel.',
+    armRetry: 'The microphone failed. Click to ask for it again.',
+    ready: 'Microphone off. Try Sim, or Arm to classify your own taps.',
+    arming: 'Waiting for microphone permission.',
+    live: 'Listening on the shared microphone for finger-pad taps, nail taps and scratches.',
+    sim: 'Showing a synthetic gesture, not the microphone.',
+    veto: 'Ignored a voiced sound such as speech or humming; it clears on the next tap.',
+    simPad: 'Play a synthetic soft fingertip tap through the detector.',
+    simNail: 'Play a synthetic fingernail tap through the detector.',
+    simScratch: 'Play a synthetic fingernail scratch through the detector.',
+    trim: 'Adjust the detection threshold and high/low balance; saved in this browser.',
+    trimReset: 'Restore the default threshold and balance.',
+    trimDone: 'Close the trim panel.',
+    threshold: 'How far above the noise floor a sound must rise to count, in dB.',
+    bias: 'Shifts the high/low balance: plus leans toward nail, minus toward pad.',
+    glyph: 'Simulate a soft tap. Shift-click for a nail tap, Option-click for a scratch.',
+    confidence: 'How sure the classifier is about the last gesture.',
+    intensity: 'Intensity: how far the last gesture rose above the noise floor, on a 0–100 scale.',
+    meta: 'Typical range of each class: pad thud band, nail click band, scratch length.',
+    metaPad: 'Duration, crest factor (CF: peak over average level) and the pad thud band.',
+    metaNail: 'Duration, attack under 3 ms and the nail click band.',
+    metaScratch: 'Duration, spectral flatness (SFM: how noise-like) and the scratch band.',
+    centroid: 'Centroid: the average pitch of the sound; nails sound higher than finger pads.',
+    hfLf: 'HF/LF: high- versus low-frequency energy, in decibels.',
+    zonePad: 'Finger-pad range: centroid below 1.8 kHz.',
+    zoneNail: 'Nail range: centroid above 2.6 kHz, for taps and scratches.',
+    split: 'Live share of low (LF) and high (HF) frequency energy.',
+    history: 'The last three gestures, newest first.',
+    floor: 'NF, noise floor: the quietest level the mic hears now, in dB.',
+    compact: 'This tile is too narrow for the Sim and Trim controls. Widen the window.'
+  };
+  const SIM_STATUS = {
+    'soft-pad': 'SIM · PAD',
+    'nail-tap': 'SIM · NAIL',
+    'nail-scratch': 'SIM · SCRATCH',
+    voice: 'SIM · VOICE'
+  };
+
   function mountNailPadCell(cellEl, passedBus) {
     if (!cellEl) return null;
     ensureStylesheetLoaded();
@@ -1369,7 +1412,7 @@
     });
 
     const srLive = h('div', {
-      className: 'np-sr-only',
+      className: 'np-sr-only ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
@@ -1385,18 +1428,18 @@
     }
 
     // -------------------------------------------------------------------------
-    // Row 1: Top Bezel (`[ARM]` + Status + `Pad` / `Nail` / `Scratch` + `Trim`)
+    // Head: index · title · status pill · Arm (shared sensor cell frame, left-grille NOTES.md)
     // -------------------------------------------------------------------------
-    const armDot = h('span', { className: 'np-dot', 'aria-hidden': 'true' });
-    const armLabel = h('span', { textContent: 'ARM' });
+    const armLabel = h('span', { textContent: 'Arm' });
     const armBtn = h(
       'button',
       {
         type: 'button',
-        className: 'np-btn np-btn--arm',
+        className: 'np-btn--arm ui-btn ui-btn--sm',
         dataset: { armed: 'false' },
         'aria-pressed': 'false',
-        title: 'Arm shared 48 kHz microphone bus (< 16 kHz passband)',
+        'data-tone': 'idle',
+        'data-tip': getBus() ? NP_TIPS.arm : NP_TIPS.armNoBus,
         onClick: () => {
           const b = getBus();
           if (!b) {
@@ -1417,75 +1460,62 @@
           }
         }
       },
-      [armDot, armLabel]
+      [armLabel]
     );
 
-    const statusPill = h('span', {
-      className: 'np-status',
-      textContent: '03 · <16kHz'
-    });
-
-    const simPadBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'np-mini-btn np-mini-btn--pad',
-        title: 'Feed genuine 48 kHz Soft Pad Tap waveform through DSP engine',
-        onClick: () => runSyntheticWaveform('soft-pad')
-      },
-      ['Pad']
+    // The pill's label keeps the `np-status` hook (text + data-veto); tone and tip live on the wrapper.
+    const statusPill = h('span', { className: 'ui-pill-label np-status', textContent: 'READY' });
+    const statusWrap = h(
+      'span',
+      { className: 'ui-pill np-pill-status', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': NP_TIPS.ready },
+      [statusPill]
     );
 
-    const simNailBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'np-mini-btn np-mini-btn--nail',
-        title: 'Feed genuine 48 kHz Rigid Keratin Nail Tap waveform through DSP engine',
-        onClick: () => runSyntheticWaveform('nail-tap')
-      },
-      ['Nail']
-    );
-
-    const simScratchBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'np-mini-btn np-mini-btn--scratch',
-        title: 'Feed genuine 48 kHz Sustained Nail Scratch waveform through DSP engine',
-        onClick: () => runSyntheticWaveform('nail-scratch')
-      },
-      ['Scratch']
-    );
+    const simBtn = (label, cls, tip, kind) =>
+      h(
+        'button',
+        {
+          type: 'button',
+          className: `np-mini-btn ${cls} ui-btn ui-btn--sm ui-btn--quiet`,
+          'data-tip': tip,
+          onClick: () => runSyntheticWaveform(kind)
+        },
+        [label]
+      );
+    const simPadBtn = simBtn('Pad', 'np-mini-btn--pad', NP_TIPS.simPad, 'soft-pad');
+    const simNailBtn = simBtn('Nail', 'np-mini-btn--nail', NP_TIPS.simNail, 'nail-tap');
+    const simScratchBtn = simBtn('Scratch', 'np-mini-btn--scratch', NP_TIPS.simScratch, 'nail-scratch');
 
     const trimBtn = h(
       'button',
       {
         type: 'button',
-        className: 'np-mini-btn np-btn--trim',
+        className: 'np-btn--trim ui-btn ui-btn--sm ui-btn--quiet',
         'aria-expanded': 'false',
-        title: 'Adjust SNR threshold & HF/LF bias trim (dwg.nailPadCal.v1)',
+        'data-tip': NP_TIPS.trim,
         onClick: () => toggleTrimPopover(undefined, true)
       },
       ['Trim']
     );
 
-    const bezel = h('div', { className: 'np-bezel' }, [
-      h('div', { className: 'np-bezel-left' }, [armBtn, statusPill]),
-      h('div', { className: 'np-bezel-right' }, [simPadBtn, simNailBtn, simScratchBtn, trimBtn])
+    const bezel = h('header', { className: 'np-bezel ui-tile-head' }, [
+      h('span', { className: 'ui-tile-index', textContent: '03' }),
+      h('span', { className: 'ui-tile-title', textContent: 'Nail or pad' }),
+      h('div', { className: 'ui-tile-actions' }, [statusWrap, armBtn])
     ]);
 
     // -------------------------------------------------------------------------
-    // Row 2: Tactile Visual Indicator + Hero Classification Badge Card
+    // Body hero: the pad / nail / scratch class with its spectrum (centroid scale + HF/LF split)
     // -------------------------------------------------------------------------
-    const tactileTag = h('span', { className: 'np-tactile-caption', textContent: 'DECK' });
+    const tactileTag = h('span', { className: 'np-tactile-caption ui-sr-only', textContent: 'DECK' });
     const tactileWell = h(
       'button',
       {
         type: 'button',
         className: 'np-tactile-well',
         dataset: { gesture: 'idle', active: 'false' },
-        title: 'Click to test Soft Pad / Shift-click for Nail Tap / Alt-click for Nail Scratch',
+        'aria-label': 'Simulate a gesture on the deck',
+        'data-tip': NP_TIPS.glyph,
         onClick: (ev) => {
           if (ev.altKey) runSyntheticWaveform('nail-scratch');
           else if (ev.shiftKey) runSyntheticWaveform('nail-tap');
@@ -1495,35 +1525,33 @@
       [buildTactileIndicatorSvg(), tactileTag]
     );
 
-    const confPill = h('span', { className: 'np-pill', textContent: '—' });
-    const intPill = h('span', { className: 'np-pill np-pill--int', textContent: 'IDLE' });
+    const confPill = h('span', { className: 'np-pill ui-readout', 'data-tip': NP_TIPS.confidence, textContent: '—' });
+    const intPill = h('span', {
+      className: 'np-pill np-pill--int ui-readout ui-readout--quiet',
+      'data-tip': NP_TIPS.intensity,
+      textContent: 'IDLE'
+    });
     const heroBadge = h('div', {
       className: 'np-badge',
       dataset: { gesture: 'idle' },
       textContent: '— TAP OR SCRATCH'
     });
     const heroMeta = h('div', {
-      className: 'np-hero-meta',
+      className: 'np-hero-meta ui-readout ui-readout--quiet',
+      'data-tip': NP_TIPS.meta,
       textContent: 'Pad 80–950Hz · Nail 2.8–14k · Scratch ≥70ms'
     });
 
     const heroCard = h('div', { className: 'np-hero-card', dataset: { gesture: 'idle' } }, [
-      h('div', { className: 'np-card-head' }, [
-        h('span', { className: 'np-label', textContent: 'SURFACE CLASS' }),
-        h('div', { className: 'np-pill-group' }, [confPill, intPill])
-      ]),
+      tactileWell,
       heroBadge,
-      heroMeta
+      heroMeta,
+      h('div', { className: 'np-pill-group' }, [confPill, intPill])
     ]);
 
-    const heroRow = h('div', { className: 'np-hero-row' }, [tactileWell, heroCard]);
-
-    // -------------------------------------------------------------------------
-    // Row 3: Spectral Centroid (`kHz`) Scale & Dual HF/LF Split Meter Bar
-    // -------------------------------------------------------------------------
-    const centroidVal = h('strong', { className: 'np-num', textContent: '0.00 kHz' });
+    const centroidVal = h('strong', { className: 'np-num ui-readout', textContent: '0.00 kHz' });
     const hfLfVal = h('strong', {
-      className: 'np-num np-num--ratio',
+      className: 'np-num np-num--ratio ui-readout',
       dataset: { polarity: 'neutral' },
       textContent: '0.0 dB'
     });
@@ -1535,29 +1563,22 @@
     });
 
     const centroidTrack = h('div', { className: 'np-centroid-track' }, [
-      h('div', { className: 'np-zone np-zone--pad', title: 'Soft Pad (< 1.8 kHz)' }, ['PAD <1.8k']),
+      h('div', { className: 'np-zone np-zone--pad', 'data-tip': NP_TIPS.zonePad }, ['Pad']),
       h('div', { className: 'np-zone np-zone--mid' }),
-      h(
-        'div',
-        { className: 'np-zone np-zone--nail', title: 'Nail Tap (> 2.6 kHz) & Scratch (3.5–15 kHz)' },
-        ['>2.6k NAIL · SCRATCH']
-      ),
+      h('div', { className: 'np-zone np-zone--nail', 'data-tip': NP_TIPS.zoneNail }, ['Nail · scratch']),
       centroidMarker
     ]);
 
     const lfFill = h('div', { className: 'np-split-fill np-split-fill--lf', style: 'width: 4%;' });
-    const hfFill = h(
-      'div',
-      {
-        className: 'np-split-fill np-split-fill--hf',
-        dataset: { gesture: 'idle' },
-        style: 'width: 4%;'
-      }
-    );
-    const lfPctText = h('span', { className: 'np-split-tag', textContent: 'LF 0%' });
-    const hfPctText = h('span', { className: 'np-split-tag', textContent: 'HF 0%' });
+    const hfFill = h('div', {
+      className: 'np-split-fill np-split-fill--hf',
+      dataset: { gesture: 'idle' },
+      style: 'width: 4%;'
+    });
+    const lfPctText = h('span', { className: 'np-split-tag ui-readout ui-readout--quiet', textContent: 'LF 0%' });
+    const hfPctText = h('span', { className: 'np-split-tag ui-readout ui-readout--quiet', textContent: 'HF 0%' });
 
-    const splitMeterRow = h('div', { className: 'np-split-row' }, [
+    const splitMeterRow = h('div', { className: 'np-split-row', 'data-tip': NP_TIPS.split }, [
       lfPctText,
       h('div', { className: 'np-split-bar' }, [
         h('div', { className: 'np-split-half np-split-half--lf' }, [lfFill]),
@@ -1569,12 +1590,12 @@
 
     const metersCard = h('div', { className: 'np-meters-card' }, [
       h('div', { className: 'np-meters-head' }, [
-        h('span', { className: 'np-meter-stat' }, [
-          h('span', { className: 'np-label', textContent: 'CENTROID ' }),
+        h('span', { className: 'np-meter-stat', 'data-tip': NP_TIPS.centroid }, [
+          h('span', { className: 'ui-label', textContent: 'Centroid' }),
           centroidVal
         ]),
-        h('span', { className: 'np-meter-stat' }, [
-          h('span', { className: 'np-label', textContent: 'HF/LF ' }),
+        h('span', { className: 'np-meter-stat', 'data-tip': NP_TIPS.hfLf }, [
+          h('span', { className: 'ui-label', textContent: 'HF/LF' }),
           hfLfVal
         ])
       ]),
@@ -1582,31 +1603,47 @@
       splitMeterRow
     ]);
 
-    // -------------------------------------------------------------------------
-    // Row 4: History Tape + Adaptive Noise Floor Readout
-    // -------------------------------------------------------------------------
-    const historyTape = h('div', { className: 'np-history-tape' }, [
-      h('span', { className: 'np-hist-empty', textContent: 'Test: Pad · Nail · Scratch' })
+    const historyTape = h('div', { className: 'np-history-tape ui-hide-compact', 'data-tip': NP_TIPS.history }, [
+      h('span', { className: 'np-hist-empty ui-readout ui-readout--quiet', textContent: 'No gestures yet' })
     ]);
-    const floorTag = h('span', { className: 'np-floor-tag', textContent: 'NF -68dB' });
 
-    const footer = h('div', { className: 'np-footer' }, [historyTape, floorTag]);
+    // -------------------------------------------------------------------------
+    // Foot: Sim group + Trim, noise floor on the right
+    // -------------------------------------------------------------------------
+    const floorTag = h('span', {
+      className: 'np-floor-tag ui-readout ui-readout--quiet',
+      'data-tip': NP_TIPS.floor,
+      textContent: 'NF -68dB'
+    });
+
+    const footer = h('footer', { className: 'np-footer ui-tile-foot' }, [
+      h('div', { className: 'np-sim-group' }, [
+        h('span', { className: 'ui-label', textContent: 'Sim' }),
+        simPadBtn,
+        simNailBtn,
+        simScratchBtn,
+        h('span', { className: 'np-foot-sep', 'aria-hidden': 'true' }),
+        trimBtn
+      ]),
+      floorTag
+    ]);
 
     // -------------------------------------------------------------------------
     // Optional Calibration Trim Popover (`localStorage` `dwg.nailPadCal.v1`)
     // -------------------------------------------------------------------------
     const threshReadout = h('span', {
-      className: 'np-trim-val',
+      className: 'np-trim-val ui-readout',
       textContent: `${classifier.thresholdDb.toFixed(1)} dB`
     });
     const threshInput = h('input', {
       type: 'range',
-      className: 'np-trim-slider',
+      className: 'np-trim-slider ui-slider',
       min: '6',
       max: '20',
       step: '0.5',
       value: String(classifier.thresholdDb),
-      'aria-label': 'Onset SNR threshold in dB',
+      'aria-label': 'Onset threshold above the noise floor, in dB',
+      'data-tip': NP_TIPS.threshold,
       onInput: (e) => {
         const v = parseFloat(e.target.value);
         classifier.setCalibration({ thresholdDb: v });
@@ -1615,17 +1652,18 @@
     });
 
     const biasReadout = h('span', {
-      className: 'np-trim-val',
+      className: 'np-trim-val ui-readout',
       textContent: `${classifier.hfLfBiasDb >= 0 ? '+' : ''}${classifier.hfLfBiasDb.toFixed(1)} dB`
     });
     const biasInput = h('input', {
       type: 'range',
-      className: 'np-trim-slider',
+      className: 'np-trim-slider ui-slider',
       min: '-6',
       max: '6',
       step: '0.5',
       value: String(classifier.hfLfBiasDb),
-      'aria-label': 'HF/LF spectral bias trim in dB',
+      'aria-label': 'High/low frequency balance trim, in dB',
+      'data-tip': NP_TIPS.bias,
       onInput: (e) => {
         const v = parseFloat(e.target.value);
         classifier.setCalibration({ hfLfBiasDb: v });
@@ -1635,15 +1673,16 @@
       }
     });
 
-    const trimOverlay = h('div', { className: 'np-trim-overlay', hidden: true }, [
+    const trimOverlay = h('div', { className: 'np-trim-overlay', hidden: true, role: 'group', 'aria-label': 'Trim' }, [
       h('div', { className: 'np-trim-head' }, [
-        h('span', { className: 'np-label', textContent: 'CALIBRATION TRIM (dwg.nailPadCal.v1)' }),
-        h('div', { className: 'np-bezel-right' }, [
+        h('span', { className: 'ui-label', textContent: 'Trim · saved in this browser' }),
+        h('div', { className: 'np-trim-actions' }, [
           h(
             'button',
             {
               type: 'button',
-              className: 'np-mini-btn',
+              className: 'np-mini-btn ui-btn ui-btn--sm',
+              'data-tip': NP_TIPS.trimReset,
               onClick: () => {
                 const def = classifier.resetCalibration();
                 threshInput.value = String(def.thresholdDb);
@@ -1658,7 +1697,9 @@
             'button',
             {
               type: 'button',
-              className: 'np-mini-btn',
+              className: 'np-mini-btn ui-btn ui-btn--sm',
+              'data-tip': NP_TIPS.trimDone,
+              'data-tip-key': 'Escape',
               onClick: () => toggleTrimPopover(false, true)
             },
             ['Done']
@@ -1666,12 +1707,12 @@
         ])
       ]),
       h('label', { className: 'np-trim-row' }, [
-        h('span', { className: 'np-trim-label', textContent: 'SNR Gate' }),
+        h('span', { className: 'ui-label', textContent: 'Threshold' }),
         threshInput,
         threshReadout
       ]),
       h('label', { className: 'np-trim-row' }, [
-        h('span', { className: 'np-trim-label', textContent: 'HF/LF Bias' }),
+        h('span', { className: 'ui-label', textContent: 'HF/LF bias' }),
         biasInput,
         biasReadout
       ])
@@ -1693,14 +1734,15 @@
       }
     }
 
-    const stage = h('div', { className: 'np-stage' }, [
-      bezel,
-      heroRow,
+    const body = h('div', { className: 'np-body ui-tile-body' }, [
+      heroCard,
       metersCard,
-      footer,
-      trimOverlay,
-      srLive
+      historyTape,
+      h('span', { className: 'np-compact-note ui-label', 'data-tip': NP_TIPS.compact, textContent: 'Widen for Sim and Trim' }),
+      trimOverlay
     ]);
+
+    const stage = h('div', { className: 'np-stage lg-cell-stage' }, [bezel, body, footer, srLive]);
 
     cellEl.appendChild(stage);
 
@@ -1733,12 +1775,10 @@
       floorTag.textContent = `NF ${Math.round(tel.noiseFloorDb)}dB`;
 
       if (tel.vetoReason === 'voice') {
-        statusPill.dataset.veto = 'true';
-        statusPill.textContent = 'VOICE VETO';
+        setStatus('VOICE VETO', true);
       } else if (simTimer === null && statusPill.dataset.veto === 'true') {
         // Veto cleared (next burst started or committed): restore the bus status label.
-        statusPill.dataset.veto = 'false';
-        statusPill.textContent = baseStatusText();
+        setStatus(baseStatusText(), false);
       }
 
       if (tel.active || !classifier.lastEvent) {
@@ -1771,14 +1811,17 @@
         heroBadge.textContent = '● SOFT PAD';
         tactileTag.textContent = 'PAD';
         heroMeta.textContent = `${ev.durationMs}ms · CF ${ev.crestFactor.toFixed(1)} · 80–950Hz thud`;
+        heroMeta.setAttribute('data-tip', NP_TIPS.metaPad);
       } else if (g === 'nail-tap') {
         heroBadge.textContent = '◆ NAIL TAP';
         tactileTag.textContent = 'NAIL';
         heroMeta.textContent = `${ev.durationMs}ms · <3ms atk · 2.8–14k click`;
+        heroMeta.setAttribute('data-tip', NP_TIPS.metaNail);
       } else {
         heroBadge.textContent = '≈ NAIL SCRATCH';
         tactileTag.textContent = 'SCRATCH';
         heroMeta.textContent = `${ev.durationMs}ms · SFM ${ev.flatness.toFixed(2)} · 3.5–15k chatter`;
+        heroMeta.setAttribute('data-tip', NP_TIPS.metaScratch);
       }
 
       confPill.textContent = `${Math.round(ev.confidence * 100)}%`;
@@ -1844,8 +1887,7 @@
         return classifier.processSamples(samples, 48000);
       }
 
-      statusPill.dataset.veto = 'false';
-      statusPill.textContent = 'SIM · 48kHz';
+      setStatus(SIM_STATUS[kind] || 'SIM · TAP', false);
       const chunkSize = 512;
       let offset = 0;
       simTimer = setInterval(() => {
@@ -1853,8 +1895,7 @@
           // Finished, or the tab hid mid-Sim (a one-shot demo is dropped, not replayed late).
           clearInterval(simTimer);
           simTimer = null;
-          statusPill.dataset.veto = 'false';
-          statusPill.textContent = baseStatusText();
+          setStatus(baseStatusText(), false);
           return;
         }
         const slice = samples.subarray(offset, Math.min(samples.length, offset + chunkSize));
@@ -1876,8 +1917,35 @@
     function baseStatusText() {
       const st = busState && busState.state;
       if (st === 'listening') return `LIVE · ${Math.round((busState.sampleRate || 48000) / 1000)}k`;
-      if (st === 'error') return 'SIM READY';
-      return '03 · <16kHz';
+      if (st === 'requesting') return 'ARMING…';
+      // Mic denied or failed: same words and tone as chirp sonar and tap zones (Sim still works).
+      if (st === 'error') return 'SIM ONLY';
+      return 'READY';
+    }
+
+    // One writer for the status pill: label text + data-veto (test hooks) and the wrapper's
+    // tone and tip, so the tip always describes the label that is showing.
+    function setStatus(text, veto) {
+      statusPill.dataset.veto = veto ? 'true' : 'false';
+      statusPill.textContent = text;
+      let tone = 'attention';
+      let tip;
+      if (veto) tip = NP_TIPS.veto;
+      else if (text.indexOf('SIM ·') === 0) {
+        tone = 'idle';
+        tip = NP_TIPS.sim;
+      } else if (text === 'ARMING…') tip = NP_TIPS.arming;
+      else if (text === 'SIM ONLY') {
+        const err = busState && busState.error ? String(busState.error).trim() : 'Microphone error.';
+        const full = /[.!?]$/.test(err) ? err : `${err}.`;
+        tip = /\bsim\b/i.test(err) ? full : `${full} Sim buttons still work.`;
+      } else if (text.indexOf('LIVE') === 0) tip = NP_TIPS.live;
+      else {
+        tone = 'idle';
+        tip = NP_TIPS.ready;
+      }
+      statusWrap.setAttribute('data-tone', tone);
+      statusWrap.setAttribute('data-tip', tip);
     }
 
     function attachBus(b) {
@@ -1907,10 +1975,21 @@
           armBtn.dataset.armed = isArmed ? 'true' : 'false';
           armBtn.setAttribute('aria-pressed', isArmed ? 'true' : 'false');
           armLabel.textContent =
-            st.state === 'requesting' ? 'ARM…' : st.state === 'listening' ? 'LIVE' : 'ARM';
+            st.state === 'requesting' ? 'Arming…' : st.state === 'listening' ? 'Live' : st.state === 'error' ? 'Retry' : 'Arm';
+          // Running (live or asking for the mic) is a rust quiet button, per the sensor frame.
+          armBtn.setAttribute('data-tone', isArmed ? 'attention' : 'idle');
+          armBtn.setAttribute(
+            'data-tip',
+            st.state === 'listening'
+              ? NP_TIPS.armLive
+              : st.state === 'requesting'
+                ? NP_TIPS.armRequesting
+                : st.state === 'error'
+                  ? NP_TIPS.armRetry
+                  : NP_TIPS.arm
+          );
           if (simTimer === null) {
-            statusPill.dataset.veto = 'false';
-            statusPill.textContent = baseStatusText();
+            setStatus(baseStatusText(), false);
           }
         });
       }

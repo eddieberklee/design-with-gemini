@@ -1,341 +1,169 @@
 /* ==========================================================================
-   Secondary Grid Cell 02 — Chassis Tap Zones (`cells/left-grille/tap-zones.css`)
-   Strictly scoped to `.tz-cell` with `position: absolute; inset: 0;` stage lock
-   so the parent `.cell` maintains exact `4:3` aspect-ratio parity with `.grid`.
-   Swiss/Braun light palette matching `left-grille.css`.
+   Secondary slot 02 — Tap zones (`cells/left-grille/tap-zones.css`)
+   Shared sensor cell frame (left-grille NOTES.md "Sensor cell frame"):
+   head = index · title · status pill · Arm; body = the 4-zone chassis map with
+   the last tap lit (hero) and one result line; foot = Calibrate, reading source.
+   Scoped to `.tz-*`; controls are the shared `ui-` classes.
    ========================================================================== */
 
 .tz-cell {
-  --tz-bg: #ffffff;
-  --tz-well: #f5f5f3;
-  --tz-well-border: #e4e4e0;
-  --tz-border: #e5e5e5;
-  --tz-ink: #141413;
-  --tz-ink-sec: #52524e;
-  --tz-ink-muted: #63635f; /* >= 5.5:1 WCAG AA on #ffffff & #f5f5f3 */
-  --tz-cobalt: #0052cc;
-  --tz-cobalt-soft: rgba(0, 82, 204, 0.13);
-  --tz-vermilion: #c93700;
-  --tz-vermilion-soft: rgba(201, 55, 0, 0.13);
-  --tz-ok: #047857;
-  --tz-amber: #9a4700;
-  --tz-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
-  --tz-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-
+  /* Left-side zones and right-side zones use the page's two-polarity pair. */
+  --tz-a: var(--lg-sig-up, #0052cc);
+  --tz-b: var(--lg-sig-down, var(--ui-accent));
   position: relative;
   overflow: hidden;
-  container-type: inline-size;
-  font-family: var(--tz-sans);
-  color: var(--tz-ink);
-  -webkit-font-smoothing: antialiased;
 }
 
+/* Same column as `.lg-cell-stage`, so the cell also lays out outside the page grid. */
 .tz-stage {
   position: absolute;
   inset: 0;
-  padding: clamp(5px, 2.1cqw, 11px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  row-gap: clamp(4px, 1.5cqw, 8px);
-  background: var(--tz-bg);
-  user-select: none;
-  -webkit-user-select: none;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font-family: var(--ui-sans);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-/* ==========================================================================
-   1. TOP MICRO-BEZEL
-   ========================================================================== */
-
-.tz-bezel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  min-width: 0;
+.tz-bezel .ui-btn {
+  min-width: 64px;                     /* Arm / Arming… / Live / Paused / Retry: no shift */
 }
 
-.tz-bezel-group {
-  display: flex;
-  align-items: center;
-  gap: clamp(3px, 1.2cqw, 6px);
-  min-width: 0;
+@container ui-tile (min-width: 240px) {
+  .tz-pill {
+    min-width: 94px;                   /* measured: LIVE · 48k is 93 px; READY / SIM ONLY keep that width */
+    justify-content: center;
+  }
 }
 
-.tz-bezel-group--right {
-  flex: 0 1 auto;
-  justify-content: flex-end;
-}
-
-.tz-kicker {
-  font-family: var(--tz-mono);
-  font-size: clamp(8px, 2.2cqw, 10.5px);
-  font-weight: 700;
-  color: var(--tz-ink-muted);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.03em;
-  flex: 0 0 auto;
-}
-
-.tz-title {
-  font-size: clamp(10px, 2.7cqw, 12px);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--tz-ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tz-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: clamp(18px, 5cqw, 23px);
-  padding: 0 clamp(5px, 1.6cqw, 8px);
-  border-radius: 5px;
-  border: 1px solid var(--tz-well-border);
-  background: var(--tz-well);
-  color: var(--tz-ink);
-  font-family: var(--tz-mono);
-  font-size: clamp(8px, 2.1cqw, 10.5px);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  white-space: nowrap;
-  flex: 0 0 auto;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.tz-btn:hover {
-  background: #ecece8;
-}
-
-.tz-btn:focus-visible {
-  outline: 2px solid var(--tz-cobalt);
-  outline-offset: 1px;
-}
-
-.tz-btn--arm[data-armed="true"] {
-  background: var(--tz-ink);
-  border-color: var(--tz-ink);
-  color: #ffffff;
-}
-
-.tz-btn--arm[data-armed="requesting"] {
-  border-color: rgba(0, 82, 204, 0.45);
-  color: var(--tz-cobalt);
-}
-
-.tz-btn--cal[data-calibrated="true"] {
-  border-color: rgba(4, 120, 87, 0.35);
-  color: var(--tz-ok);
-  background: rgba(4, 120, 87, 0.08);
-}
-
-.tz-btn--cal[aria-expanded="true"] {
-  background: var(--tz-cobalt);
-  border-color: var(--tz-cobalt);
-  color: #ffffff;
-}
-
-.tz-dot {
-  width: 5.5px;
-  height: 5.5px;
-  border-radius: 50%;
-  background: #8e8e88;
-  flex: 0 0 auto;
-}
-
-.tz-btn--arm[data-armed="true"] .tz-dot {
-  background: #22c55e;
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.28);
-}
-
-.tz-status {
-  font-family: var(--tz-mono);
-  font-size: clamp(7.5px, 2cqw, 10px);
-  color: var(--tz-ink-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.tz-status[data-veto="true"] {
-  color: var(--tz-amber);
-  font-weight: 700;
-}
-
-/* ==========================================================================
-   2. MACBOOK PRO UNIBODY CHASSIS MAP STAGE
-   ========================================================================== */
+/* Body: chassis map (hero) -------------------------------------------------------- */
 
 .tz-map-well {
   position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--tz-well);
-  border: 1px solid var(--tz-well-border);
-  border-radius: 6px;
-  padding: clamp(3px, 1.4cqw, 7px);
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .tz-chassis-svg {
   display: block;
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
   overflow: visible;
 }
 
 .tz-mic-tag {
-  font-family: var(--tz-mono);
-  font-size: 6.4px;
-  font-weight: 700;
+  font: 600 6.4px var(--ui-mono);      /* SVG user units: scales with the map */
   letter-spacing: 0.04em;
-  fill: var(--tz-cobalt);
+  fill: var(--tz-a);
   pointer-events: none;
 }
 
 .tz-prop-ray {
-  stroke: var(--tz-cobalt);
+  stroke: var(--tz-a);
   stroke-width: 1.4;
   stroke-linecap: round;
   pointer-events: none;
-  transition: opacity 280ms ease;
+  transition: opacity 280ms var(--ui-ease);
 }
 
 .tz-prop-ray[data-accent="vermilion"] {
-  stroke: var(--tz-vermilion);
+  stroke: var(--tz-b);
 }
 
-/* Interactive 4-Zone Hit Areas */
+/* Four clickable zones. Colour only on hover, focus, the last tap and the calibration target. */
 .tz-zone {
+  --tz-c: var(--tz-a);
   cursor: pointer;
   outline: none;
 }
 
+.tz-zone--vermilion {
+  --tz-c: var(--tz-b);
+}
+
 .tz-zone-rect {
-  fill: rgba(255, 255, 255, 0.25);
-  stroke: rgba(20, 20, 19, 0.2);
+  fill: transparent;
+  stroke: var(--ui-line);
   stroke-width: 1;
   stroke-dasharray: 2.8 2.2;
-  transition: fill 140ms ease, stroke 140ms ease, stroke-width 140ms ease;
+  transition: fill var(--ui-dur) var(--ui-ease), stroke var(--ui-dur) var(--ui-ease);
 }
 
-.tz-zone--cobalt:hover .tz-zone-rect,
-.tz-zone--cobalt:focus-visible .tz-zone-rect {
-  fill: rgba(0, 82, 204, 0.11);
-  stroke: var(--tz-cobalt);
+.tz-zone:hover .tz-zone-rect {
+  fill: color-mix(in srgb, var(--tz-c) 8%, transparent);
+  stroke: var(--tz-c);
   stroke-dasharray: none;
-  stroke-width: 1.35;
 }
 
-.tz-zone--vermilion:hover .tz-zone-rect,
-.tz-zone--vermilion:focus-visible .tz-zone-rect {
-  fill: rgba(201, 55, 0, 0.11);
-  stroke: var(--tz-vermilion);
+.tz-zone:focus-visible .tz-zone-rect {
+  stroke: var(--ui-focus);
+  stroke-width: 2;
   stroke-dasharray: none;
-  stroke-width: 1.35;
 }
 
-.tz-zone--cobalt[data-active="true"] .tz-zone-rect {
-  fill: rgba(0, 82, 204, 0.18);
-  stroke: var(--tz-cobalt);
-  stroke-dasharray: none;
+.tz-zone[data-active="true"] .tz-zone-rect {
+  fill: color-mix(in srgb, var(--tz-c) 16%, transparent);
+  stroke: var(--tz-c);
   stroke-width: 1.6;
-}
-
-.tz-zone--vermilion[data-active="true"] .tz-zone-rect {
-  fill: rgba(201, 55, 0, 0.18);
-  stroke: var(--tz-vermilion);
   stroke-dasharray: none;
-  stroke-width: 1.6;
 }
 
 .tz-zone[data-cal-target="true"] .tz-zone-rect {
-  fill: rgba(0, 82, 204, 0.2);
-  stroke: var(--tz-cobalt);
-  stroke-dasharray: none;
+  fill: color-mix(in srgb, var(--ui-ink) 10%, transparent);
+  stroke: var(--ui-ink);
   stroke-width: 1.8;
-  animation: tz-cal-beacon 1.05s ease-in-out infinite;
+  stroke-dasharray: none;
+  animation: tz-cal-beacon 1.05s ease-in-out infinite;  /* the one cue that asks for a tap */
 }
 
 .tz-zone-dot {
-  fill: #8d8d86;
-  transition: fill 140ms ease, r 140ms ease;
+  fill: var(--ui-ink-3);
   pointer-events: none;
 }
 
-.tz-zone--cobalt[data-active="true"] .tz-zone-dot,
-.tz-zone--cobalt:hover .tz-zone-dot {
-  fill: var(--tz-cobalt);
+.tz-zone[data-active="true"] .tz-zone-dot,
+.tz-zone:hover .tz-zone-dot {
+  fill: var(--tz-c);
 }
 
-.tz-zone--vermilion[data-active="true"] .tz-zone-dot,
-.tz-zone--vermilion:hover .tz-zone-dot {
-  fill: var(--tz-vermilion);
-}
-
-.tz-zone-code {
-  font-family: var(--tz-mono);
-  font-size: 7.2px;
-  font-weight: 700;
-  fill: var(--tz-ink-muted);
+.tz-zone-code,
+.tz-zone-label {
+  font: 600 7.2px var(--ui-mono);
+  letter-spacing: 0.03em;
+  fill: var(--ui-ink-3);
   pointer-events: none;
 }
 
 .tz-zone-label {
-  font-family: var(--tz-mono);
-  font-size: 7.4px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  fill: var(--tz-ink-sec);
-  pointer-events: none;
+  fill: var(--ui-ink-2);
 }
 
-.tz-zone--cobalt[data-active="true"] .tz-zone-label,
-.tz-zone--cobalt[data-active="true"] .tz-zone-code {
-  fill: var(--tz-cobalt);
-}
-
-.tz-zone--vermilion[data-active="true"] .tz-zone-label,
-.tz-zone--vermilion[data-active="true"] .tz-zone-code {
-  fill: var(--tz-vermilion);
+.tz-zone[data-active="true"] :is(.tz-zone-label, .tz-zone-code) {
+  fill: var(--tz-c);
 }
 
 .tz-zone-cal-mark {
-  font-family: var(--tz-mono);
-  font-size: 8px;
-  font-weight: 700;
-  fill: var(--tz-ok);
+  font: 600 8px var(--ui-mono);
+  fill: var(--ui-ink-2);
   pointer-events: none;
 }
 
-/* Concentric Glowing Tap Ripple */
 .tz-ripple {
   fill: none;
+  stroke: var(--tz-c);
   stroke-width: 1.8;
   opacity: 0;
   transform-box: fill-box;
   transform-origin: center;
   pointer-events: none;
-}
-
-.tz-zone--cobalt .tz-ripple {
-  stroke: var(--tz-cobalt);
-}
-
-.tz-zone--vermilion .tz-ripple {
-  stroke: var(--tz-vermilion);
 }
 
 .tz-zone--pulse .tz-ripple--outer {
@@ -361,29 +189,29 @@
 
 @keyframes tz-cal-beacon {
   0%, 100% {
-    fill-opacity: 0.14;
+    fill-opacity: 0.5;
   }
   50% {
-    fill-opacity: 0.34;
+    fill-opacity: 1;
   }
 }
 
-/* Docked Calibration Prompt Banner (keeps Chassis Map visible underneath!) */
+/* Calibration bar: docked over the bottom of the map, so the target zone stays visible. */
 .tz-cal-bar {
   position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 4px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 5px;
-  padding: 4px 6px;
-  border-radius: 5px;
-  border: 1px solid rgba(0, 82, 204, 0.32);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 2px 6px rgba(20, 20, 19, 0.08);
-  z-index: 3;
+  gap: var(--ui-2);
+  padding: 6px 6px 6px var(--ui-3);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  box-shadow: var(--ui-shadow-pop);
   min-width: 0;
 }
 
@@ -392,161 +220,89 @@
 }
 
 .tz-cal-msg {
-  font-family: var(--tz-mono);
-  font-size: clamp(7.5px, 2cqw, 10px);
-  font-weight: 600;
-  color: var(--tz-ink);
+  min-width: 0;
+  font: 500 var(--ui-fs-2) / 1.2 var(--ui-sans);
+  color: var(--ui-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
 
 .tz-cal-actions {
   display: flex;
-  align-items: center;
-  gap: 3px;
+  gap: 6px;
   flex: 0 0 auto;
 }
 
-.tz-mini-btn {
-  height: 18px;
-  padding: 0 5px;
-  border-radius: 4px;
-  border: 1px solid var(--tz-border);
-  background: #ffffff;
-  color: var(--tz-ink-sec);
-  font-family: var(--tz-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.tz-mini-btn:hover {
-  background: var(--tz-well);
-  color: var(--tz-ink);
-}
-
-.tz-mini-btn:focus-visible {
-  outline: 2px solid var(--tz-cobalt);
-  outline-offset: 1px;
-}
-
-/* ==========================================================================
-   3. BOTTOM TELEMETRY STRIP
-   ========================================================================== */
+/* Body: one result line under the map ---------------------------------------------- */
 
 .tz-telemetry {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(3px, 1.2cqw, 5px);
-  min-width: 0;
-}
-
-.tz-card {
-  background: var(--tz-well);
-  border: 1px solid var(--tz-well-border);
-  border-radius: 5px;
-  padding: clamp(3px, 1.2cqw, 6px) clamp(4px, 1.6cqw, 8px);
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 1px;
+  gap: var(--ui-3);
   min-width: 0;
-  overflow: hidden;
-}
-
-.tz-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-  min-width: 0;
-}
-
-.tz-label {
-  font-family: var(--tz-mono);
-  font-size: clamp(7px, 1.8cqw, 9px);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--tz-ink-muted);
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.tz-conf-pill {
-  font-family: var(--tz-mono);
-  font-size: clamp(7.5px, 1.9cqw, 9.5px);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--tz-ink-sec);
-  background: #ffffff;
-  border: 1px solid var(--tz-well-border);
-  border-radius: 3px;
-  padding: 0 3.5px;
-  line-height: 1.35;
   flex: 0 0 auto;
 }
 
-.tz-conf-pill[data-accent="cobalt"] {
-  color: var(--tz-cobalt);
-  border-color: rgba(0, 82, 204, 0.3);
-  background: var(--tz-cobalt-soft);
+.tz-result {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--ui-2);
+  min-width: 0;
 }
 
-.tz-conf-pill[data-accent="vermilion"] {
-  color: var(--tz-vermilion);
-  border-color: rgba(201, 55, 0, 0.3);
-  background: var(--tz-vermilion-soft);
-}
-
-.tz-metric-val {
-  font-family: var(--tz-mono);
-  font-size: clamp(9.5px, 2.9cqw, 14px);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--tz-ink);
+.tz-zone-val {
+  font: 600 var(--ui-fs-3) / 1.2 var(--ui-mono);
+  letter-spacing: var(--ui-caps-track);
+  color: var(--ui-ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.15;
+}
+
+.tz-zone-val:not([data-accent]) {
+  color: var(--ui-ink-3);
 }
 
 .tz-zone-val[data-accent="cobalt"] {
-  color: var(--tz-cobalt);
+  color: var(--tz-a);
 }
 
 .tz-zone-val[data-accent="vermilion"] {
-  color: var(--tz-vermilion);
+  color: var(--tz-b);
 }
 
+.tz-stats {
+  display: inline-flex;
+  gap: var(--ui-3);
+  flex: 0 0 auto;
+}
+
+.tz-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.tz-stat .ui-readout {
+  display: inline-block;
+  min-width: 7ch;                      /* — ms and 12.3 ms keep one width */
+  text-align: right;
+}
+
+/* Visible only where the base size step has hidden the foot (tile < 320 px). */
+.tz-compact-note {
+  display: none;
+}
+
+/* Foot -------------------------------------------------------------------------------- */
+
 .tz-metric-sub {
-  font-family: var(--tz-mono);
-  font-size: clamp(7px, 1.75cqw, 9px);
-  font-variant-numeric: tabular-nums;
-  color: var(--tz-ink-muted);
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.tz-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* ==========================================================================
-   4. REDUCED MOTION & RESPONSIVE @CONTAINER BREAKPOINTS (down to 150px)
-   ========================================================================== */
 
 @media (prefers-reduced-motion: reduce) {
   .tz-zone--pulse .tz-ripple--outer,
@@ -554,43 +310,20 @@
   .tz-zone[data-cal-target="true"] .tz-zone-rect {
     animation: none;
   }
+
   .tz-prop-ray,
   .tz-zone-rect {
     transition: none;
   }
 }
 
-@container (max-width: 310px) {
-  .tz-status {
-    display: none;
+@container ui-tile (max-width: 319px) {
+  .tz-compact-note {
+    display: block;
+    flex: 0 0 auto;
   }
-}
 
-@container (max-width: 245px) {
-  .tz-title,
-  .tz-metric-sub {
-    display: none;
-  }
-  .tz-telemetry {
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
-  }
-}
-
-@container (max-width: 190px) {
-  .tz-stage {
-    padding: 4px;
-    row-gap: 3px;
-  }
-  .tz-kicker {
-    display: none;
-  }
-  .tz-telemetry {
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-  }
-  .tz-telemetry .tz-card:last-child {
-    display: none;
-  }
   .tz-cal-bar {
-    padding: 3px 4px;
+    padding-left: var(--ui-2);
   }
 }

@@ -1309,6 +1309,38 @@
     return el;
   }
 
+  // Tooltip copy (ui/NOTES.md section 4). Each text was checked against its handler below.
+  const CS_TIPS = {
+    sonarOff: 'Play inaudible 18–20.5 kHz chirps and listen for their echo off your hand.',
+    sonarOn: 'Stop the chirps. The shared microphone stays on for the other sensors.',
+    sonarArming: 'Waiting for microphone permission.',
+    sonarRetry: 'The microphone failed. Click to ask for it again and start the chirps.',
+    sonarNoBus: 'No shared audio bus on this page, so sonar cannot start. Sim still works.',
+    ready: 'Sonar is off. Try Sim, or click Sonar to measure your hand for real.',
+    arming: 'Waiting for microphone permission before the chirps start.',
+    live: 'Chirping and listening for echoes; hold a hand 5–55 cm in front of the speakers.',
+    lowRate: 'This microphone samples too slowly to hear 18–20.5 kHz, so the chirps are muted.',
+    sim: 'Showing a synthetic gesture, not the microphone. Nothing is played aloud.',
+    simOnlySuffix: ' Sim buttons still work.',
+    range: 'Distance from the speaker to your hand, in centimetres; --.- means no hand.',
+    gesture: 'Sonar state, or the last gesture: push (closer), pull (away) or wave (across).',
+    balance: 'Echo strength heard from the left speaker versus the right one.',
+    profile: 'Echo profile over time: distance upward, newest on the right, colour shows left or right.',
+    simPush: 'Simulate a hand moving closer, from 42 to 10 cm.',
+    simPull: 'Simulate a hand moving away, from 10 to 42 cm.',
+    simWave: 'Simulate a hand waving across; each click switches left-to-right and right-to-left.',
+    zero: 'Forget the learned room echoes and clear the profile; they are relearned within a second.',
+    fmcw: 'FMCW: frequency-swept chirps; the echo delay gives the distance.',
+    compact: 'This tile is too narrow for the Sim and Zero controls. Widen the window.'
+  };
+
+  function hexToRgb(hex, fallback) {
+    const m = /^#([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return fallback;
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
   function mountChirpSonarCell(cellEl, bus) {
     if (!cellEl) return null;
 
@@ -1362,39 +1394,44 @@
 
     // --- DOM Construction (Zero `innerHTML`) ---
     const srLive = h('div', {
-      className: 'cs-sr-only',
+      className: 'cs-sr-only ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
     });
 
-    const sonarDot = h('span', { className: 'cs-dot', 'aria-hidden': 'true' });
-    const sonarLabel = h('span', { textContent: 'SONAR' });
+    // Head: index · title · status pill · SONAR (shared sensor cell frame, left-grille NOTES.md).
+    const sonarLabel = h('span', { textContent: 'Sonar' });
     const sonarBtn = h(
       'button',
       {
         type: 'button',
-        className: 'cs-btn cs-btn--sonar',
+        className: 'cs-btn--sonar ui-btn ui-btn--sm',
         dataset: { active: 'false' },
         'aria-pressed': 'false',
-        title: 'Toggle 18.0–20.5 kHz Stereo FMCW Ultrasonic Chirp Sonar',
+        'aria-disabled': bus ? null : 'true',
+        'data-tip': bus ? CS_TIPS.sonarOff : CS_TIPS.sonarNoBus,
         onClick: () => handleSonarToggle()
       },
-      [sonarDot, sonarLabel]
+      [sonarLabel]
     );
 
-    const statusPill = h('span', {
-      className: 'cs-status-pill',
-      textContent: '18–20.5k FMCW'
-    });
+    // The pill's label keeps the `cs-status-pill` hook; tone and tip live on the wrapper.
+    const statusPill = h('span', { className: 'ui-pill-label cs-status-pill', textContent: 'READY' });
+    const statusWrap = h(
+      'span',
+      { className: 'ui-pill cs-pill', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': CS_TIPS.ready },
+      [statusPill]
+    );
 
+    // Body hero: range readout with its echo profile underneath.
     const gestureText = h('span', {
       className: 'cs-gesture-val',
       dataset: { kind: 'idle' },
       textContent: 'STANDBY'
     });
     const gestureMeta = h('span', {
-      className: 'cs-gesture-meta',
+      className: 'cs-gesture-meta ui-readout ui-readout--quiet',
       textContent: 'Push · Pull · Wave'
     });
 
@@ -1402,71 +1439,48 @@
       className: 'cs-range-num',
       textContent: '--.-'
     });
-    const rangeReadout = h('div', { className: 'cs-range-val' }, [
-      rangeVal,
-      h('span', { className: 'cs-range-unit', textContent: ' cm' })
-    ]);
+    const rangeReadout = h(
+      'div',
+      { className: 'cs-range-val ui-readout ui-readout--hero', 'data-tip': CS_TIPS.range },
+      [rangeVal, h('span', { className: 'ui-readout-unit', textContent: 'cm' })]
+    );
 
     const balFillL = h('div', { className: 'cs-bal-fill cs-bal-fill--l' });
     const balFillR = h('div', { className: 'cs-bal-fill cs-bal-fill--r' });
     const balNeedle = h('div', { className: 'cs-bal-needle' });
-    const balRow = h('div', { className: 'cs-bal-row', title: 'Left (18–19.15k) vs Right (19.35–20.5k) echo balance' }, [
-      h('span', { className: 'cs-bal-tag', textContent: 'L' }),
+    const balRow = h('div', { className: 'cs-bal-row', 'data-tip': CS_TIPS.balance }, [
+      h('span', { className: 'ui-label', textContent: 'L' }),
       h('div', { className: 'cs-bal-track', 'aria-hidden': 'true' }, [
         balFillL,
         balFillR,
         h('div', { className: 'cs-bal-center' }),
         balNeedle
       ]),
-      h('span', { className: 'cs-bal-tag', textContent: 'R' })
+      h('span', { className: 'ui-label', textContent: 'R' })
     ]);
 
     const canvas = h('canvas', {
       className: 'cs-waterfall-canvas',
-      'aria-label': 'Live 24-bin ultrasonic range-time radar waterfall (4 to 55 cm)'
+      'aria-label': 'Echo profile over time, 4 to 55 cm from the speakers'
     });
     const ctx = canvas.getContext('2d');
 
-    const simPushBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'cs-mini-btn',
-        title: 'Synthesize 48 kHz approaching hand echo (42 cm to 10 cm)',
-        onClick: () => runSim('push')
-      },
-      ['Sim Push']
-    );
-    const simPullBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'cs-mini-btn',
-        title: 'Synthesize 48 kHz receding hand echo (10 cm to 42 cm)',
-        onClick: () => runSim('pull')
-      },
-      ['Sim Pull']
-    );
-    const simWaveBtn = h(
-      'button',
-      {
-        type: 'button',
-        className: 'cs-mini-btn',
-        title: 'Synthesize 48 kHz stereo hand wave (alternates L->R and R->L)',
-        onClick: () => {
-          const dir = nextWaveDir;
-          nextWaveDir = dir === 'wave-right' ? 'wave-left' : 'wave-right';
-          runSim(dir);
-        }
-      },
-      ['Sim Wave']
-    );
+    // Foot: Sim group + Zero, one quiet readout on the right.
+    const simBtn = (label, tip, onClick) =>
+      h('button', { type: 'button', className: 'cs-mini-btn ui-btn ui-btn--sm ui-btn--quiet', 'data-tip': tip, onClick }, [label]);
+    const simPushBtn = simBtn('Push', CS_TIPS.simPush, () => runSim('push'));
+    const simPullBtn = simBtn('Pull', CS_TIPS.simPull, () => runSim('pull'));
+    const simWaveBtn = simBtn('Wave', CS_TIPS.simWave, () => {
+      const dir = nextWaveDir;
+      nextWaveDir = dir === 'wave-right' ? 'wave-left' : 'wave-right';
+      runSim(dir);
+    });
     const zeroBtn = h(
       'button',
       {
         type: 'button',
-        className: 'cs-mini-btn cs-mini-btn--zero',
-        title: 'Re-zero static background room clutter',
+        className: 'cs-mini-btn cs-mini-btn--zero ui-btn ui-btn--sm ui-btn--quiet',
+        'data-tip': CS_TIPS.zero,
         onClick: () => {
           stopSim();
           engine.resetClutter();
@@ -1478,41 +1492,38 @@
       ['Zero']
     );
 
-    const stage = h('div', { className: 'cs-stage' }, [
+    const stage = h('div', { className: 'cs-stage lg-cell-stage' }, [
       srLive,
-      h('div', { className: 'cs-bezel' }, [
-        h('div', { className: 'cs-bezel-left' }, [
-          h('span', { className: 'cs-kicker', textContent: '04' }),
-          sonarBtn
-        ]),
-        statusPill
+      h('header', { className: 'cs-bezel ui-tile-head' }, [
+        h('span', { className: 'ui-tile-index', textContent: '04' }),
+        h('span', { className: 'ui-tile-title', textContent: 'Chirp sonar' }),
+        h('div', { className: 'ui-tile-actions' }, [statusWrap, sonarBtn])
       ]),
-      h('div', { className: 'cs-hero' }, [
-        h('div', { className: 'cs-card cs-card--gesture' }, [
-          h('div', { className: 'cs-card-head' }, [
-            h('span', { className: 'cs-label', textContent: 'GESTURE' }),
-            gestureMeta
-          ]),
-          gestureText
+      h('div', { className: 'ui-tile-body cs-body' }, [
+        h('div', { className: 'cs-hero' }, [
+          rangeReadout,
+          h('div', { className: 'cs-gesture', 'data-tip': CS_TIPS.gesture }, [gestureText, gestureMeta])
         ]),
-        h('div', { className: 'cs-card cs-card--range' }, [
-          h('div', { className: 'cs-card-head' }, [
-            h('span', { className: 'cs-label', textContent: 'RANGE' }),
-            rangeReadout
-          ]),
-          balRow
-        ])
+        balRow,
+        h('div', { className: 'cs-radar-box ui-well', 'data-tip': CS_TIPS.profile }, [
+          canvas,
+          h('div', { className: 'cs-radar-ticks', 'aria-hidden': 'true' }, [
+            h('span', { textContent: '55 cm' }),
+            h('span', { textContent: '4 cm' })
+          ])
+        ]),
+        h('span', { className: 'cs-compact-note ui-label', 'data-tip': CS_TIPS.compact, textContent: 'Widen for Sim and Zero' })
       ]),
-      h('div', { className: 'cs-radar-box' }, [
-        canvas,
-        h('div', { className: 'cs-radar-ticks', 'aria-hidden': 'true' }, [
-          h('span', { textContent: '55cm' }),
-          h('span', { textContent: '4cm' })
-        ]),
-        h('div', { className: 'cs-sim-bar' }, [
-          h('div', { className: 'cs-sim-group' }, [simPushBtn, simPullBtn, simWaveBtn]),
+      h('footer', { className: 'ui-tile-foot cs-foot' }, [
+        h('div', { className: 'cs-sim-group' }, [
+          h('span', { className: 'ui-label', textContent: 'Sim' }),
+          simPushBtn,
+          simPullBtn,
+          simWaveBtn,
+          h('span', { className: 'cs-foot-sep', 'aria-hidden': 'true' }),
           zeroBtn
-        ])
+        ]),
+        h('span', { className: 'ui-readout ui-readout--quiet', 'data-tip': CS_TIPS.fmcw, textContent: 'FMCW' })
       ])
     ]);
 
@@ -1541,10 +1552,26 @@
 
     function updateStatusPill() {
       const live = isSonarLive();
+      const requesting = busState.state === 'requesting';
       sonarBtn.dataset.active = live ? 'true' : 'false';
       sonarBtn.setAttribute('aria-pressed', live ? 'true' : 'false');
-      if (typeof statusPill.removeAttribute === 'function') statusPill.removeAttribute('data-tip');
+      // Running (live or asking for the mic): rust quiet button, per the frame. Off: idle face.
+      sonarBtn.setAttribute('data-tone', live || requesting ? 'attention' : 'idle');
+      if (bus) {
+        sonarLabel.textContent = requesting ? 'Arming…' : busState.state === 'error' ? 'Retry' : 'Sonar';
+        sonarBtn.setAttribute(
+          'data-tip',
+          live
+            ? CS_TIPS.sonarOn
+            : requesting
+              ? CS_TIPS.sonarArming
+              : busState.state === 'error'
+                ? CS_TIPS.sonarRetry
+                : CS_TIPS.sonarOff
+        );
+      }
 
+      // Every branch sets text, tone and tip together, so no tip outlives its state.
       if (simActive) {
         const tag =
           simKind === 'push'
@@ -1554,38 +1581,38 @@
               : simKind === 'wave-right'
                 ? 'SIM · WAVE →'
                 : 'SIM · WAVE ←';
-        statusPill.textContent = tag;
-        statusPill.dataset.warn = 'false';
+        setPill(tag, 'idle', CS_TIPS.sim);
         return;
       }
-      if (busState.state === 'requesting') {
-        statusPill.textContent = 'ARMING…';
-        statusPill.dataset.warn = 'false';
+      if (requesting) {
+        setPill('ARMING…', 'attention', CS_TIPS.arming);
         return;
       }
       if (busState.state === 'error') {
         // Short label (same wording as the nav bar); the full bus message is the pill's tip.
-        // data-tip, not title: ui/tooltip.js copies a title into data-tip on first show, so a
-        // removed title would leave a stale error tip behind.
-        statusPill.textContent = 'SIM ONLY';
-        statusPill.setAttribute('data-tip', busState.error ? String(busState.error) : 'Mic error');
-        statusPill.dataset.warn = 'true';
+        const err = busState.error ? String(busState.error).trim() : 'Microphone error.';
+        const full = /[.!?]$/.test(err) ? err : `${err}.`;
+        setPill('SIM ONLY', 'attention', /\bsim\b/i.test(err) ? full : `${full}${CS_TIPS.simOnlySuffix}`);
         return;
       }
       if (live) {
         const sr = busState.sampleRate || 48000;
+        const khz = (sr / 1000).toFixed(sr % 1000 === 0 ? 0 : 1);
         if (sr < MIN_ULTRASONIC_SR) {
-          statusPill.textContent = `LOW SR (${Math.round(sr / 1000)}k)`;
-          statusPill.dataset.warn = 'true';
+          setPill(`LOW RATE · ${khz}k`, 'attention', CS_TIPS.lowRate);
         } else {
-          const khz = (sr / 1000).toFixed(sr % 1000 === 0 ? 0 : 1);
-          statusPill.textContent = `18–20.5k · ${khz}k`;
-          statusPill.dataset.warn = 'false';
+          setPill(`LIVE · ${khz}k`, 'attention', CS_TIPS.live);
         }
         return;
       }
-      statusPill.textContent = '18–20.5k FMCW';
-      statusPill.dataset.warn = 'false';
+      setPill('READY', 'idle', CS_TIPS.ready);
+    }
+
+    function setPill(text, tone, tip) {
+      statusPill.textContent = text;
+      statusPill.dataset.warn = tone === 'attention' ? 'true' : 'false';
+      statusWrap.setAttribute('data-tone', tone);
+      statusWrap.setAttribute('data-tip', tip);
     }
 
     async function handleSonarToggle() {
@@ -1784,22 +1811,48 @@
       }
     }
 
+    // Canvas palette from the page tokens, read once on the first draw (never per frame).
+    // Literal fallbacks keep Node mocks and detached mounts drawing.
+    let palette = null;
+    function readPalette() {
+      const read = (name) => {
+        try {
+          if (typeof global.getComputedStyle !== 'function') return '';
+          return global.getComputedStyle(cellEl).getPropertyValue(name);
+        } catch (_) {
+          return '';
+        }
+      };
+      const ink = hexToRgb(read('--ui-ink'), [22, 22, 21]);
+      return {
+        well: hexToRgb(read('--ui-well'), [247, 247, 245]),
+        surface: hexToRgb(read('--ui-surface'), [255, 255, 255]),
+        ink,
+        left: hexToRgb(read('--lg-sig-up'), [0, 82, 204]),
+        right: hexToRgb(read('--lg-sig-down'), hexToRgb(read('--ui-accent'), [180, 68, 26])),
+        centre: [29, 42, 68] // hero-specific slate for an echo heard equally on both sides
+      };
+    }
+    const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
     function drawWaterfall() {
       rafId = 0;
       if (!ctx || !canvasDirty) return;
       canvasDirty = false;
       resizeCanvas();
+      if (!palette) palette = readPalette();
+      const P = palette;
 
       const w = canvas.width;
       const hPx = canvas.height;
       if (w < 4 || hPx < 4) return;
 
       // Reserve bottom strip height for Sim buttons so ticks stay clear
-      ctx.fillStyle = '#f5f5f3';
+      ctx.fillStyle = rgba(P.well, 1);
       ctx.fillRect(0, 0, w, hPx);
 
       // Subtle Swiss range gridlines (50, 35, 20, 10 cm)
-      ctx.strokeStyle = 'rgba(20, 20, 19, 0.07)';
+      ctx.strokeStyle = rgba(P.ink, 0.07);
       ctx.lineWidth = Math.max(1, Math.floor((global.devicePixelRatio || 1)));
       const gridRanges = [10, 22, 34, 46];
       for (let g = 0; g < gridRanges.length; g++) {
@@ -1826,22 +1879,19 @@
           const v = bins[b];
           if (v < 0.05) continue;
 
-          // Stereo color mapping: Left (-1) = Cobalt #0052cc, Right (+1) = Vermilion #c93700,
-          // Centered (0) = Deep Braun Slate #1d2a44
+          // Stereo colour mapping: Left (-1) = --lg-sig-up, Right (+1) = --lg-sig-down,
+          // Centred (0) = slate.
           const tint = clamp(tints[b], -1, 1);
-          let r = 29;
-          let gr = 42;
-          let bl = 68;
-          if (tint < 0) {
-            const t = -tint;
-            r = Math.round(29 * (1 - t) + 0 * t);
-            gr = Math.round(42 * (1 - t) + 82 * t);
-            bl = Math.round(68 * (1 - t) + 204 * t);
-          } else if (tint > 0) {
-            const t = tint;
-            r = Math.round(29 * (1 - t) + 201 * t);
-            gr = Math.round(42 * (1 - t) + 55 * t);
-            bl = Math.round(68 * (1 - t) + 0 * t);
+          const C = P.centre;
+          let r = C[0];
+          let gr = C[1];
+          let bl = C[2];
+          if (tint !== 0) {
+            const t = Math.abs(tint);
+            const S = tint < 0 ? P.left : P.right;
+            r = Math.round(C[0] * (1 - t) + S[0] * t);
+            gr = Math.round(C[1] * (1 - t) + S[1] * t);
+            bl = Math.round(C[2] * (1 - t) + S[2] * t);
           }
           const alpha = clamp(v * 0.92, 0.04, 0.94);
           ctx.fillStyle = `rgba(${r},${gr},${bl},${alpha.toFixed(3)})`;
@@ -1853,7 +1903,7 @@
       // Draw crisp range centroid trajectory trace across recent active columns
       ctx.beginPath();
       let tracing = false;
-      ctx.strokeStyle = 'rgba(20, 20, 19, 0.78)';
+      ctx.strokeStyle = rgba(P.ink, 0.78);
       ctx.lineWidth = Math.max(1.5, 1.5 * (global.devicePixelRatio || 1));
       ctx.lineJoin = 'round';
       for (let c = 0; c < WATERFALL_COLS; c++) {
@@ -1881,11 +1931,11 @@
         const y = (1 - normR) * hPx;
         const x = w - Math.max(4, colW * 1.2);
         const dotR = Math.max(2.5, 2.5 * (global.devicePixelRatio || 1));
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = rgba(P.surface, 1);
         ctx.beginPath();
         ctx.arc(x, y, dotR + 1.2, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = '#0052cc';
+        ctx.fillStyle = rgba(P.left, 1);
         ctx.beginPath();
         ctx.arc(x, y, dotR, 0, Math.PI * 2);
         ctx.fill();

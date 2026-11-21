@@ -17,7 +17,7 @@
 | File | Responsibility |
 | :--- | :--- |
 | `cells/left-grille/nail-pad.js` (`LeftGrilleNailPad`) | `BiquadFilter`, `NailPadClassifier`, 48 kHz physical waveform synthesizers (`synthesizeSoftPadTap`, `synthesizeNailTap`, `synthesizeNailScratch`, `synthesizeVoicedSpeech`), `localStorage` calibration (`dwg.nailPadCal.v1`), and Secondary Slot 3 DOM UI (`mountNailPadCell`). |
-| `cells/left-grille/nail-pad.css` | Strictly scoped styles (`.np-cell`, `.np-stage`) with `position: absolute; inset: 0` 4:3 cell lock, Swiss/Braun palette (`#0052cc` Cobalt for Soft Pad, `#047857` Emerald for Nail Tap, `#c93700` Vermilion for Nail Scratch), and `@container` breakpoints down to `150px`. |
+| `cells/left-grille/nail-pad.css` | `.np-*`-scoped hero styles on the shared `ui-` classes and `--ui-` tokens; `position: absolute; inset: 0` 4:3 lock; class colours `--np-pad` (`--lg-sig-up`), `--np-nail` (`--ui-ink`; green is reserved for real connections), `--np-scratch` (`--lg-sig-down`); `ui-tile` container steps. |
 | `cells/left-grille/nail-pad.test.js` | 13-test suite covering `soft-pad`, `nail-tap`, `nail-scratch`, voiced speech rejection, `18–21 kHz` sonar immunity, multi-gesture streaming, `44.1k`/`96k` + `NaN` resilience, fan step-up, `localStorage` calibration, DOM mount wiring, Trim/ARM lifecycle, `VOICE VETO` label recovery, and hidden-tab frame skipping. |
 
 ---
@@ -31,7 +31,7 @@
    - *Won*: Trimming trailing hangover frames that fall more than `18 dB` below the burst's peak frame power before computing `durationMs` and power-weighted spectral features.
    - *Rejected*: Measuring duration strictly from first threshold crossing to final hangover drop, which allows low-level room reverberation after a strong `15 ms` nail tap to inflate `durationMs` toward the `70 ms` scratch boundary.
 3. **Swiss/Braun 3-Color Semantic Coding & Tactile Specimen Well (`nail-pad.js:mountNailPadCell`, `nail-pad.css`)**:
-   - *Won*: Pairing a 3-mode SVG tactile deck indicator (concentric Cobalt viscoelastic rings for `SOFT PAD`, radial Emerald Dirac star for `NAIL TAP`, serrated Vermilion tribological wave for `NAIL SCRATCH`) with a live `0–12 kHz` spectral centroid vernier scale, opposing LF/HF split bar, and 3 synthetic 48 kHz test buttons (`Pad`, `Nail`, `Scratch`).
+   - *Won*: Pairing a 3-mode SVG glyph (rings for `SOFT PAD`, ink star for `NAIL TAP`, rust zig-zag for `NAIL SCRATCH`) with a live `0–12 kHz` spectral centroid band, opposing LF/HF split bar, and 3 synthetic 48 kHz Sim buttons (`Pad`, `Nail`, `Scratch`).
 
 ---
 
@@ -40,14 +40,35 @@
 - **Ultrasonic Isolation (`nail-pad.js:MAX_PASSBAND_HZ`)**: Never inspect FFT bins above `15.5 kHz` or bypass the time-domain notch/LPF cascade, as Cell 01 and sibling sonar cells transmit `18.375–21.375 kHz` carriers on the shared bus.
 - **Zero Dynamic `innerHTML` (`nail-pad.js:h` / `svgEl`)**: All DOM and SVG nodes are constructed via `document.createElement` / `document.createElementNS` and `textContent`.
 - **4:3 Row-Height Invariant (`nail-pad.css:.np-stage`)**: `.np-stage` must keep `position: absolute; inset: 0` inside `.np-cell` so internal controls and the calibration trim overlay never stretch the grid row height.
-- **Status Pill Has One Source (`nail-pad.js:mountNailPadCell` / `baseStatusText`)**: `LIVE · 48k` / `SIM READY` / `03 · <16kHz` derive from the last bus state. `VOICE VETO` is an override that is cleared back to `baseStatusText()` once the classifier's `vetoReason` clears; a finished Sim also restores it (so a denied mic still reads `SIM READY`, never `LIVE`).
+- **Status Pill Has One Source (`nail-pad.js:mountNailPadCell` / `baseStatusText` / `setStatus`)**: `LIVE · 48k` / `ARMING…` / `SIM ONLY` (bus error, was `SIM READY`) / `READY` derive from the last bus state. `VOICE VETO` is an override that is cleared back to `baseStatusText()` once the classifier's `vetoReason` clears; a finished Sim also restores it (so a denied mic still reads `SIM ONLY`, never `LIVE`). `setStatus` is the only writer: label text + `data-veto` on `.np-status`, tone + tip on the `.ui-pill` wrapper.
 - **Hidden Tab Costs Nothing (`nail-pad.js:attachBus` audio subscriber)**: the bus suspends its AudioContext while hidden; any mic block that still arrives while `document.hidden` (async suspend, `processDuplexFrame` injection) is dropped and `classifier.reset()` runs on the first visible block after such a drop. A running Sim interval stops at its next tick once the tab is hidden.
 - **`[ARM]` Disarms the Whole Shared Bus**: when the bus is live, `[LIVE]` calls `bus.stopAll({ dispatchClose: false })`, which also stops chirp sonar TX and the other passive cells (tap-zones instead pauses locally). Test 11 pins this behaviour.
-- **Narrow Cells Hide Trim**: below `185px` container width (`390px` page, `177px` cell) `.np-btn--trim` is `display: none`, so the trim popover is unreachable at phone width.
+- **Narrow Tiles**: the page grid keeps every tile at 328 px or wider (one column below 720 px), so Sim and Trim in the foot are always reachable there. A narrower mount (< 320 px) loses the foot to the base size step and shows `.np-compact-note` ("Widen for Sim and Trim") instead of silently dropping the controls.
 
 ---
 
-## 4. How to Run & Verify
+## 4. UI (shared sensor cell frame, `left-grille/NOTES.md`)
+
+- Head: `03` · `Nail or pad` · status pill · `Arm` (`.np-btn--arm.ui-btn--sm`; `Arm` / `Arming…` /
+  `Live` / `Retry`; rust while live or arming; a click while live disarms the whole shared bus).
+- Body hero: glyph button (`.np-tactile-well`: click = pad, Shift = nail, Option = scratch) + class
+  name (`.np-badge`, 24 px, quiet grey until the first gesture) + meta line with confidence and
+  intensity; then the spectrum: `Centroid` / `HF/LF` readouts, the centroid band (grows to fill the
+  body, 16–96 px), the LF/HF split, and the last three gestures as one quiet line.
+- Foot: `Sim` label + `Pad` / `Nail` / `Scratch` (quiet `ui-btn--sm`), `Trim`, and `NF` on the right.
+- Trim panel covers the body only (head and foot stay usable), `ui-slider`s, Reset / Done (Esc).
+- Every control, readout and the pill has a `data-tip` (`NP_TIPS`); no `title`.
+
+Sibling contract across `tap-zones`, `nail-pad`, `chirp-sonar` (and `breath-puff`, `lid-angle`, `iphone-dial`):
+same head, same pill words (`READY`, `ARMING…`, `LIVE · 48k`, `SIM · …`, `SIM ONLY` for a bus error
+with the full error in the pill's `data-tip`), Arm label in sentence case (`Arm` / `Arming…` /
+`Live` / `Retry`), running = `aria-pressed="true"` + `data-tone="attention"`, extra controls in the
+foot as quiet `ui-btn--sm`. Pills are never green: idle grey for ready / paused / simulated,
+rust for live, arming, calibrating, vetoes and errors. Below 320 px tile width the base hides the
+foot; a `*-compact-note` line in the body then says the foot controls need a wider tile (the page
+grid never goes below 328 px, so this only shows for narrow mounts).
+
+## 5. How to Run & Verify
 
 - **Hidden tabs**: a Sim (`Pad` / `Nail` / `Scratch`, tactile well) stops at its first interval tick while `document.hidden`; drive it in a visible tab, or override `document.hidden` when automating.
 - **Syntax & Unit Test Suite**:

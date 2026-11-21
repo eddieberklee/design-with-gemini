@@ -9,7 +9,7 @@ Implements **Secondary Grid Cell 02 (`Chassis Tap Zones`)** mounted into `#lg-se
 | File | Responsibility |
 | :--- | :--- |
 | `cells/left-grille/tap-zones.js` | UMD DSP engine (`TapBandFilter`, `TapZoneDetector`, `TapZoneClassifier`, `TapZoneEngine`), physical 48 kHz waveform synthesizers (`synthesizeZoneTap`, `synthesizeSustainedSpeech`, `synthesizeUltrasonicBurst`), `dwg.tapZonesCal.v1` persistence, interactive MacBook Pro Unibody Chassis Map SVG, and `LeftGrilleLab` Slot `2` registration. |
-| `cells/left-grille/tap-zones.css` | Strictly `.tz-cell`-scoped Swiss/Braun styles locked inside `.tz-stage { position: absolute; inset: 0; }` with `@container` responsive rules down to `150px` and `prefers-reduced-motion` support. |
+| `cells/left-grille/tap-zones.css` | `.tz-*`-scoped hero styles on the shared `ui-` classes and `--ui-` tokens (section 5); `.tz-stage { position: absolute; inset: 0; }`; `ui-tile` container steps; `prefers-reduced-motion` support. |
 | `cells/left-grille/tap-zones.test.js` | Node `--test` suite proving 4/4 classification accuracy, `< 16 kHz` ultrasonic sonar immunity, `> 90 ms` sustained speech/swipe rejection, `110 ms` refractory cooldown, 1-tap-per-zone calibration learning/persistence, multi-rate/NaN resilience, and Slot `2` registration. |
 
 ### Data Flow
@@ -38,7 +38,7 @@ SharedAcousticBus (512-sample blocks, 48 kHz)
    - *Why*: Standard symmetric Hann windows attenuate the leading direct-air HF transient by `> 25 dB`, while linear `decayRatio` explodes for fast `< 10 ms` Top-Left taps (`10–20×`), distorting Euclidean distance. Log2 comparison keeps fast and resonant zones homoscedastic, and wide `peakDb` sigma (`12 dB`, weight `0.3`) keeps classification invariant across soft and firm taps.
 4. **Docked Calibration Banner over Visible Chassis Map (`tap-zones.js:mountTapZonesCell` & `tap-zones.css:.tz-cal-bar`)**:
    - *Choice*: Dock `[CAL 4Z]` prompts along the bottom of `.tz-map-well` while pulsing the active target zone (`data-cal-target="true"`) directly on the MacBook Pro SVG, rather than covering the map with an opaque modal.
-   - *Why*: Users immediately see the exact physical chassis region to tap while keeping interactive click-to-simulate testing usable at every container width down to `150px`.
+   - *Why*: Users immediately see the exact physical chassis region to tap. The bar names the zone (`Tap Z1: Top-Left Deck`, hint in its tip); the step count is in the pill (`CAL 1/4`).
 
 ---
 
@@ -55,7 +55,33 @@ SharedAcousticBus (512-sample blocks, 48 kHz)
 
 ---
 
-## 4. How to Run & Verify
+## 4. UI (shared sensor cell frame, `left-grille/NOTES.md`)
+
+- Head: `02` · `Tap zones` · status pill (`.ui-pill` > `.ui-pill-label.tz-status`; tone and tip on the
+  wrapper, written only by `updateStatusLine`) · `Arm` (`.tz-btn--arm.ui-btn--sm`). Labels: `Arm`,
+  `Arming…`, `Live`, `Paused` (local pause, mic stays on), `Retry` (bus error).
+- Body: the chassis map is the hero (no box). One result line under it: zone (`.tz-zone-val`, side
+  colour `--tz-a` / `--tz-b` = `--lg-sig-up` / `--lg-sig-down`) + match %, then `Rise` and `HF`.
+  Decay and sub-bass ratios moved into those two readouts' tips. The calibration bar docks over the
+  bottom of the map; the target zone is outlined in ink with a slow beacon (off under reduced motion).
+- Foot: `Calibrate` (`.tz-btn--cal`, quiet; `aria-expanded` while running, tip then says Esc cancels)
+  and the source of the last reading (`SIM · 20ms`, `MIC · …`, `Factory zones`, `Calibration saved`).
+- A simulated tap flashes `SIM · TAP` in the pill for 1.5 s (same timer as the veto flash).
+- Pills: `READY` / `READY · CAL`, `LIVE · 48k`, `PAUSED`, `ARMING…`, `SIM ONLY`, `MIC ERROR`,
+  `CAL n/4`, `SPEECH VETO`, `GLITCH VETO`, `TAP Zn NEXT`, `SIM · TAP`.
+- Every control, zone, readout and the pill has a `data-tip` (`TZ_TIPS`, `TZ_ZONE_TIPS`); no `title`.
+- SVG chassis greys stay literal attributes (illustration palette); zone, ray and label colours are CSS tokens.
+
+Sibling contract across `tap-zones`, `nail-pad`, `chirp-sonar` (and `breath-puff`, `lid-angle`, `iphone-dial`):
+same head, same pill words (`READY`, `ARMING…`, `LIVE · 48k`, `SIM · …`, `SIM ONLY` for a bus error
+with the full error in the pill's `data-tip`), Arm label in sentence case (`Arm` / `Arming…` /
+`Live` / `Retry`), running = `aria-pressed="true"` + `data-tone="attention"`, extra controls in the
+foot as quiet `ui-btn--sm`. Pills are never green: idle grey for ready / paused / simulated,
+rust for live, arming, calibrating, vetoes and errors. Below 320 px tile width the base hides the
+foot; a `*-compact-note` line in the body then says the foot controls need a wider tile (the page
+grid never goes below 328 px, so this only shows for narrow mounts).
+
+## 5. How to Run & Verify
 
 - **Syntax & unit tests (11: DSP, 4/4 accuracy, speech veto, ultrasonic immunity, calibration, Slot 2 contract, CAL arm release, hidden-tab skip)**:
   ```bash
