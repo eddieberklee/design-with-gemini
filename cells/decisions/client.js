@@ -6,7 +6,9 @@
   const SESSION_KEY = 'dc_gemini_api_key_session';
   const LOCAL_KEY = 'dc_gemini_api_key_local';
   let memoryKey = '';
+  let memoryOnly = false;
   let storageRestricted = false;
+  let syncingKey = false;
 
   function getStore(storeName) {
     try {
@@ -20,7 +22,7 @@
   function safeGet(storeName, key) {
     try {
       const store = getStore(storeName);
-      if (!store) return '';
+      if (!store || typeof store.getItem !== 'function') return '';
       return store.getItem(key) || '';
     } catch (_e) {
       storageRestricted = true;
@@ -31,7 +33,10 @@
   function safeSet(storeName, key, val) {
     try {
       const store = getStore(storeName);
-      if (!store) return false;
+      if (!store || typeof store.setItem !== 'function') {
+        storageRestricted = true;
+        return false;
+      }
       store.setItem(key, val);
       return true;
     } catch (_e) {
@@ -43,32 +48,80 @@
   function safeRemove(storeName, key) {
     try {
       const store = getStore(storeName);
-      if (!store) return;
+      if (!store || typeof store.removeItem !== 'function') return;
       store.removeItem(key);
     } catch (_e) {
       storageRestricted = true;
     }
   }
 
+  function syncSiblingsAndNotify(cleaned, persistLocal, mode) {
+    if (syncingKey) return;
+    syncingKey = true;
+    try {
+      ['GeminiProsody', 'GeminiApiMatrix'].forEach(function (nsName) {
+        const ns = global[nsName];
+        const ks = ns && ((ns.Client && ns.Client.KeyStore) || ns.KeyStore);
+        if (!ks || ks === KeyStore) return;
+        try {
+          const current = typeof ks.get === 'function' ? ks.get() : null;
+          if (cleaned) {
+            if (current !== cleaned && typeof ks.set === 'function') {
+              ks.set(cleaned, Boolean(persistLocal));
+            }
+          } else if (current !== '' && typeof ks.clear === 'function') {
+            ks.clear();
+          }
+        } catch (_e) {
+          // Ignore sibling sync errors
+        }
+      });
+
+      if (typeof global.dispatchEvent === 'function') {
+        try {
+          const detail = { hasKey: Boolean(cleaned), storage: mode };
+          let ev = null;
+          if (typeof global.CustomEvent === 'function') {
+            ev = new global.CustomEvent('gemini-key-changed', { detail: detail });
+          } else if (typeof CustomEvent === 'function') {
+            ev = new CustomEvent('gemini-key-changed', { detail: detail });
+          } else if (typeof Event === 'function') {
+            ev = new Event('gemini-key-changed');
+          }
+          if (ev) global.dispatchEvent(ev);
+        } catch (_e) {
+          // Ignore CustomEvent construction errors in minimal environments
+        }
+      }
+    } finally {
+      syncingKey = false;
+    }
+  }
+
   const KeyStore = {
     get: function () {
-      if (memoryKey) return memoryKey;
       const s = safeGet('sessionStorage', SESSION_KEY);
       if (s) {
         memoryKey = s;
+        memoryOnly = false;
         return s;
       }
       const l = safeGet('localStorage', LOCAL_KEY);
       if (l) {
         memoryKey = l;
+        memoryOnly = false;
         return l;
       }
-      return '';
+      if (!storageRestricted && !memoryOnly) {
+        memoryKey = '';
+        return '';
+      }
+      return memoryKey || '';
     },
     getStorageType: function () {
       if (safeGet('sessionStorage', SESSION_KEY)) return 'session';
       if (safeGet('localStorage', LOCAL_KEY)) return 'local';
-      if (memoryKey) return 'memory';
+      if (KeyStore.get()) return 'memory';
       return 'none';
     },
     set: function (rawKey, persistLocal) {
@@ -76,16 +129,26 @@
       memoryKey = cleaned;
       safeRemove('sessionStorage', SESSION_KEY);
       safeRemove('localStorage', LOCAL_KEY);
-      if (!cleaned) return 'none';
-      if (persistLocal) {
-        return safeSet('localStorage', LOCAL_KEY, cleaned) ? 'local' : 'memory';
+      if (!cleaned) {
+        memoryOnly = false;
+        syncSiblingsAndNotify('', false, 'none');
+        return 'none';
       }
-      return safeSet('sessionStorage', SESSION_KEY, cleaned) ? 'session' : 'memory';
+      const stored = persistLocal
+        ? safeSet('localStorage', LOCAL_KEY, cleaned)
+        : safeSet('sessionStorage', SESSION_KEY, cleaned);
+      memoryOnly = !stored;
+      if (!stored) storageRestricted = true;
+      const mode = stored ? (persistLocal ? 'local' : 'session') : 'memory';
+      syncSiblingsAndNotify(cleaned, persistLocal, mode);
+      return mode;
     },
     clear: function () {
       memoryKey = '';
+      memoryOnly = false;
       safeRemove('sessionStorage', SESSION_KEY);
       safeRemove('localStorage', LOCAL_KEY);
+      syncSiblingsAndNotify('', false, 'none');
     },
     mask: function (key) {
       const k = String(key || '').trim();
@@ -230,7 +293,14 @@
           if (!resp.ok) {
             throw classifyApiError(resp.status, parsed, text || resp.statusText, retryAfter);
           }
-          if (!parsed || typeof parsed !== 'object' || !parsed.answers) {
+          if (
+            !parsed ||
+            typeof parsed !== 'object' ||
+            Array.isArray(parsed) ||
+            !parsed.answers ||
+            typeof parsed.answers !== 'object' ||
+            Array.isArray(parsed.answers)
+          ) {
             throw classifyApiError(resp.status, parsed, 'Response did not contain an answers map.', null);
           }
           return {
@@ -409,12 +479,13 @@
     const answers = Object.create(null);
 
     const questions = (state && Array.isArray(state.questions)) ? state.questions : [];
+    const stateRes = (state && state.resolution) || 'medium';
     questions.forEach(function (q) {
       if (!q || q.enabled === false) return;
-      const key = (q.key || '').trim();
+      const key = typeof q.key === 'string' ? q.key.trim() : '';
       if (!key || key === '__proto__' || key === 'constructor' || key === 'prototype') return;
 
-      const seed = fnv1a(key + '|' + corpus + '|' + (state.resolution || 'medium') + '|' + (q.instructions || ''));
+      const seed = fnv1a(key + '|' + corpus + '|' + stateRes + '|' + (q.instructions || ''));
 
       if (q.type === 'noul') {
         const inst = String(q.instructions || '').toLowerCase();
@@ -424,7 +495,7 @@
         } else if (/violat|escalat|migrat|break|defect|damage|flag|risk|urgent/.test(inst)) {
           baseP = sig.risk;
         } else {
-          const tMatch = overlapScore(inputTokens, (q.trueDescription || '') + ' ' + q.instructions);
+          const tMatch = overlapScore(inputTokens, (q.trueDescription || '') + ' ' + (q.instructions || ''));
           const fMatch = overlapScore(inputTokens, q.falseDescription || '');
           baseP = 1 / (1 + Math.exp(-(tMatch - fMatch) * 2.2 + (seed - 0.5) * 0.8));
         }
@@ -437,16 +508,19 @@
           confidence: Math.round(Math.max(p, 1 - p) * 100) / 100
         };
       } else if (q.type === 'choice') {
-        const opts = Array.isArray(q.options) ? q.options : [];
+        const opts = (Array.isArray(q.options) ? q.options : []).filter(function (opt) {
+          return opt && typeof opt === 'object';
+        });
         const sortedOpts = opts.slice().sort(function (a, b) {
-          const ak = (a.key || '').trim();
-          const bk = (b.key || '').trim();
+          const ak = typeof a.key === 'string' ? a.key.trim() : '';
+          const bk = typeof b.key === 'string' ? b.key.trim() : '';
           return ak < bk ? -1 : ak > bk ? 1 : 0;
         });
 
         const logits = sortedOpts.map(function (opt) {
-          const ok = (opt.key || '').trim();
-          let score = overlapScore(inputTokens, ok.replace(/_/g, ' ') + ' ' + (opt.description || '')) * 2.4;
+          const ok = typeof opt.key === 'string' ? opt.key.trim() : '';
+          const desc = typeof opt.description === 'string' ? opt.description : '';
+          let score = overlapScore(inputTokens, ok.replace(/_/g, ' ') + ' ' + desc) * 2.4;
           if (sig.prefChoice && ok === sig.prefChoice) score += 2.6;
           if (sig.kind === 'receipt_flagged' && ok === 'needs_manual_audit') score += 1.25;
           if (sig.kind === 'ui_regressed' && ok === 'layout_overlap') score += 2.15;
@@ -460,7 +534,7 @@
         let bestKey = '';
         let bestP = 0;
         sortedOpts.forEach(function (opt, i) {
-          const ok = (opt.key || '').trim();
+          const ok = typeof opt.key === 'string' ? opt.key.trim() : '';
           if (!ok || ok === '__proto__' || ok === 'constructor' || ok === 'prototype') return;
           probMap[ok] = probs[i];
           if (probs[i] > bestP || (bestKey === '' && i === 0)) {
@@ -482,7 +556,8 @@
         const higherIsWorse = /sever|blast|risk|danger|urgent|damage/.test(inst);
         const targetRatio = higherIsWorse ? sig.risk : sig.quality;
         const center = targetRatio * (kCount - 1) + (seed - 0.5) * 0.25;
-        const spread = state.image && state.resolution === 'low' ? 0.95 : state.image && state.resolution === 'high' ? 0.42 : 0.58;
+        const hasImg = Boolean(state && state.image);
+        const spread = hasImg && stateRes === 'low' ? 0.95 : hasImg && stateRes === 'high' ? 0.42 : 0.58;
 
         const logits = levels.map(function (desc, idx) {
           const dist = idx - center;
@@ -514,7 +589,8 @@
       }
     });
 
-    const textStr = JSON.stringify(body.questions || {}) + ' ' + String((state && state.inputText) || '');
+    const bodyQuestions = body && body.questions && typeof body.questions === 'object' ? body.questions : {};
+    const textStr = JSON.stringify(bodyQuestions) + ' ' + String((state && state.inputText) || '');
     const textTokens = Math.max(24, Math.round(textStr.length / 4));
     const modalities = [{ modality: 'text', tokens: textTokens }];
     let totalIn = textTokens;

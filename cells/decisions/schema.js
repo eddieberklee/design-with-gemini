@@ -11,6 +11,7 @@
   const RESOLUTIONS = ['low', 'medium', 'high'];
 
   function clamp(num, min, max) {
+    if (!Number.isFinite(num)) return min;
     return Math.min(max, Math.max(min, num));
   }
 
@@ -123,8 +124,8 @@
         }
         const seenOptKeys = Object.create(null);
         opts.forEach(function (opt, idx) {
-          const optKey = typeof opt.key === 'string' ? opt.key.trim() : '';
-          const optDesc = typeof opt.description === 'string' ? opt.description.trim() : '';
+          const optKey = opt && typeof opt.key === 'string' ? opt.key.trim() : '';
+          const optDesc = opt && typeof opt.description === 'string' ? opt.description.trim() : '';
           if (!optKey || !KEY_REGEX.test(optKey) || isReservedKey(optKey)) {
             errors.push({
               field: 'question.option.key',
@@ -217,16 +218,17 @@
     const questions = Array.isArray(state && state.questions) ? state.questions : [];
     questions.forEach(function (q) {
       if (!q || q.enabled === false) return;
-      const key = (q.key || '').trim();
+      const key = typeof q.key === 'string' ? q.key.trim() : '';
       if (!key || isReservedKey(key)) return;
+      const instructions = typeof q.instructions === 'string' ? q.instructions.trim() : '';
 
       if (q.type === 'noul') {
         const entry = {
           type: 'noul',
-          instructions: (q.instructions || '').trim()
+          instructions: instructions
         };
-        const td = (q.trueDescription || '').trim();
-        const fd = (q.falseDescription || '').trim();
+        const td = typeof q.trueDescription === 'string' ? q.trueDescription.trim() : '';
+        const fd = typeof q.falseDescription === 'string' ? q.falseDescription.trim() : '';
         if (td || fd) {
           entry.criteria = {};
           if (td) entry.criteria.true_description = td;
@@ -235,21 +237,23 @@
         questionsMap[key] = entry;
       } else if (q.type === 'choice') {
         const criteria = Object.create(null);
-        (q.options || []).forEach(function (opt) {
-          const ok = (opt.key || '').trim();
-          if (ok && !isReservedKey(ok)) criteria[ok] = (opt.description || '').trim();
+        (Array.isArray(q.options) ? q.options : []).forEach(function (opt) {
+          if (!opt || typeof opt !== 'object') return;
+          const ok = typeof opt.key === 'string' ? opt.key.trim() : '';
+          const desc = typeof opt.description === 'string' ? opt.description.trim() : '';
+          if (ok && !isReservedKey(ok)) criteria[ok] = desc;
         });
         questionsMap[key] = {
           type: 'choice',
-          instructions: (q.instructions || '').trim(),
+          instructions: instructions,
           criteria: criteria
         };
       } else if (q.type === 'score') {
         questionsMap[key] = {
           type: 'score',
-          instructions: (q.instructions || '').trim(),
-          criteria: (q.levels || []).map(function (lvl) {
-            return String(lvl || '').trim();
+          instructions: instructions,
+          criteria: (Array.isArray(q.levels) ? q.levels : []).map(function (lvl) {
+            return String(lvl === null || lvl === undefined ? '' : lvl).trim();
           })
         };
       }
@@ -304,11 +308,13 @@
   }
 
   function normalizeResponse(raw, state) {
-    const rawAnswers = (raw && raw.answers && typeof raw.answers === 'object') ? raw.answers : {};
+    const rawAnswers = (raw && raw.answers && typeof raw.answers === 'object' && !Array.isArray(raw.answers)) ? raw.answers : {};
     const questions = Array.isArray(state && state.questions) ? state.questions : [];
     const byKey = Object.create(null);
     questions.forEach(function (q) {
-      if (q && q.key) byKey[q.key.trim()] = q;
+      if (q && typeof q.key === 'string' && q.key.trim()) {
+        byKey[q.key.trim()] = q;
+      }
     });
 
     const normalizedAnswers = Object.create(null);
@@ -316,7 +322,7 @@
     Object.keys(rawAnswers).forEach(function (key) {
       if (isReservedKey(key)) return;
       const ans = rawAnswers[key];
-      if (!ans || typeof ans !== 'object') return;
+      if (!ans || typeof ans !== 'object' || Array.isArray(ans)) return;
       const qDef = byKey[key] || null;
       const type = ans.type || (qDef && qDef.type) || 'noul';
 
@@ -333,11 +339,13 @@
           confidence: conf
         };
       } else if (type === 'choice') {
-        const probs = (ans.probabilities && typeof ans.probabilities === 'object') ? ans.probabilities : {};
+        const probs = (ans.probabilities && typeof ans.probabilities === 'object' && !Array.isArray(ans.probabilities)) ? ans.probabilities : {};
         const descMap = Object.create(null);
         if (qDef && Array.isArray(qDef.options)) {
           qDef.options.forEach(function (o) {
-            if (o && o.key) descMap[o.key.trim()] = o.description || '';
+            if (o && typeof o.key === 'string' && o.key.trim()) {
+              descMap[o.key.trim()] = typeof o.description === 'string' ? o.description : '';
+            }
           });
         }
 

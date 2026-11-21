@@ -117,12 +117,16 @@
     return 'Level ' + (lvl ? lvl.index : idx);
   }
 
+  function trimKey(val) {
+    return typeof val === 'string' ? val.trim() : '';
+  }
+
   function optionHumanLabel(q, key) {
     if (q && Array.isArray(q.options)) {
       const match = q.options.find(function (o) {
-        return o && (o.key || '').trim() === key;
+        return o && trimKey(o.key) === key;
       });
-      if (match && match.label && match.label.trim()) return match.label.trim();
+      if (match && typeof match.label === 'string' && match.label.trim()) return match.label.trim();
     }
     return humanizeKey(key);
   }
@@ -134,25 +138,68 @@
     return ((0.5 + normalized * (colCount - 1)) / colCount) * 100;
   }
 
-  function copyToClipboard(text) {
-    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-      return navigator.clipboard.writeText(text);
+  function nodeContains(root, target) {
+    if (!root || !target) return false;
+    if (typeof root.contains === 'function') {
+      return root.contains(target);
     }
+    let cur = target;
+    while (cur) {
+      if (cur === root) return true;
+      cur = cur.parentNode || null;
+    }
+    return false;
+  }
+
+  function fallbackExecCopy(text, fallbackRoot) {
     return new Promise(function (resolve, reject) {
+      const host = fallbackRoot || (typeof document !== 'undefined' ? document.body : null);
+      if (!host) {
+        reject(new Error('Clipboard unavailable.'));
+        return;
+      }
+      let ta = null;
       try {
-        const ta = document.createElement('textarea');
+        ta = document.createElement('textarea');
         ta.value = text;
+        ta.setAttribute('readonly', '');
         ta.style.position = 'fixed';
         ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        resolve();
+        ta.style.pointerEvents = 'none';
+        host.appendChild(ta);
+        if (typeof ta.select === 'function') ta.select();
+        const ok = typeof document.execCommand === 'function' ? document.execCommand('copy') : false;
+        host.removeChild(ta);
+        ta = null;
+        if (ok === false) {
+          reject(new Error('Clipboard copy command was rejected.'));
+        } else {
+          resolve();
+        }
       } catch (err) {
+        if (ta && ta.parentNode) {
+          try {
+            ta.parentNode.removeChild(ta);
+          } catch (_e) {
+            // ignore
+          }
+        }
         reject(err);
       }
     });
+  }
+
+  function copyToClipboard(text, fallbackRoot) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      return Promise.resolve()
+        .then(function () {
+          return navigator.clipboard.writeText(text);
+        })
+        .catch(function () {
+          return fallbackExecCopy(text, fallbackRoot);
+        });
+    }
+    return fallbackExecCopy(text, fallbackRoot);
   }
 
   function noulBand(p, threshold) {
@@ -170,33 +217,59 @@
 
   function snapshotStateForNormalization(state) {
     return {
-      questions: (state.questions || []).map(function (q) {
-        return {
-          id: q.id,
-          enabled: q.enabled !== false,
-          key: q.key,
-          cardQuestion: q.cardQuestion,
-          instructions: q.instructions,
-          type: q.type,
-          threshold: q.threshold,
-          options: Array.isArray(q.options)
-            ? q.options.map(function (o) {
-                return { key: o.key, label: o.label, description: o.description };
-              })
-            : undefined,
-          levels: Array.isArray(q.levels) ? q.levels.slice() : undefined,
-          levelLabels: Array.isArray(q.levelLabels) ? q.levelLabels.slice() : undefined
-        };
-      })
+      questions: ((state && state.questions) || [])
+        .filter(function (q) {
+          return q && typeof q === 'object';
+        })
+        .map(function (q) {
+          return {
+            id: q.id,
+            enabled: q.enabled !== false,
+            key: q.key,
+            cardQuestion: q.cardQuestion,
+            instructions: q.instructions,
+            type: q.type,
+            threshold: q.threshold,
+            options: Array.isArray(q.options)
+              ? q.options
+                  .filter(function (o) {
+                    return o && typeof o === 'object';
+                  })
+                  .map(function (o) {
+                    return { key: o.key, label: o.label, description: o.description };
+                  })
+              : undefined,
+            levels: Array.isArray(q.levels) ? q.levels.slice() : undefined,
+            levelLabels: Array.isArray(q.levelLabels) ? q.levelLabels.slice() : undefined
+          };
+        })
     };
   }
 
   function mountDecisionsTriptych(inputEl, verdictEl, scoreEl) {
     const cells = [inputEl, verdictEl, scoreEl].filter(Boolean);
-    if (!cells.length) return;
+    if (!cells.length) {
+      return function noopUnmount() {};
+    }
+
+    // Auto-dispose any prior instance mounted onto the same cell element(s)
+    cells.forEach(function (c) {
+      if (c && typeof c.__dcUnmount === 'function') {
+        c.__dcUnmount();
+      }
+    });
+
+    let disposed = false;
+    let announceTimer = null;
+    const copyTimers = [];
+    const activeDragCleanups = [];
+    let renderedFlipBtns = [];
+    let renderedPresetBtns = [];
+    let restoringInputFocus = false;
 
     const initialPreset = Presets.createPresetState('receipt', 0);
     const savedKey = Client.KeyStore.get();
+    let lastKnownKey = savedKey;
 
     const app = {
       state: initialPreset,
@@ -225,12 +298,26 @@
       'aria-live': 'polite',
       'aria-atomic': 'true'
     });
+
+    const inputWrap = inputEl ? el('div', { className: 'dc-cell-inner' }) : null;
+    const verdictWrap = verdictEl ? el('div', { className: 'dc-cell-inner' }) : null;
+    const scoreWrap = scoreEl ? el('div', { className: 'dc-cell-inner' }) : null;
+
+    cells.forEach(function (c) {
+      clearNode(c);
+    });
     cells[0].appendChild(liveRegion);
+    if (inputEl && inputWrap) inputEl.appendChild(inputWrap);
+    if (verdictEl && verdictWrap) verdictEl.appendChild(verdictWrap);
+    if (scoreEl && scoreWrap) scoreEl.appendChild(scoreWrap);
 
     function announce(msg) {
+      if (disposed) return;
       liveRegion.textContent = '';
-      setTimeout(function () {
-        liveRegion.textContent = msg;
+      if (announceTimer) clearTimeout(announceTimer);
+      announceTimer = setTimeout(function () {
+        announceTimer = null;
+        if (!disposed) liveRegion.textContent = msg;
       }, 20);
     }
 
@@ -459,7 +546,7 @@
         questionObj.threshold = nextThreshold;
         // Also mirror threshold onto matching live app.state question if questionObj came from evaluated snapshot
         const liveMatch = (app.state.questions || []).find(function (sq) {
-          return sq && ((questionObj.id && sq.id === questionObj.id) || (sq.key || '').trim() === (questionObj.key || '').trim());
+          return sq && ((questionObj.id && sq.id === questionObj.id) || trimKey(sq.key) === trimKey(questionObj.key));
         });
         if (liveMatch) liveMatch.threshold = nextThreshold;
 
@@ -527,21 +614,28 @@
         function onMove(ev) {
           updateFromClientX(ev.clientX);
         }
-        function onUp() {
+        function cleanupDrag() {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
           window.removeEventListener('pointercancel', onUp);
+          const idx = activeDragCleanups.indexOf(cleanupDrag);
+          if (idx >= 0) activeDragCleanups.splice(idx, 1);
         }
+        function onUp() {
+          cleanupDrag();
+        }
+        activeDragCleanups.push(cleanupDrag);
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
         window.addEventListener('pointercancel', onUp);
       });
 
       pinEl.addEventListener('keydown', function (e) {
+        const cur = Number.isFinite(questionObj.threshold) ? questionObj.threshold : 0.5;
         const step = e.shiftKey ? 0.01 : 0.05;
         let next = null;
-        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = questionObj.threshold - step;
-        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = questionObj.threshold + step;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = cur - step;
+        else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = cur + step;
         else if (e.key === 'Home') next = 0.05;
         else if (e.key === 'End') next = 0.95;
         if (next !== null) {
@@ -558,9 +652,38 @@
     // CELL 1 (01A) — INPUT & A/B FLIPPER
     // =========================================================================
     function renderInputCell() {
-      const effectiveLive = app.mode === 'live' && Boolean(Client.KeyStore.get());
-      const modeKey = app.error ? 'error' : effectiveLive ? 'live' : 'simulated';
-      const modeLabel = app.error ? 'API Error' : effectiveLive ? 'Live API' : 'Demo Data';
+      if (!inputEl || !inputWrap) return;
+
+      const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+      const focusedFlipIdx = activeEl ? renderedFlipBtns.indexOf(activeEl) : -1;
+      const focusedPresetIdx = activeEl ? renderedPresetBtns.indexOf(activeEl) : -1;
+      const focusedRole =
+        activeEl &&
+        focusedFlipIdx < 0 &&
+        focusedPresetIdx < 0 &&
+        nodeContains(inputEl, activeEl) &&
+        activeEl.dataset &&
+        activeEl.dataset.focusRole
+          ? activeEl.dataset.focusRole
+          : null;
+
+      const hasSavedKey = Boolean(Client.KeyStore.get());
+      const verifiedLive = Boolean(
+        !app.error &&
+          !app.isRunning &&
+          app.mode === 'live' &&
+          hasSavedKey &&
+          app.result &&
+          app.result.mode === 'live'
+      );
+      const modeKey = app.error ? 'error' : verifiedLive ? 'live' : 'simulated';
+      const modeLabel = app.error
+        ? 'API Error'
+        : verifiedLive
+          ? 'Live API'
+          : app.isRunning && app.mode === 'live'
+            ? 'Connecting…'
+            : 'Demo Data';
 
       const header = el('header', { className: 'dc-card-header' }, [
         el('div', { className: 'dc-card-brand' }, [
@@ -574,7 +697,10 @@
               type: 'button',
               className: 'dc-mode-pill',
               dataset: { mode: modeKey, focusRole: 'mode-pill' },
-              title: effectiveLive ? 'Using your Gemini API key — click to manage' : 'Local preview — click to add your Gemini API key',
+              title:
+                hasSavedKey && app.mode === 'live'
+                  ? 'Using your Gemini API key — click to manage'
+                  : 'Local preview — click to add your Gemini API key',
               onClick: function () {
                 openWorkbench('mode-pill', { openKeyPopover: true, initialTab: 'results' });
               }
@@ -654,6 +780,18 @@
       }
 
       // Giant A/B Flip Switch
+      const nextFlipBtns = activePreset.variants.map(function (v, idx) {
+        return el('button', {
+          type: 'button',
+          className: 'dc-flip-btn',
+          'aria-pressed': String(idx === app.state.variantIndex),
+          textContent: v.buttonLabel || v.label,
+          title: 'Test: ' + v.summary,
+          onClick: function () {
+            switchVariant(idx);
+          }
+        });
+      });
       const flipRow = el(
         'div',
         {
@@ -667,26 +805,15 @@
             setPeerHighlight(false);
           },
           onFocusin: function () {
-            setPeerHighlight(true);
+            if (!restoringInputFocus) setPeerHighlight(true);
           },
           onFocusout: function (e) {
-            if (!flipRow.contains(e.relatedTarget)) {
+            if (!nodeContains(flipRow, e && e.relatedTarget)) {
               setPeerHighlight(false);
             }
           }
         },
-        activePreset.variants.map(function (v, idx) {
-          return el('button', {
-            type: 'button',
-            className: 'dc-flip-btn',
-            'aria-pressed': String(idx === app.state.variantIndex),
-            textContent: v.buttonLabel || v.label,
-            title: 'Test: ' + v.summary,
-            onClick: function () {
-              switchVariant(idx);
-            }
-          });
-        })
+        nextFlipBtns
       );
 
       const body = el('div', { className: 'dc-cell-body dc-input-body' }, [
@@ -698,37 +825,69 @@
         flipRow
       ]);
 
+      const nextPresetBtns = Presets.LIST.map(function (p) {
+        return el('button', {
+          type: 'button',
+          className: 'dc-preset-btn',
+          'aria-pressed': String(p.id === app.state.presetId),
+          textContent: p.shortLabel,
+          onClick: function () {
+            switchPreset(p.id, 0);
+          }
+        });
+      });
+
       const footer = el('footer', { className: 'dc-card-footer' }, [
         el(
           'div',
           { className: 'dc-preset-tabs', role: 'group', 'aria-label': 'Example scenarios' },
-          Presets.LIST.map(function (p) {
-            return el('button', {
-              type: 'button',
-              className: 'dc-preset-btn',
-              'aria-pressed': String(p.id === app.state.presetId),
-              textContent: p.shortLabel,
-              onClick: function () {
-                switchPreset(p.id, 0);
-              }
-            });
-          })
+          nextPresetBtns
         ),
-        el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: 'Outputs →' })
+        verdictEl || scoreEl
+          ? el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: 'Outputs →' })
+          : null
       ]);
 
-      clearNode(inputEl);
-      inputEl.appendChild(liveRegion);
-      inputEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
-      inputEl.appendChild(header);
-      inputEl.appendChild(body);
-      inputEl.appendChild(footer);
+      renderedFlipBtns = nextFlipBtns;
+      renderedPresetBtns = nextPresetBtns;
+
+      clearNode(inputWrap);
+      inputWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      inputWrap.appendChild(header);
+      inputWrap.appendChild(body);
+      inputWrap.appendChild(footer);
+
+      if (!dialog.open) {
+        let restoreTarget = null;
+        if (focusedFlipIdx >= 0 && renderedFlipBtns.length) {
+          restoreTarget = renderedFlipBtns[Math.min(focusedFlipIdx, renderedFlipBtns.length - 1)];
+        } else if (focusedPresetIdx >= 0 && renderedPresetBtns.length) {
+          restoreTarget = renderedPresetBtns[Math.min(focusedPresetIdx, renderedPresetBtns.length - 1)];
+        } else if (focusedRole && typeof inputWrap.querySelector === 'function') {
+          restoreTarget = inputWrap.querySelector('[data-focus-role="' + focusedRole + '"]');
+        }
+        if (restoreTarget && typeof restoreTarget.focus === 'function') {
+          restoringInputFocus = true;
+          try {
+            restoreTarget.focus({ preventScroll: true });
+          } catch (_e) {
+            try {
+              restoreTarget.focus();
+            } catch (_e2) {
+              // ignore
+            }
+          } finally {
+            restoringInputFocus = false;
+          }
+        }
+      }
     }
 
     // =========================================================================
     // CELL 2 (01B) — YES/NO CHECK (noul) + PICK A CATEGORY (choice)
     // =========================================================================
     function renderVerdictCell() {
+      if (!verdictEl || !verdictWrap) return;
       const header = el('header', { className: 'dc-card-header' }, [
         el('div', { className: 'dc-card-brand' }, [
           el('span', { className: 'dc-step-pill', textContent: '2 · CHECK & ROUTE' }),
@@ -789,11 +948,11 @@
         });
 
         const noulQ = renderQuestions.find(function (q) {
-          const qk = (q.key || '').trim();
+          const qk = trimKey(q.key);
           return q.type === 'noul' && Boolean(answers[qk]);
         });
         const choiceQ = renderQuestions.find(function (q) {
-          const qk = (q.key || '').trim();
+          const qk = trimKey(q.key);
           return q.type === 'choice' && Boolean(answers[qk]);
         });
         const hasPendingNoul = !noulQ && liveEnabledQuestions.some(function (q) { return q.type === 'noul'; });
@@ -801,7 +960,7 @@
 
         // Top Half: Yes/No Check (noul)
         if (noulQ) {
-          const qk = (noulQ.key || '').trim();
+          const qk = trimKey(noulQ.key);
           const ans = answers[qk];
           const prev = prevAnswers[qk];
           const thresh = Number.isFinite(noulQ.threshold) ? noulQ.threshold : 0.5;
@@ -897,7 +1056,7 @@
 
         // Bottom Half: Pick a Category (choice)
         if (choiceQ) {
-          const qk = (choiceQ.key || '').trim();
+          const qk = trimKey(choiceQ.key);
           const ans = answers[qk];
           const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
           const winnerKey = ans.choice || top.key;
@@ -950,16 +1109,17 @@
         }
       }
 
-      clearNode(verdictEl);
-      verdictEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
-      verdictEl.appendChild(header);
-      verdictEl.appendChild(body);
+      clearNode(verdictWrap);
+      verdictWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      verdictWrap.appendChild(header);
+      verdictWrap.appendChild(body);
     }
 
     // =========================================================================
     // CELL 3 (01C) — RUBRIC SCORE (score) + ZERO-OUTPUT-TOKEN PROOF
     // =========================================================================
     function renderScoreCell() {
+      if (!scoreEl || !scoreWrap) return;
       const header = el('header', { className: 'dc-card-header' }, [
         el('div', { className: 'dc-card-brand' }, [
           el('span', { className: 'dc-step-pill', textContent: '3 · RUBRIC & PROOF' })
@@ -1010,13 +1170,13 @@
         });
 
         const scoreQ = renderQuestions.find(function (q) {
-          const qk = (q.key || '').trim();
+          const qk = trimKey(q.key);
           return q.type === 'score' && Boolean(answers[qk]);
         });
         const hasPendingScore = !scoreQ && liveEnabledQuestions.some(function (q) { return q.type === 'score'; });
 
         if (scoreQ) {
-          const qk = (scoreQ.key || '').trim();
+          const qk = trimKey(scoreQ.key);
           const ans = answers[qk];
           const prev = prevAnswers[qk];
           const cols = Math.max(2, ans.levels.length);
@@ -1152,10 +1312,10 @@
       body.appendChild(mainArea);
       body.appendChild(proofStrip);
 
-      clearNode(scoreEl);
-      scoreEl.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
-      scoreEl.appendChild(header);
-      scoreEl.appendChild(body);
+      clearNode(scoreWrap);
+      scoreWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
+      scoreWrap.appendChild(header);
+      scoreWrap.appendChild(body);
     }
 
     // =========================================================================
@@ -1284,11 +1444,27 @@
       wbRefs.questionsCountLabel.textContent = 'Batched Questions (' + activeCount + ' active)';
     }
 
-    function closeKeyPopover(restoreFocus) {
-      if (!app.showKeyPopover) return;
+    function resetKeyPopoverHiddenState() {
       app.showKeyPopover = false;
       app.keyVisible = false;
-      renderKeyPopover();
+      if (wbRefs.keyInput) {
+        wbRefs.keyInput.type = 'password';
+      }
+      if (wbRefs.keyToggleVisBtn) {
+        wbRefs.keyToggleVisBtn.textContent = 'Show';
+      }
+      if (wbRefs.keyPopover) {
+        wbRefs.keyPopover.hidden = true;
+      }
+      if (wbRefs.keyBtn) {
+        wbRefs.keyBtn.setAttribute('aria-expanded', 'false');
+      }
+    }
+
+    function closeKeyPopover(restoreFocus) {
+      const wasOpen = app.showKeyPopover || Boolean(wbRefs.keyPopover && !wbRefs.keyPopover.hidden);
+      resetKeyPopoverHiddenState();
+      if (!wasOpen) return;
       if (restoreFocus && wbRefs.keyBtn) {
         wbRefs.keyBtn.focus();
       }
@@ -1297,12 +1473,15 @@
     function renderKeyPopover(forceRebuild) {
       const pop = wbRefs.keyPopover;
       if (!pop) return;
+      if (!app.showKeyPopover) {
+        resetKeyPopoverHiddenState();
+        return;
+      }
       if (wbRefs.keyBtn) {
-        wbRefs.keyBtn.setAttribute('aria-expanded', String(app.showKeyPopover));
+        wbRefs.keyBtn.setAttribute('aria-expanded', 'true');
       }
       const wasOpen = !pop.hidden;
-      pop.hidden = !app.showKeyPopover;
-      if (!app.showKeyPopover) return;
+      pop.hidden = false;
       if (wasOpen && !forceRebuild && wbRefs.keyInput && document.activeElement === wbRefs.keyInput) {
         return;
       }
@@ -1333,6 +1512,7 @@
       const input = el('input', {
         type: app.keyVisible ? 'text' : 'password',
         className: 'dc-input dc-input--mono',
+        'aria-label': 'Gemini API Key',
         autocomplete: 'off',
         spellcheck: 'false',
         placeholder: 'AIza...',
@@ -1357,6 +1537,7 @@
           toggleVisBtn.textContent = app.keyVisible ? 'Hide' : 'Show';
         }
       });
+      wbRefs.keyToggleVisBtn = toggleVisBtn;
 
       pop.appendChild(el('div', { className: 'dc-key-input-row' }, [input, toggleVisBtn]));
 
@@ -1384,6 +1565,7 @@
       saveAndGoLive = function () {
         const val = input.value.trim();
         if (!val) {
+          lastKnownKey = '';
           Client.KeyStore.clear();
           app.mode = 'simulated';
           app.error = null;
@@ -1392,6 +1574,7 @@
           runEvaluation({ resetGhost: true });
           return;
         }
+        lastKnownKey = val;
         Client.KeyStore.set(val, persistCheck.checked);
         app.mode = 'live';
         app.error = null;
@@ -1413,6 +1596,7 @@
         textContent: 'Clear Key',
         disabled: !existing,
         onClick: function () {
+          lastKnownKey = '';
           Client.KeyStore.clear();
           app.mode = 'simulated';
           app.error = null;
@@ -1871,8 +2055,27 @@
                 className: 'dc-btn dc-btn--sm',
                 textContent: '+ Add Option',
                 onClick: function () {
-                  const n = q.options.length + 1;
-                  q.options.push({ key: 'option_' + n, label: 'Option ' + n, description: 'Describe when to choose this option.' });
+                  let nextOptNum = (Array.isArray(q.options) ? q.options.length : 0) + 1;
+                  const usedKeys = Object.create(null);
+                  (q.options || []).forEach(function (existingOpt) {
+                    const ek = existingOpt && typeof existingOpt.key === 'string' ? existingOpt.key.trim() : '';
+                    if (ek) {
+                      usedKeys[ek] = true;
+                      const m = /^option_(\d+)$/.exec(ek);
+                      if (m) {
+                        const parsed = parseInt(m[1], 10);
+                        if (parsed >= nextOptNum) nextOptNum = parsed + 1;
+                      }
+                    }
+                  });
+                  while (usedKeys['option_' + nextOptNum]) {
+                    nextOptNum += 1;
+                  }
+                  q.options.push({
+                    key: 'option_' + nextOptNum,
+                    label: 'Option ' + nextOptNum,
+                    description: 'Describe when to choose this option.'
+                  });
                   renderWorkbenchLeft();
                   renderWorkbenchWirePreview();
                   updateRunButton();
@@ -2075,7 +2278,7 @@
       });
 
       activeQuestions.forEach(function (q) {
-        const qk = (q.key || '').trim();
+        const qk = trimKey(q.key);
         const ans = answers[qk];
         const prev = prevAnswers[qk];
         if (!ans) return;
@@ -2425,12 +2628,29 @@
               app.requestFormat === 'curl'
                 ? Schema.buildCurl(latestBody, { includeBase64: app.includeBase64 })
                 : Schema.formatRequestJson(latestBody, { includeBase64: app.includeBase64 });
-            copyToClipboard(str).then(function () {
-              copyBtn.textContent = 'Copied ✓';
-              setTimeout(function () {
-                copyBtn.textContent = app.requestFormat === 'curl' ? 'Copy cURL' : 'Copy JSON';
-              }, 1500);
-            });
+            copyToClipboard(str, dialog.open ? dialog : document.body)
+              .then(function () {
+                if (disposed) return;
+                copyBtn.textContent = 'Copied ✓';
+                copyTimers.push(
+                  setTimeout(function () {
+                    if (!disposed) {
+                      copyBtn.textContent = app.requestFormat === 'curl' ? 'Copy cURL' : 'Copy JSON';
+                    }
+                  }, 1500)
+                );
+              })
+              .catch(function () {
+                if (disposed) return;
+                copyBtn.textContent = 'Copy failed';
+                copyTimers.push(
+                  setTimeout(function () {
+                    if (!disposed) {
+                      copyBtn.textContent = app.requestFormat === 'curl' ? 'Copy cURL' : 'Copy JSON';
+                    }
+                  }, 1500)
+                );
+              });
           }
         });
 
@@ -2486,12 +2706,12 @@
         );
         tabContent.appendChild(pre);
       } else {
-        const displayRaw = app.result
-          ? app.result.mode === 'simulated'
-            ? Object.assign({ _simulated: true, _note: 'Local deterministic preview — not a live gemini-decision-1 response.' }, app.result.raw)
-            : app.result.raw
-          : app.error
-            ? { error: app.error }
+        const displayRaw = app.error
+          ? { error: app.error }
+          : app.result
+            ? app.result.mode === 'simulated'
+              ? Object.assign({ _simulated: true, _note: 'Local deterministic preview — not a live gemini-decision-1 response.' }, app.result.raw)
+              : app.result.raw
             : {};
         const rawStr = JSON.stringify(displayRaw, null, 2);
 
@@ -2500,22 +2720,39 @@
           className: 'dc-btn dc-btn--sm',
           textContent: 'Copy Response',
           onClick: function () {
-            copyToClipboard(rawStr).then(function () {
-              copyRespBtn.textContent = 'Copied ✓';
-              setTimeout(function () {
-                copyRespBtn.textContent = 'Copy Response';
-              }, 1500);
-            });
+            copyToClipboard(rawStr, dialog.open ? dialog : document.body)
+              .then(function () {
+                if (disposed) return;
+                copyRespBtn.textContent = 'Copied ✓';
+                copyTimers.push(
+                  setTimeout(function () {
+                    if (!disposed) copyRespBtn.textContent = 'Copy Response';
+                  }, 1500)
+                );
+              })
+              .catch(function () {
+                if (disposed) return;
+                copyRespBtn.textContent = 'Copy failed';
+                copyTimers.push(
+                  setTimeout(function () {
+                    if (!disposed) copyRespBtn.textContent = 'Copy Response';
+                  }, 1500)
+                );
+              });
           }
         });
+
+        const rawToolbarNote = app.error
+          ? 'Structured error details from the failed Live API attempt'
+          : app.result && app.result.mode === 'live'
+            ? 'Verbatim JSON returned by POST /v1beta/decisions'
+            : 'Demo preview payload matching the v1beta/decisions response contract';
 
         tabContent.appendChild(
           el('div', { className: 'dc-code-toolbar' }, [
             el('span', {
               className: 'dc-key-note',
-              textContent: app.result && app.result.mode === 'live'
-                ? 'Verbatim JSON returned by POST /v1beta/decisions'
-                : 'Demo preview payload matching the v1beta/decisions response contract'
+              textContent: rawToolbarNote
             }),
             copyRespBtn
           ])
@@ -2530,14 +2767,18 @@
 
     function restoreCardTriggerFocus() {
       for (let i = 0; i < cells.length; i++) {
-        const target = cells[i].querySelector('[data-focus-role="' + app.returnFocusRole + '"]');
+        const target = typeof cells[i].querySelector === 'function'
+          ? cells[i].querySelector('[data-focus-role="' + app.returnFocusRole + '"]')
+          : null;
         if (target && typeof target.focus === 'function') {
           target.focus();
           return;
         }
       }
       for (let j = 0; j < cells.length; j++) {
-        const fallback = cells[j].querySelector('[data-focus-role="expand-btn"]') || cells[j].querySelector('[data-focus-role="mode-pill"]');
+        const fallback = typeof cells[j].querySelector === 'function'
+          ? (cells[j].querySelector('[data-focus-role="expand-btn"]') || cells[j].querySelector('[data-focus-role="mode-pill"]'))
+          : null;
         if (fallback && typeof fallback.focus === 'function') {
           fallback.focus();
           return;
@@ -2548,10 +2789,9 @@
     let dialogClosePending = false;
 
     function finalizeDialogClose() {
+      resetKeyPopoverHiddenState();
       if (!dialogClosePending) return;
       dialogClosePending = false;
-      app.showKeyPopover = false;
-      app.keyVisible = false;
       renderAllCells();
       restoreCardTriggerFocus();
     }
@@ -2578,13 +2818,13 @@
     }
 
     function closeWorkbench() {
-      app.showKeyPopover = false;
-      app.keyVisible = false;
+      resetKeyPopoverHiddenState();
       if (dialog.open) dialog.close();
       finalizeDialogClose();
     }
 
     dialog.addEventListener('close', function () {
+      if (disposed) return;
       finalizeDialogClose();
     });
 
@@ -2599,7 +2839,7 @@
     let pointerDownOutsideKey = false;
     dialog.addEventListener('mousedown', function (e) {
       pointerDownOnBackdrop = e.target === dialog;
-      pointerDownOutsideKey = Boolean(app.showKeyPopover && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target));
+      pointerDownOutsideKey = Boolean(app.showKeyPopover && wbRefs.keyAnchor && !nodeContains(wbRefs.keyAnchor, e.target));
     });
 
     dialog.addEventListener('click', function (e) {
@@ -2607,7 +2847,7 @@
         closeWorkbench();
         return;
       }
-      if (app.showKeyPopover && pointerDownOutsideKey && wbRefs.keyAnchor && !wbRefs.keyAnchor.contains(e.target)) {
+      if (app.showKeyPopover && pointerDownOutsideKey && wbRefs.keyAnchor && !nodeContains(wbRefs.keyAnchor, e.target)) {
         closeKeyPopover(false);
       }
     });
@@ -2640,7 +2880,112 @@
       }
     });
 
+    function onExternalKeyChange(e) {
+      if (disposed) return;
+      if (
+        e &&
+        e.type === 'storage' &&
+        e.key &&
+        e.key !== 'dc_gemini_api_key_local' &&
+        e.key !== 'dc_gemini_api_key_session'
+      ) {
+        return;
+      }
+      const currentKey = Client.KeyStore.get();
+      if (currentKey === lastKnownKey) {
+        if (dialog.open) renderWorkbenchHeaderControls();
+        return;
+      }
+      lastKnownKey = currentKey;
+      if (!currentKey) {
+        if (app.mode === 'live' || app.error) {
+          app.mode = 'simulated';
+          app.error = null;
+          if (dialog.open) renderWorkbenchHeaderControls();
+          runEvaluation({ resetGhost: true });
+          return;
+        }
+        renderAllCells();
+        if (dialog.open) renderWorkbenchHeaderControls();
+      } else {
+        if (
+          app.mode === 'simulated' ||
+          (app.error && (app.error.code === 'MISSING_KEY' || app.error.httpStatus === 401))
+        ) {
+          app.mode = 'live';
+          app.error = null;
+          if (dialog.open) renderWorkbenchHeaderControls();
+          runEvaluation({ resetGhost: true });
+          return;
+        }
+        renderAllCells();
+        if (dialog.open) renderWorkbenchHeaderControls();
+      }
+    }
+
+    if (typeof global.addEventListener === 'function') {
+      global.addEventListener('gemini-key-changed', onExternalKeyChange);
+      global.addEventListener('storage', onExternalKeyChange);
+    }
+
+    function unmount() {
+      if (disposed) return;
+      disposed = true;
+      dialogClosePending = false;
+      app.runSeq += 1;
+      app.uploadSeq += 1;
+      if (app.abortController) {
+        try {
+          app.abortController.abort();
+        } catch (_e) {
+          // ignore
+        }
+        app.abortController = null;
+      }
+      if (announceTimer) {
+        clearTimeout(announceTimer);
+        announceTimer = null;
+      }
+      while (copyTimers.length) {
+        clearTimeout(copyTimers.pop());
+      }
+      while (activeDragCleanups.length) {
+        const fn = activeDragCleanups.pop();
+        if (typeof fn === 'function') fn();
+      }
+      if (typeof global.removeEventListener === 'function') {
+        global.removeEventListener('gemini-key-changed', onExternalKeyChange);
+        global.removeEventListener('storage', onExternalKeyChange);
+      }
+      resetKeyPopoverHiddenState();
+      if (dialog.open && typeof dialog.close === 'function') {
+        try {
+          dialog.close();
+        } catch (_e) {
+          // ignore
+        }
+      }
+      if (dialog.parentNode) {
+        dialog.parentNode.removeChild(dialog);
+      }
+      renderedFlipBtns = [];
+      renderedPresetBtns = [];
+      cells.forEach(function (c) {
+        if (!c) return;
+        c.classList.remove('is-scanning', 'is-loading', 'is-dimmed', 'is-peer-highlight');
+        clearNode(c);
+        if (c.__dcUnmount === unmount) {
+          delete c.__dcUnmount;
+        }
+      });
+    }
+
+    cells.forEach(function (c) {
+      if (c) c.__dcUnmount = unmount;
+    });
+
     runEvaluation({ resetGhost: true });
+    return unmount;
   }
 
   function bootstrap() {
@@ -2653,7 +2998,22 @@
     }
     const legacy = document.getElementById('cell-decisions');
     if (legacy) {
-      mountDecisionsTriptych(legacy, null, null);
+      if (typeof legacy.__dcUnmount === 'function') {
+        legacy.__dcUnmount();
+      }
+      clearNode(legacy);
+      const sInput = el('div', { className: 'cell--decisions cell--decisions-input' });
+      const sVerdict = el('div', { className: 'cell--decisions cell--decisions-verdict' });
+      const sScore = el('div', { className: 'cell--decisions cell--decisions-score' });
+      legacy.appendChild(sInput);
+      legacy.appendChild(sVerdict);
+      legacy.appendChild(sScore);
+      const disposeInner = mountDecisionsTriptych(sInput, sVerdict, sScore);
+      legacy.__dcUnmount = function unmountLegacy() {
+        disposeInner();
+        clearNode(legacy);
+        delete legacy.__dcUnmount;
+      };
     }
   }
 

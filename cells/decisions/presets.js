@@ -12,6 +12,7 @@
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
 
     ctx.fillStyle = flagged ? '#e4e0d8' : '#ecebe7';
     ctx.fillRect(0, 0, W, H);
@@ -143,6 +144,7 @@
     canvas.width = W;
     canvas.height = H;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
 
     ctx.fillStyle = '#f4f4f2';
     ctx.fillRect(0, 0, W, H);
@@ -596,7 +598,10 @@
 
   function createPresetState(presetId, variantIndex) {
     const preset = getPreset(presetId);
-    const idx = variantIndex >= 0 && variantIndex < preset.variants.length ? variantIndex : 0;
+    const idx =
+      Number.isInteger(variantIndex) && variantIndex >= 0 && variantIndex < preset.variants.length
+        ? variantIndex
+        : 0;
     const variant = preset.variants[idx];
     return {
       presetId: preset.id,
@@ -638,46 +643,56 @@
           reject(new Error('The selected file could not be decoded as an image.'));
         };
         img.onload = function () {
-          const maxEdge = 1280;
-          const needsResize = img.naturalWidth > maxEdge || img.naturalHeight > maxEdge || file.size > 2.5 * 1024 * 1024;
-          let targetW = img.naturalWidth;
-          let targetH = img.naturalHeight;
-          let finalDataUrl = rawDataUrl;
-          let finalMime = file.type.toLowerCase();
-
-          if (needsResize) {
-            const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
-            targetW = Math.max(1, Math.round(img.naturalWidth * scale));
-            targetH = Math.max(1, Math.round(img.naturalHeight * scale));
-            const canvas = document.createElement('canvas');
-            canvas.width = targetW;
-            canvas.height = targetH;
-            const ctx = canvas.getContext('2d');
-            if (finalMime === 'image/jpeg') {
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(0, 0, targetW, targetH);
-              ctx.drawImage(img, 0, 0, targetW, targetH);
-              finalDataUrl = canvas.toDataURL('image/jpeg', 0.88);
-            } else {
-              ctx.drawImage(img, 0, 0, targetW, targetH);
-              finalMime = 'image/png';
-              finalDataUrl = canvas.toDataURL('image/png');
+          try {
+            if (!(img.naturalWidth > 0) || !(img.naturalHeight > 0)) {
+              throw new Error('The selected image has invalid dimensions.');
             }
-          }
+            const maxEdge = 1280;
+            const needsResize = img.naturalWidth > maxEdge || img.naturalHeight > maxEdge || file.size > 2.5 * 1024 * 1024;
+            let targetW = img.naturalWidth;
+            let targetH = img.naturalHeight;
+            let finalDataUrl = rawDataUrl;
+            let finalMime = file.type.toLowerCase();
 
-          const base64 = finalDataUrl.split(',')[1] || '';
-          const bytes = NS.Schema.estimateBase64Bytes(base64);
-          resolve({
-            kind: 'custom',
-            name: file.name || 'uploaded-image',
-            mimeType: finalMime,
-            width: targetW,
-            height: targetH,
-            bytes: bytes,
-            data: base64,
-            dataUrl: finalDataUrl,
-            resized: needsResize
-          });
+            if (needsResize) {
+              const scale = Math.min(1, maxEdge / Math.max(img.naturalWidth, img.naturalHeight));
+              targetW = Math.max(1, Math.round(img.naturalWidth * scale));
+              targetH = Math.max(1, Math.round(img.naturalHeight * scale));
+              const canvas = document.createElement('canvas');
+              canvas.width = targetW;
+              canvas.height = targetH;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) {
+                throw new Error('2D canvas context unavailable for image resize.');
+              }
+              if (finalMime === 'image/jpeg') {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, targetW, targetH);
+                ctx.drawImage(img, 0, 0, targetW, targetH);
+                finalDataUrl = canvas.toDataURL('image/jpeg', 0.88);
+              } else {
+                ctx.drawImage(img, 0, 0, targetW, targetH);
+                finalMime = 'image/png';
+                finalDataUrl = canvas.toDataURL('image/png');
+              }
+            }
+
+            const base64 = finalDataUrl.split(',')[1] || '';
+            const bytes = NS.Schema.estimateBase64Bytes(base64);
+            resolve({
+              kind: 'custom',
+              name: file.name || 'uploaded-image',
+              mimeType: finalMime,
+              width: targetW,
+              height: targetH,
+              bytes: bytes,
+              data: base64,
+              dataUrl: finalDataUrl,
+              resized: needsResize
+            });
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
         };
         img.src = rawDataUrl;
       };
