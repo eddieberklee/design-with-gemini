@@ -28,6 +28,14 @@
   const ASPECT_RATIOS = ['4:3', '1:1', '16:9', '9:16'];
 
   let memoryKey = '';
+  // True only when the last set() could not reach browser storage (quota, private mode);
+  // otherwise empty storage means the key was cleared (possibly by another cell).
+  let memoryOnly = false;
+
+  function matrixKeyStore() {
+    const ks = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
+    return ks && typeof ks.get === 'function' && typeof ks.set === 'function' ? ks : null;
+  }
 
   function safeGet(storeName, key) {
     try {
@@ -56,8 +64,18 @@
     } catch (_err) {}
   }
 
+  // GeminiApiMatrix.KeyStore (cells/api-matrix/probes.js) is the shared contract: when it is
+  // loaded its answer is authoritative, including '' after another cell cleared the key.
+  // The local path below runs only when this file is used without the API Matrix cell.
   const KeyStore = {
     get: function () {
+      const matrixKs = matrixKeyStore();
+      if (matrixKs) {
+        try {
+          memoryKey = String(matrixKs.get() || '');
+          return memoryKey;
+        } catch (_err) {}
+      }
       const s = safeGet('sessionStorage', SESSION_KEY);
       if (s) {
         memoryKey = s;
@@ -68,44 +86,101 @@
         memoryKey = l;
         return l;
       }
-      const matrixKs = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
-      if (matrixKs && typeof matrixKs.get === 'function') {
-        try {
-          const k = matrixKs.get();
-          if (k) {
-            memoryKey = k;
-            return k;
-          }
-        } catch (_err) {}
-      }
-      return memoryKey || '';
+      if (!memoryOnly) memoryKey = '';
+      return memoryKey;
     },
 
     set: function (rawKey, persistLocal) {
       const cleaned = String(rawKey || '').trim();
       memoryKey = cleaned;
-      safeRemove('sessionStorage', SESSION_KEY);
-      safeRemove('localStorage', LOCAL_KEY);
-      if (cleaned) {
-        if (persistLocal) {
-          safeSet('localStorage', LOCAL_KEY, cleaned);
-        } else {
-          safeSet('sessionStorage', SESSION_KEY, cleaned);
-        }
-      }
-      const matrixKs = global.GeminiApiMatrix && global.GeminiApiMatrix.KeyStore;
-      if (matrixKs && typeof matrixKs.set === 'function') {
+      const matrixKs = matrixKeyStore();
+      if (matrixKs) {
+        // Writes storage, syncs Decisions/Prosody and fires `gemini-key-changed`.
         try {
           matrixKs.set(cleaned, Boolean(persistLocal));
+          return cleaned;
         } catch (_err) {}
       }
+      safeRemove('sessionStorage', SESSION_KEY);
+      safeRemove('localStorage', LOCAL_KEY);
+      let stored = false;
+      if (cleaned) {
+        stored = persistLocal
+          ? safeSet('localStorage', LOCAL_KEY, cleaned)
+          : safeSet('sessionStorage', SESSION_KEY, cleaned);
+      }
+      memoryOnly = Boolean(cleaned) && !stored;
       return cleaned;
     },
 
     clear: function () {
       KeyStore.set('', false);
+    },
+
+    // Display form only; never put the raw key in the DOM.
+    mask: function (key) {
+      const k = String(key || '').trim();
+      if (!k) return '';
+      if (k.length < 16) return '••••' + k.slice(-2);
+      return k.slice(0, 4) + '••••' + k.slice(-4);
     }
   };
+
+  // fetch() throws a raw TypeError ("non ISO-8859-1 code point") for such a header value
+  // before any request is sent; catch it first with a message the user can act on.
+  function isHeaderSafeKey(key) {
+    return /^[\x21-\x7e]+$/.test(String(key || ''));
+  }
+
+  // One in-flight request at a time. A run that was cancelled or replaced must not
+  // clean up (or render over) the run that replaced it.
+  function createRunSlot() {
+    let current = null;
+    return {
+      begin: function () {
+        if (current) current.abort();
+        current = new AbortController();
+        return current;
+      },
+      cancel: function () {
+        if (!current) return false;
+        current.abort();
+        current = null;
+        return true;
+      },
+      isCurrent: function (ctrl) {
+        return Boolean(ctrl) && ctrl === current;
+      },
+      finish: function (ctrl) {
+        if (!ctrl || ctrl !== current) return false;
+        current = null;
+        return true;
+      },
+      busy: function () {
+        return Boolean(current);
+      }
+    };
+  }
+
+  const IMAGE_MIME_RE = /^image\/(png|jpeg|jpg|webp|gif|avif|heic|heif)$/i;
+
+  // Decodes the base64 payload once into a Blob (the UI shows it through one object URL),
+  // so the multi-megabyte string is not copied into several DOM attributes.
+  function decodeBase64Image(data, mimeType) {
+    const clean = String(data || '').replace(/\s+/g, '');
+    if (!clean || /[^A-Za-z0-9+/=_-]/.test(clean)) {
+      throw new Error('Image data in the response is not valid base64.');
+    }
+    let bin;
+    try {
+      bin = global.atob(clean.replace(/-/g, '+').replace(/_/g, '/'));
+    } catch (_err) {
+      throw new Error('Image data in the response is not valid base64.');
+    }
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType });
+  }
 
   function stripModelsPrefix(name) {
     return String(name || '').replace(/^models\//, '');
@@ -168,6 +243,7 @@
   function parseGenerateResponse(json) {
     const candidates = (json && Array.isArray(json.candidates)) ? json.candidates : [];
     let image = null;
+    let thoughtImage = null;
     const textParts = [];
 
     for (let i = 0; i < candidates.length; i++) {
@@ -177,18 +253,24 @@
       for (let j = 0; j < parts.length; j++) {
         const part = parts[j];
         if (!part) continue;
+        // Thinking models can return interim drafts and reasoning marked `thought: true`;
+        // the rendered answer is the non-thought part.
+        const isThought = part.thought === true;
         const inline = part.inlineData || part.inline_data;
-        if (!image && inline && inline.data) {
-          image = {
-            mimeType: inline.mimeType || inline.mime_type || 'image/png',
-            data: inline.data
-          };
+        if (inline && typeof inline.data === 'string' && inline.data) {
+          const mimeType = String(inline.mimeType || inline.mime_type || 'image/png');
+          if (IMAGE_MIME_RE.test(mimeType)) {
+            const found = { mimeType: mimeType, data: inline.data };
+            if (!isThought && !image) image = found;
+            if (isThought && !thoughtImage) thoughtImage = found;
+          }
         }
-        if (typeof part.text === 'string' && part.text.trim()) {
+        if (!isThought && typeof part.text === 'string' && part.text.trim()) {
           textParts.push(part.text.trim());
         }
       }
     }
+    if (!image) image = thoughtImage;
 
     const blockReason =
       (json && json.promptFeedback && json.promptFeedback.blockReason) ||
@@ -233,6 +315,9 @@
 
     if (!apiKey) {
       throw new Error('Missing Gemini API key. Click Key to add one.');
+    }
+    if (!isHeaderSafeKey(apiKey)) {
+      throw new Error('The saved key contains spaces or characters an API key cannot have. Paste it again.');
     }
     if (!prompt) {
       throw new Error('Enter a prompt first.');
@@ -281,10 +366,11 @@
       throw new Error(detail);
     }
 
+    const blob = decodeBase64Image(parsed.image.data, parsed.image.mimeType);
     return {
       model: model,
       mimeType: parsed.image.mimeType,
-      dataUrl: 'data:' + parsed.image.mimeType + ';base64,' + parsed.image.data,
+      blob: blob,
       text: parsed.text,
       elapsedMs: Date.now() - t0
     };
@@ -294,6 +380,9 @@
     DEFAULT_MODELS: DEFAULT_MODELS,
     ASPECT_RATIOS: ASPECT_RATIOS,
     KeyStore: KeyStore,
+    isHeaderSafeKey: isHeaderSafeKey,
+    createRunSlot: createRunSlot,
+    decodeBase64Image: decodeBase64Image,
     rankImageModels: rankImageModels,
     buildGenerateRequest: buildGenerateRequest,
     parseGenerateResponse: parseGenerateResponse,
