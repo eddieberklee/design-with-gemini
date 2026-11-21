@@ -16,7 +16,7 @@ Interactive grid of focused Gemini capability prototypes (three columns on a lap
 | **08** | **Webcam Hand & Spatial Gesture Cursor** (`@mediapipe/tasks-vision@1.2.3`) — raise an open palm (`200 ms` dwell) to engage a zero-GC spatial cursor across the main grid or its 9-cell `#hand-gesture` Studio (`1€` 2D filter oscilloscope, zero-slip metacarpal pinch click/drag, unwrapped wrist-twist rotary dial, 2-hand zoom/steer, vertical pinch-scrub fader, and Two-Finger `V-Scroll` momentum tape) | [`cells/hand-gesture/`](cells/hand-gesture/) · [`NOTES.md`](cells/hand-gesture/NOTES.md) |
 | **09** | **Freehand Drawing Sketchpad** — zero-chrome full-bleed drawing sheet for laptop trackpad, desktop cursor, phone touch, and stylus with $C^1$ quadratic midpoint ink splines, tap-to-dot, lossless HiDPI vector replay across `MotionGrid` resizes, and strictly one floating `Clear` button | [`cells/draw/`](cells/draw/) · [`NOTES.md`](cells/draw/NOTES.md) |
 | **10** | **Gemini Image Gen** (`gemini-3-pro-image-preview` / `gemini-3.1-flash-image-preview`) — native Gemini `generateContent` image generation playground with dynamic model discovery, aspect-ratio control, one-click presets, shared local key store, abortable requests, download, and full-resolution lightbox | [`cells/image-gen/`](cells/image-gen/) · [`NOTES.md`](cells/image-gen/NOTES.md) |
-| **11** | **Image → 3D (4× Arena)** — drop any image to race 4 Gemini models in parallel reconstructing it as a 3D primitive mesh, rendered side by side in 4 interactive 3D viewers with synced orbit, model labels, full-width 4-Up studio, and `.OBJ` export | [`cells/image-to-3d/`](cells/image-to-3d/) · [`NOTES.md`](cells/image-to-3d/NOTES.md) |
+| **11** | **Image → 3D Arena** (tiles 11–13, three instances) — choose an image, then `Run` races the tile's Gemini models (six per tile) in parallel reconstructing it as a 3D primitive mesh, rendered side by side in interactive 3D viewers with synced orbit, model labels, full-width studio view, and `.OBJ` export | [`cells/image-to-3d/`](cells/image-to-3d/) · [`NOTES.md`](cells/image-to-3d/NOTES.md) |
 
 ## Shared UI
 
@@ -25,7 +25,7 @@ Every tile uses one visual system in [`ui/`](ui/): tokens, the tile header / bod
 - **Tooltips**: put `data-tip="One plain sentence."` on any control, abbreviation, status pill or readout that is not obvious (`data-tip-key="R"` adds a keycap). They show on hover and on keyboard focus, in tiles, dialogs and secondary pages. Do not use `title`.
 - **Status pills**: grey for idle states (including "No key" and "Key set"), rust for running, attention and errors, green only for a live connection or a returned live result.
 - **One black primary button per tile**, and every secondary page or dialog closes with "Close" at the top right (Esc).
-- **Paid requests** (Gemini API calls) are sent only from an explicit click on a run control, never on load, on key sync, on a file drop or from an example chip.
+- **Paid requests** (Gemini API calls) are sent only from an explicit click on a run control, never on load, on key sync, on a file drop or from an example chip. One known exception is open for an owner decision: the Decisions cell (01) sends one request on load when a key is saved and again when the key changes (`cells/decisions/ui.js` `onExternalKeyChange`).
 
 ## Verify
 
