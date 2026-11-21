@@ -318,6 +318,9 @@
     });
 
     const normalizedAnswers = Object.create(null);
+    // Answers whose core value is missing or non-numeric. They are left out of `answers` so the UI
+    // shows "no valid answer" instead of a fabricated 50% / 0% result.
+    const invalid = [];
 
     Object.keys(rawAnswers).forEach(function (key) {
       if (isReservedKey(key)) return;
@@ -328,7 +331,11 @@
 
       if (type === 'noul') {
         const rawNoul = toFiniteNumber(ans.noul);
-        const safeP = Number.isFinite(rawNoul) ? clamp(rawNoul, 0.01, 0.99) : 0.5;
+        if (!Number.isFinite(rawNoul)) {
+          invalid.push({ key: key, type: 'noul', reason: 'noul is not a number' });
+          return;
+        }
+        const safeP = clamp(rawNoul, 0.01, 0.99);
         const rawConf = toFiniteNumber(ans.confidence);
         const conf = Number.isFinite(rawConf)
           ? clamp(rawConf, 0.5, 0.99)
@@ -362,6 +369,11 @@
           };
         });
 
+        if (!(sum > 0)) {
+          invalid.push({ key: key, type: 'choice', reason: 'no usable probabilities' });
+          return;
+        }
+
         const declaredWinner = typeof ans.choice === 'string' && ans.choice ? ans.choice : '';
 
         ranked.sort(function (a, b) {
@@ -374,6 +386,9 @@
         });
 
         const winner = declaredWinner || (ranked[0] ? ranked[0].key : '');
+        const winnerEntry = ranked.find(function (r) {
+          return r.key === winner;
+        });
         const topProb = ranked[0] ? ranked[0].prob : 0;
         const runnerUpProb = ranked[1] ? ranked[1].prob : 0;
         const rawConf = toFiniteNumber(ans.confidence);
@@ -382,6 +397,7 @@
         normalizedAnswers[key] = {
           type: 'choice',
           choice: winner,
+          winnerProb: winnerEntry ? winnerEntry.prob : 0,
           probabilities: probs,
           ranked: ranked,
           sum: sum,
@@ -392,6 +408,13 @@
         const probs = (ans.probabilities && typeof ans.probabilities === 'object') ? ans.probabilities : {};
         const legend = (ans.legend && typeof ans.legend === 'object') ? ans.legend : {};
         const rawKeys = Object.keys(probs).length ? Object.keys(probs) : Object.keys(legend);
+        // The rubric defines the range: levels the response leaves out still get a 0% column, so
+        // "Rubric Score (0–3)" never shrinks to the levels that happened to come back.
+        if (qDef && Array.isArray(qDef.levels)) {
+          for (let li = 0; li < qDef.levels.length; li++) {
+            if (rawKeys.indexOf(String(li)) < 0) rawKeys.push(String(li));
+          }
+        }
         const numericKeys = rawKeys.slice().sort(function (a, b) {
           return Number(a) - Number(b);
         });
@@ -428,8 +451,13 @@
           };
         });
 
+        if (!(sum > 0)) {
+          invalid.push({ key: key, type: 'score', reason: 'no usable probabilities' });
+          return;
+        }
+
         const rawScore = toFiniteNumber(ans.score);
-        const scoreVal = Number.isFinite(rawScore) ? rawScore : expected;
+        const scoreVal = Number.isFinite(rawScore) ? rawScore : expected / sum;
         let variance = 0;
         levels.forEach(function (lvl) {
           const diff = lvl.index - scoreVal;
@@ -473,9 +501,65 @@
 
     return {
       answers: normalizedAnswers,
+      invalid: invalid,
       usage: usage,
       raw: raw
     };
+  }
+
+  // Whole-number percentages for display. A distribution whose mass is ~1 is rounded with the
+  // largest-remainder method so the shown bars add up to exactly 100% (plain rounding can show
+  // 99% or 101%). The raw peak always keeps the largest displayed value. Anything else (partial or
+  // malformed probabilities) is rounded value by value and never forced to 100.
+  function toDisplayPercents(probs) {
+    if (!Array.isArray(probs) || !probs.length) return [];
+    const vals = probs.map(function (p) {
+      const n = toFiniteNumber(p);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    });
+    const total = vals.reduce(function (a, b) {
+      return a + b;
+    }, 0);
+    if (Math.abs(total - 1) > 0.02) {
+      return vals.map(function (v) {
+        return Math.round(v * 100);
+      });
+    }
+    const scaled = vals.map(function (v, idx) {
+      const s = (v / total) * 100;
+      return { idx: idx, base: Math.floor(s), frac: s - Math.floor(s), raw: v };
+    });
+    let remainder = 100 - scaled.reduce(function (a, s) {
+      return a + s.base;
+    }, 0);
+    scaled
+      .slice()
+      .sort(function (a, b) {
+        if (b.frac !== a.frac) return b.frac - a.frac;
+        if (b.raw !== a.raw) return b.raw - a.raw;
+        return a.idx - b.idx;
+      })
+      .forEach(function (s) {
+        if (remainder > 0) {
+          s.base += 1;
+          remainder -= 1;
+        }
+      });
+    const out = scaled.map(function (s) {
+      return s.base;
+    });
+    // Guard: rounding must never make a non-peak bar outrank the raw peak.
+    let peak = 0;
+    vals.forEach(function (v, i) {
+      if (v > vals[peak]) peak = i;
+    });
+    out.forEach(function (p, i) {
+      if (i !== peak && p > out[peak]) {
+        out[i] -= 1;
+        out[peak] += 1;
+      }
+    });
+    return out;
   }
 
   NS.Schema = {
@@ -490,6 +574,7 @@
     buildRequestBody: buildRequestBody,
     formatRequestJson: formatRequestJson,
     buildCurl: buildCurl,
-    normalizeResponse: normalizeResponse
+    normalizeResponse: normalizeResponse,
+    toDisplayPercents: toDisplayPercents
   };
 })(window);

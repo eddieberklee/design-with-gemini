@@ -202,6 +202,19 @@
     return fallbackExecCopy(text, fallbackRoot);
   }
 
+  // Errors the user fixes by changing the key (wrong/expired key arrives as HTTP 400, not 401).
+  function isKeyError(err) {
+    return Boolean(
+      err && (err.keyProblem || err.httpStatus === 401 || err.code === 'MISSING_KEY' || err.code === 'API_KEY_INVALID')
+    );
+  }
+
+  function cssEscape(val) {
+    const s = String(val);
+    if (typeof CSS !== 'undefined' && CSS && typeof CSS.escape === 'function') return CSS.escape(s);
+    return s.replace(/[^A-Za-z0-9_-]/g, '\\$&');
+  }
+
   function noulBand(p, threshold) {
     if (p >= threshold) {
       const margin = p - threshold;
@@ -289,7 +302,9 @@
       prevResult: null,
       error: null,
       uploadNotice: '',
-      returnFocusRole: 'expand-btn'
+      returnFocusRole: 'expand-btn',
+      // True after a Workbench edit that the shown result does not reflect yet (cleared when a run starts).
+      dirty: false
     };
 
     const liveRegion = el('div', {
@@ -328,6 +343,48 @@
     document.body.appendChild(dialog);
 
     const wbRefs = {};
+
+    // Workbench panes are rebuilt on most clicks. Every rebuilt control carries a stable data-fk
+    // (built from question ids, indexes and keys, CSS-escaped on lookup); the focused control's key is captured
+    // before a rebuild and focus is put back on its replacement (or data-fk-fallback when it is gone
+    // or disabled) so keyboard users are not dropped onto <body>.
+    function captureWorkbenchFocus() {
+      const a = document.activeElement;
+      if (!a || !dialog.open || !nodeContains(dialog, a) || !a.dataset || !a.dataset.fk) return null;
+      const snap = { fk: a.dataset.fk, fallback: a.dataset.fkFallback || '', selStart: null, selEnd: null };
+      try {
+        if (typeof a.selectionStart === 'number') {
+          snap.selStart = a.selectionStart;
+          snap.selEnd = a.selectionEnd;
+        }
+      } catch (_e) {
+        // selection is not readable on checkbox/button inputs
+      }
+      return snap;
+    }
+
+    function restoreWorkbenchFocus(snap) {
+      if (!snap || !dialog.open) return;
+      const cur = document.activeElement;
+      if (cur && cur !== document.body && cur.isConnected !== false && nodeContains(dialog, cur)) return;
+      let target = dialog.querySelector('[data-fk="' + cssEscape(snap.fk) + '"]');
+      if ((!target || target.disabled) && snap.fallback) {
+        target = dialog.querySelector('[data-fk="' + cssEscape(snap.fallback) + '"]');
+      }
+      if (!target || target.disabled || typeof target.focus !== 'function') return;
+      try {
+        target.focus({ preventScroll: true });
+      } catch (_e) {
+        target.focus();
+      }
+      if (snap.selStart !== null && typeof target.setSelectionRange === 'function') {
+        try {
+          target.setSelectionRange(snap.selStart, snap.selEnd);
+        } catch (_e) {
+          // ignore
+        }
+      }
+    }
 
     function setPeerHighlight(active) {
       [verdictEl, scoreEl].forEach(function (c) {
@@ -390,6 +447,7 @@
       const body = Schema.buildRequestBody(app.state);
       const keepGhost = !(opts && opts.resetGhost);
       const stateSnapshot = snapshotStateForNormalization(app.state);
+      app.dirty = false;
 
       if (app.mode === 'simulated') {
         setLoadingState(false);
@@ -844,7 +902,11 @@
           nextPresetBtns
         ),
         verdictEl || scoreEl
-          ? el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: 'Outputs →' })
+          ? el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true' }, [
+              'Outputs ',
+              // Rotated to point down in the stacked phone layout (decisions.css), where tiles 2 and 3 sit below.
+              el('span', { className: 'dc-step-arrow-glyph', textContent: '→' })
+            ])
           : null
       ]);
 
@@ -883,6 +945,38 @@
       }
     }
 
+    // Provenance tag for tiles 2 and 3. It must stay visible at every tile size (unlike
+    // .dc-api-whisper / .dc-proof-meta, which compact container queries hide), and it follows the
+    // result on screen, not app.mode: while a live call is "Connecting…" the old demo numbers are
+    // still what is shown.
+    function buildResultTag() {
+      if (app.error || !app.result) return null;
+      const isDemo = app.result.mode !== 'live';
+      if (!isDemo && !app.dirty) return null;
+      return el('span', {
+        className: 'dc-result-tag' + (isDemo ? ' is-demo' : ''),
+        textContent: (isDemo ? 'Demo' : 'Live') + (app.dirty ? ' · edited' : ''),
+        title:
+          (isDemo ? 'Demo data: a local simulation, not a gemini-decision-1 response.' : 'Live gemini-decision-1 result.') +
+          (app.dirty ? ' Workbench edits are not run yet — click Run in Customize ↗.' : '')
+      });
+    }
+
+    function emptyAnswerText(type, label, renderQuestions, hasPending) {
+      const invalid = app.result && app.result.normalized && Array.isArray(app.result.normalized.invalid)
+        ? app.result.normalized.invalid
+        : [];
+      const bad = invalid.find(function (item) {
+        return renderQuestions.some(function (q) {
+          return q.type === type && trimKey(q.key) === item.key;
+        });
+      });
+      if (bad) return 'No valid ' + label + ' answer returned for "' + bad.key + '" — see Raw Response in JSON ↗';
+      return hasPending
+        ? label + ' question edited — click Run in Customize ↗'
+        : 'No ' + label + ' question active — enable in Customize ↗';
+    }
+
     // =========================================================================
     // CELL 2 (01B) — YES/NO CHECK (noul) + PICK A CATEGORY (choice)
     // =========================================================================
@@ -894,6 +988,7 @@
           el('span', { className: 'dc-step-arrow', 'aria-hidden': 'true', textContent: '→' })
         ]),
         el('div', { className: 'dc-card-actions' }, [
+          buildResultTag(),
           el('span', { className: 'dc-api-whisper', textContent: 'noul · choice', title: 'Gemini Decisions API primitives: noul (Yes/No) and choice (Category)' })
         ])
       ]);
@@ -906,27 +1001,33 @@
             el('div', { className: 'dc-card-error-title', textContent: app.error.headline }),
             el('div', { textContent: app.error.remediation }),
             el('div', { className: 'dc-card-error-actions' }, [
-              el('button', {
-                type: 'button',
-                className: 'dc-btn dc-btn--sm',
-                textContent: 'Retry Live',
-                onClick: function () {
-                  runEvaluation({ resetGhost: false });
-                }
-              }),
-              app.error.httpStatus === 401 || app.error.code === 'MISSING_KEY'
+              // Retrying without a key repeats the same error, so the button is only offered when it can help.
+              app.error.code !== 'MISSING_KEY'
                 ? el('button', {
                     type: 'button',
                     className: 'dc-btn dc-btn--sm',
+                    dataset: { focusRole: 'verdict-retry' },
+                    textContent: 'Retry Live',
+                    onClick: function () {
+                      runEvaluation({ resetGhost: false });
+                    }
+                  })
+                : null,
+              isKeyError(app.error)
+                ? el('button', {
+                    type: 'button',
+                    className: 'dc-btn dc-btn--sm',
+                    dataset: { focusRole: 'verdict-key-btn' },
                     textContent: 'Update API Key',
                     onClick: function () {
-                      openWorkbench('mode-pill', { openKeyPopover: true, initialTab: 'results' });
+                      openWorkbench('verdict-key-btn', { openKeyPopover: true, initialTab: 'results' });
                     }
                   })
                 : null,
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
+                dataset: { focusRole: 'verdict-demo' },
                 textContent: 'Switch to Demo',
                 onClick: function () {
                   app.mode = 'simulated';
@@ -989,6 +1090,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
+            dataset: { focusRole: 'cutoff-pin' },
             'aria-label': 'Yes/No cutoff for ' + (noulQ.cardQuestion || qk),
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
@@ -1046,9 +1148,7 @@
             el('div', { className: 'dc-half' }, [
               el('div', {
                 className: 'dc-empty-state',
-                textContent: hasPendingNoul
-                  ? 'Yes/No question edited — click Run in Customize ↗'
-                  : 'No Yes/No question active — enable in Customize ↗'
+                textContent: emptyAnswerText('noul', 'Yes/No', renderQuestions, hasPendingNoul)
               })
             ])
           );
@@ -1061,9 +1161,16 @@
           const top = ans.ranked[0] || { key: ans.choice || '—', prob: 0 };
           const winnerKey = ans.choice || top.key;
           const winnerLabel = optionHumanLabel(choiceQ, winnerKey);
+          // Round across every option first, then cut to the top 3, so shown + hidden add up.
+          const catPcts = Schema.toDisplayPercents(ans.ranked.map(function (r) { return r.prob; }));
+          const SHOWN = 3;
+          const hiddenCount = Math.max(0, ans.ranked.length - SHOWN);
+          const hiddenPct = catPcts.slice(SHOWN).reduce(function (a, b) { return a + b; }, 0);
+          const winnerIdx = ans.ranked.findIndex(function (r) { return r.key === winnerKey; });
+          const winnerPct = winnerIdx >= 0 ? catPcts[winnerIdx] : Math.round((ans.winnerProb || 0) * 100);
 
           const bars = el('div', { className: 'dc-cat-bars' });
-          ans.ranked.slice(0, 3).forEach(function (r) {
+          ans.ranked.slice(0, SHOWN).forEach(function (r, idx) {
             const isWin = r.key === winnerKey;
             bars.appendChild(
               el('div', { className: 'dc-cat-row' + (isWin ? ' is-winner' : ''), title: r.description || r.key }, [
@@ -1071,10 +1178,10 @@
                 el('div', { className: 'dc-cat-track' }, [
                   el('div', {
                     className: 'dc-cat-fill',
-                    style: { width: Math.max(2, Math.round(r.prob * 100)) + '%' }
+                    style: { width: Math.max(2, Math.min(100, Math.round(r.prob * 100))) + '%' }
                   })
                 ]),
-                el('span', { className: 'dc-cat-pct', textContent: fmtPct(r.prob) })
+                el('span', { className: 'dc-cat-pct', textContent: catPcts[idx] + '%' })
               ])
             );
           });
@@ -1083,7 +1190,18 @@
             el('div', { className: 'dc-half' }, [
               el('div', { className: 'dc-eyebrow-row' }, [
                 el('span', { className: 'dc-eyebrow', textContent: 'Pick One Category' }),
-                el('span', { className: 'dc-mono', style: { fontSize: '9.5px', color: 'var(--dc-ink-3)' }, textContent: winnerLabel + ' ' + fmtPct(top.prob) })
+                el('span', {
+                  className: 'dc-mono',
+                  style: { fontSize: '9.5px', color: 'var(--dc-ink-3)' },
+                  textContent: hiddenCount
+                    ? '+' + hiddenCount + ' more · ' + hiddenPct + '%'
+                    : winnerLabel + ' ' + winnerPct + '%',
+                  title: hiddenCount
+                    ? ans.ranked.slice(SHOWN).map(function (r, i) {
+                        return optionHumanLabel(choiceQ, r.key) + ' ' + catPcts[SHOWN + i] + '%';
+                      }).join(' · ')
+                    : null
+                })
               ]),
               el('div', { className: 'dc-q-headline' }, [
                 el('span', {
@@ -1100,19 +1218,41 @@
             el('div', { className: 'dc-half' }, [
               el('div', {
                 className: 'dc-empty-state',
-                textContent: hasPendingChoice
-                  ? 'Category question edited — click Run in Customize ↗'
-                  : 'No Category question active — enable in Customize ↗'
+                textContent: emptyAnswerText('choice', 'Category', renderQuestions, hasPendingChoice)
               })
             ])
           );
         }
       }
 
+      const focusRole = focusedRoleIn(verdictEl);
       clearNode(verdictWrap);
       verdictWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
       verdictWrap.appendChild(header);
       verdictWrap.appendChild(body);
+      restoreTileFocus(verdictEl, focusRole);
+    }
+
+    // Tiles 2 and 3 are rebuilt on every result; keep keyboard focus on the same control
+    // (data-focus-role), or on the mode pill when that control no longer exists (e.g. the error
+    // buttons after "Switch to Demo").
+    function focusedRoleIn(tileEl) {
+      const a = document.activeElement;
+      if (!a || dialog.open || !nodeContains(tileEl, a) || !a.dataset || !a.dataset.focusRole) return null;
+      return a.dataset.focusRole;
+    }
+
+    function restoreTileFocus(tileEl, role) {
+      if (!role || dialog.open) return;
+      const target =
+        tileEl.querySelector('[data-focus-role="' + cssEscape(role) + '"]') ||
+        (inputEl ? inputEl.querySelector('[data-focus-role="mode-pill"]') : null);
+      if (!target || typeof target.focus !== 'function') return;
+      try {
+        target.focus({ preventScroll: true });
+      } catch (_e) {
+        target.focus();
+      }
     }
 
     // =========================================================================
@@ -1152,9 +1292,10 @@
             el('button', {
               type: 'button',
               className: 'dc-btn dc-btn--sm',
+              dataset: { focusRole: 'score-open-wb' },
               textContent: 'Open Workbench',
               onClick: function () {
-                openWorkbench('expand-btn', { openKeyPopover: false, initialTab: 'results' });
+                openWorkbench('score-open-wb', { openKeyPopover: false, initialTab: 'results' });
               }
             })
           ])
@@ -1188,6 +1329,7 @@
           const peakIdx = Math.max(0, ans.levels.indexOf(peakLvl));
           const peakName = peakLvl ? shortLevelLabel(scoreQ, peakLvl, peakIdx) : '';
           const cert = certaintyLabel(ans.stdDev, ans.min, ans.max, ans.sum);
+          const levelPcts = Schema.toDisplayPercents(ans.levels.map(function (l) { return l.prob; }));
 
           mainArea.appendChild(
             el('div', { className: 'dc-eyebrow-row' }, [
@@ -1223,14 +1365,14 @@
             className: 'dc-card-bars',
             style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' }
           });
-          ans.levels.forEach(function (lvl) {
+          ans.levels.forEach(function (lvl, idx) {
             const isPeak = lvl.index === ans.peakIndex;
             barsGrid.appendChild(
-              el('div', { className: 'dc-card-bar-col', title: lvl.index + ': ' + lvl.description + ' (' + fmtPct(lvl.prob) + ')' }, [
-                el('span', { className: 'dc-card-bar-pct', textContent: fmtPct(lvl.prob) }),
+              el('div', { className: 'dc-card-bar-col', title: lvl.index + ': ' + lvl.description + ' (' + levelPcts[idx] + '%)' }, [
+                el('span', { className: 'dc-card-bar-pct', textContent: levelPcts[idx] + '%' }),
                 el('div', {
                   className: 'dc-card-bar' + (isPeak ? ' is-peak' : ''),
-                  style: { height: Math.max(8, Math.round(lvl.prob * 72)) + '%' }
+                  style: { height: Math.max(8, Math.round(Math.min(1, lvl.prob) * 72)) + '%' }
                 })
               ])
             );
@@ -1263,9 +1405,7 @@
           mainArea.appendChild(
             el('div', {
               className: 'dc-empty-state',
-              textContent: hasPendingScore
-                ? 'Rubric question edited — click Run in Customize ↗'
-                : 'No Rubric question active — enable in Customize ↗'
+              textContent: emptyAnswerText('score', 'Rubric', renderQuestions, hasPendingScore)
             })
           );
         }
@@ -1278,21 +1418,29 @@
         ? Object.keys(app.result.normalized.answers || {}).length
         : 0;
       const resultIsLive = Boolean(!app.error && app.result && app.result.mode === 'live');
+      const answersText = answerCount + ' answer' + (answerCount === 1 ? '' : 's');
+      // Demo results come from the local simulator: no API call was made, so never claim "1 call".
       const timingText = app.isRunning
         ? 'running…'
         : resultIsLive
-          ? app.result.latencyMs + 'ms · Live'
-          : '1 call · ' + answerCount + ' answer' + (answerCount === 1 ? '' : 's');
-
+          ? app.result.latencyMs + 'ms · 1 call · ' + answersText
+          : 'no API call · ' + answersText;
+      // In Demo the badge itself carries the label (a separate tag wraps the strip onto two lines
+      // in the 177px phone tile and squeezes the chart).
       const proofLeftChildren = app.error
         ? [el('span', { className: 'dc-proof-meta', textContent: 'Live error · no active result' })]
         : [
             el('span', {
-              className: 'dc-zero-badge',
-              textContent: outTok + ' words generated',
-              title: 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text'
+              className: 'dc-zero-badge' + (resultIsLive ? '' : ' is-demo'),
+              textContent: (resultIsLive ? '' : 'Demo · ') + outTok + ' words generated',
+              title:
+                (resultIsLive
+                  ? 'total_output_tokens: ' + outTok + ' — Decisions API scores directly without generating text.'
+                  : 'Demo data: simulated total_output_tokens: ' + outTok + '. Add a Gemini API key to see a live gemini-decision-1 response.') +
+                (app.dirty ? ' Workbench edits are not run yet.' : '')
             }),
-            el('span', { className: 'dc-proof-meta', textContent: timingText })
+            el('span', { className: 'dc-proof-meta', textContent: (app.dirty ? 'edited · ' : '') + timingText,
+              title: (app.dirty ? 'Workbench edits not run yet · ' : '') + timingText })
           ];
 
       const proofStrip = el('footer', { className: 'dc-proof-strip' }, [
@@ -1312,10 +1460,12 @@
       body.appendChild(mainArea);
       body.appendChild(proofStrip);
 
+      const focusRole = focusedRoleIn(scoreEl);
       clearNode(scoreWrap);
       scoreWrap.appendChild(el('div', { className: 'dc-scanline', 'aria-hidden': 'true' }));
       scoreWrap.appendChild(header);
       scoreWrap.appendChild(body);
+      restoreTileFocus(scoreEl, focusRole);
     }
 
     // =========================================================================
@@ -1569,7 +1719,7 @@
           Client.KeyStore.clear();
           app.mode = 'simulated';
           app.error = null;
-          closeKeyPopover(false);
+          closeKeyPopover(true);
           renderWorkbenchHeaderControls();
           runEvaluation({ resetGhost: true });
           return;
@@ -1578,7 +1728,8 @@
         Client.KeyStore.set(val, persistCheck.checked);
         app.mode = 'live';
         app.error = null;
-        closeKeyPopover(false);
+        // Focus goes back to the key button; leaving it on the now-hidden input drops it to <body>.
+        closeKeyPopover(true);
         renderWorkbenchHeaderControls();
         runEvaluation({ resetGhost: true });
       };
@@ -1625,6 +1776,7 @@
 
     function renderWorkbenchHeaderControls() {
       if (!wbRefs.presetSelect) return;
+      const focusSnap = captureWorkbenchFocus();
       wbRefs.presetSelect.value = app.state.presetId;
 
       const preset = Presets.getPreset(app.state.presetId);
@@ -1634,6 +1786,7 @@
           el('button', {
             type: 'button',
             className: 'dc-seg-btn',
+            dataset: { fk: 'variant-' + idx },
             'aria-pressed': String(idx === app.state.variantIndex),
             textContent: v.label,
             onClick: function () {
@@ -1649,6 +1802,7 @@
           el('button', {
             type: 'button',
             className: 'dc-seg-btn',
+            dataset: { fk: 'mode-' + m },
             'aria-pressed': String(app.mode === m),
             textContent: m === 'live' ? 'Live API' : 'Demo Data',
             onClick: function (e) {
@@ -1677,19 +1831,63 @@
 
       renderKeyPopover();
       updateRunButton();
+      restoreWorkbenchFocus(focusSnap);
+    }
+
+    // Errors are shown next to the field that causes them: the field gets aria-invalid (red
+    // outline) and its question card lists the messages. The box above the cards keeps only
+    // errors that belong to no single card (empty input, no active questions, >1,000 questions).
+    function fieldKeyForError(err) {
+      if (err.field === 'input') return 'input';
+      if (!err.questionId) return null;
+      const qid = err.questionId;
+      if (err.field === 'question.key') return qid + '|key';
+      if (err.field === 'question.instructions') return qid + '|instructions';
+      if (err.field === 'question.option.key') return qid + '|opt-key|' + err.optionIndex;
+      if (err.field === 'question.option.description') return qid + '|opt-desc|' + err.optionIndex;
+      if (err.field === 'question.level') return qid + '|level|' + err.levelIndex;
+      return null;
     }
 
     function renderWorkbenchValidation(validationOpt) {
       const box = wbRefs.validationBox;
       if (!box) return;
       const validation = validationOpt || getValidation();
+      const fields = wbRefs.fields || Object.create(null);
+      Object.keys(fields).forEach(function (k) {
+        const node = fields[k];
+        if (/\|errors$/.test(k)) {
+          clearNode(node);
+          node.hidden = true;
+        } else if (/\|card$/.test(k)) {
+          node.classList.remove('has-error');
+        } else if (node && node.removeAttribute) {
+          node.removeAttribute('aria-invalid');
+        }
+      });
       clearNode(box);
-      box.hidden = validation.valid;
-      if (!validation.valid) {
-        validation.errors.slice(0, 4).forEach(function (err) {
-          box.appendChild(el('div', { textContent: '• ' + err.message }));
-        });
+      const general = [];
+      validation.errors.forEach(function (err) {
+        const fk = fieldKeyForError(err);
+        if (fk && fields[fk]) fields[fk].setAttribute('aria-invalid', 'true');
+        const list = err.questionId ? fields[err.questionId + '|errors'] : null;
+        if (list) {
+          list.hidden = false;
+          list.appendChild(el('div', { textContent: err.message }));
+          const card = fields[err.questionId + '|card'];
+          if (card) card.classList.add('has-error');
+        } else {
+          general.push(err.message);
+        }
+      });
+      const inCards = validation.errors.length - general.length;
+      if (inCards > 0) {
+        general.push(inCards + ' issue' + (inCards === 1 ? '' : 's') + ' in the highlighted question card' + (inCards === 1 ? '' : 's') + ' below.');
       }
+      box.hidden = general.length === 0;
+      general.forEach(function (msg) {
+        box.appendChild(el('div', { textContent: '• ' + msg }));
+      });
     }
 
     function handleImageFile(file) {
@@ -1711,10 +1909,34 @@
         });
     }
 
+    // A Workbench edit the shown result does not reflect yet: refresh the validation + wire preview
+    // and mark the tiles stale (they are re-run on close in Demo mode, see finalizeDialogClose).
+    function onWorkbenchEdit() {
+      app.dirty = true;
+      const v = getValidation();
+      renderWorkbenchValidation(v);
+      updateRunButton(v);
+      renderWorkbenchWirePreview();
+    }
+
+    // Structural edit (add/remove question, option or level): rebuild the left pane, then as above.
+    function onWorkbenchStructureEdit() {
+      app.dirty = true;
+      renderWorkbenchLeft();
+      renderWorkbenchWirePreview();
+      updateRunButton();
+    }
+
     function renderWorkbenchLeft() {
       const left = wbRefs.leftPane;
       if (!left) return;
+      const focusSnap = captureWorkbenchFocus();
       clearNode(left);
+      // Field elements keyed for renderWorkbenchValidation: 'input', '<qid>|card', '<qid>|key',
+      // '<qid>|instructions', '<qid>|opt-key|<i>', '<qid>|opt-desc|<i>', '<qid>|level|<i>', and
+      // '<qid>|errors' (the per-card message list).
+      const fields = Object.create(null);
+      wbRefs.fields = fields;
 
       const fileInput = el('input', {
         type: 'file',
@@ -1730,6 +1952,7 @@
 
       const sampleSelect = el('select', {
         className: 'dc-select',
+        dataset: { fk: 'sample' },
         'aria-label': 'Load built-in sample image',
         onChange: function (e) {
           const val = e.target.value;
@@ -1772,6 +1995,7 @@
               {
                 type: 'button',
                 className: 'dc-media-thumb-btn',
+                dataset: { fk: 'thumb' },
                 'aria-label': app.mediaExpanded ? 'Shrink specimen preview' : 'Expand specimen preview',
                 onClick: function () {
                   app.mediaExpanded = !app.mediaExpanded;
@@ -1821,6 +2045,7 @@
           el('button', {
             type: 'button',
             className: 'dc-seg-btn',
+            dataset: { fk: 'res-' + res },
             disabled: !app.state.image,
             'aria-pressed': String(app.state.resolution === res),
             textContent: res,
@@ -1840,6 +2065,7 @@
             el('button', {
               type: 'button',
               className: 'dc-btn dc-btn--sm',
+              dataset: { fk: 'upload' },
               textContent: app.state.image ? 'Replace Image' : 'Upload Image',
               onClick: function () {
                 fileInput.click();
@@ -1850,6 +2076,7 @@
               ? el('button', {
                   type: 'button',
                   className: 'dc-btn dc-btn--ghost dc-btn--sm',
+                  dataset: { fk: 'rm-image', fkFallback: 'upload' },
                   textContent: 'Remove',
                   onClick: function () {
                     app.uploadSeq++;
@@ -1872,17 +2099,17 @@
       const inputArea = el('textarea', {
         className: 'dc-textarea',
         rows: '3',
+        dataset: { fk: 'input-text' },
+        'aria-label': 'Shared input text',
         placeholder: 'Shared text context evaluated against all active questions in one forward pass…',
         onInput: function (e) {
           app.state.inputText = e.target.value;
           app.customTextEdited = true;
-          const v = getValidation();
-          renderWorkbenchValidation(v);
-          updateRunButton(v);
-          renderWorkbenchWirePreview();
+          onWorkbenchEdit();
         }
       });
       inputArea.value = app.state.inputText;
+      fields.input = inputArea;
 
       const inputSection = el('section', { className: 'dc-section' }, [
         el('div', { className: 'dc-section-head' }, [
@@ -1902,20 +2129,21 @@
 
       const qList = el('div', { className: 'dc-q-list' });
       app.state.questions.forEach(function (q, qIdx) {
+        // Focus/validation key: the question id (generated, never user text), else its index.
+        const qid = typeof q.id === 'string' && q.id ? q.id : 'idx-' + qIdx;
         const card = el('div', { className: 'dc-q-card' + (q.enabled === false ? ' is-disabled' : '') });
+        fields[qid + '|card'] = card;
 
         const enabledCheck = el('input', {
           type: 'checkbox',
           checked: q.enabled !== false,
+          dataset: { fk: 'q-' + qid + '-enabled' },
           'aria-label': 'Enable question ' + q.key,
           onChange: function (e) {
             q.enabled = e.target.checked;
             card.classList.toggle('is-disabled', !q.enabled);
             updateActiveQuestionsCountLabel();
-            const v = getValidation();
-            renderWorkbenchValidation(v);
-            updateRunButton(v);
-            renderWorkbenchWirePreview();
+            onWorkbenchEdit();
           }
         });
 
@@ -1923,27 +2151,25 @@
           type: 'text',
           className: 'dc-input dc-input--mono dc-q-key-input',
           value: q.key,
+          dataset: { fk: 'q-' + qid + '-key' },
           'aria-label': 'Question key',
           placeholder: 'question_key',
           onInput: function (e) {
             q.key = e.target.value;
-            const v = getValidation();
-            renderWorkbenchValidation(v);
-            updateRunButton(v);
-            renderWorkbenchWirePreview();
+            onWorkbenchEdit();
           }
         });
+        fields[qid + '|key'] = keyInput;
 
         const removeQBtn = el('button', {
           type: 'button',
           className: 'dc-btn dc-btn--ghost dc-btn--sm',
+          dataset: { fk: 'q-' + qid + '-rm', fkFallback: 'add-noul' },
           'aria-label': 'Remove question ' + q.key,
           textContent: '×',
           onClick: function () {
             app.state.questions.splice(qIdx, 1);
-            renderWorkbenchLeft();
-            renderWorkbenchWirePreview();
-            updateRunButton();
+            onWorkbenchStructureEdit();
           }
         });
 
@@ -1960,17 +2186,16 @@
           type: 'text',
           className: 'dc-input',
           value: q.instructions || '',
+          dataset: { fk: 'q-' + qid + '-inst' },
           placeholder: 'Question instructions',
           'aria-label': 'Instructions for ' + q.key,
           onInput: function (e) {
             q.instructions = e.target.value;
             q.cardQuestion = e.target.value;
-            const v = getValidation();
-            renderWorkbenchValidation(v);
-            updateRunButton(v);
-            renderWorkbenchWirePreview();
+            onWorkbenchEdit();
           }
         });
+        fields[qid + '|instructions'] = instInput;
         card.appendChild(instInput);
 
         if (q.type === 'noul') {
@@ -1978,20 +2203,24 @@
             type: 'text',
             className: 'dc-input',
             value: q.trueDescription || '',
+            dataset: { fk: 'q-' + qid + '-td' },
+            'aria-label': 'When to answer Yes for ' + q.key,
             placeholder: 'Optional: when to answer Yes',
             onInput: function (e) {
               q.trueDescription = e.target.value;
-              renderWorkbenchWirePreview();
+              onWorkbenchEdit();
             }
           });
           const fdInput = el('input', {
             type: 'text',
             className: 'dc-input',
             value: q.falseDescription || '',
+            dataset: { fk: 'q-' + qid + '-fd' },
+            'aria-label': 'When to answer No for ' + q.key,
             placeholder: 'Optional: when to answer No',
             onInput: function (e) {
               q.falseDescription = e.target.value;
-              renderWorkbenchWirePreview();
+              onWorkbenchEdit();
             }
           });
           card.appendChild(
@@ -2002,47 +2231,50 @@
           );
         } else if (q.type === 'choice') {
           const optWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } });
-          (q.options || []).forEach(function (opt, oIdx) {
+          if (!Array.isArray(q.options)) q.options = [];
+          q.options.forEach(function (opt, oIdx) {
+            if (!opt || typeof opt !== 'object') return;
+            const optKeyInput = el('input', {
+              type: 'text',
+              className: 'dc-input dc-input--mono',
+              value: opt.key,
+              dataset: { fk: 'q-' + qid + '-opt-' + oIdx + '-key' },
+              'aria-label': 'Option ' + (oIdx + 1) + ' key',
+              placeholder: 'option_key',
+              onInput: function (e) {
+                opt.key = e.target.value;
+                opt.label = humanizeKey(e.target.value);
+                onWorkbenchEdit();
+              }
+            });
+            const optDescInput = el('input', {
+              type: 'text',
+              className: 'dc-input',
+              value: opt.description,
+              dataset: { fk: 'q-' + qid + '-opt-' + oIdx + '-desc' },
+              'aria-label': 'Option ' + (oIdx + 1) + ' description',
+              placeholder: 'Option criteria description',
+              onInput: function (e) {
+                opt.description = e.target.value;
+                onWorkbenchEdit();
+              }
+            });
+            fields[qid + '|opt-key|' + oIdx] = optKeyInput;
+            fields[qid + '|opt-desc|' + oIdx] = optDescInput;
             optWrap.appendChild(
               el('div', { className: 'dc-opt-row' }, [
-                el('input', {
-                  type: 'text',
-                  className: 'dc-input dc-input--mono',
-                  value: opt.key,
-                  placeholder: 'option_key',
-                  onInput: function (e) {
-                    opt.key = e.target.value;
-                    opt.label = humanizeKey(e.target.value);
-                    const v = getValidation();
-                    renderWorkbenchValidation(v);
-                    updateRunButton(v);
-                    renderWorkbenchWirePreview();
-                  }
-                }),
-                el('input', {
-                  type: 'text',
-                  className: 'dc-input',
-                  value: opt.description,
-                  placeholder: 'Option criteria description',
-                  onInput: function (e) {
-                    opt.description = e.target.value;
-                    const v = getValidation();
-                    renderWorkbenchValidation(v);
-                    updateRunButton(v);
-                    renderWorkbenchWirePreview();
-                  }
-                }),
+                optKeyInput,
+                optDescInput,
                 el('button', {
                   type: 'button',
                   className: 'dc-btn dc-btn--ghost dc-btn--sm',
+                  dataset: { fk: 'q-' + qid + '-opt-' + oIdx + '-rm', fkFallback: 'q-' + qid + '-add-opt' },
                   textContent: '×',
                   disabled: q.options.length <= 2,
-                  'aria-label': 'Remove option',
+                  'aria-label': 'Remove option ' + (oIdx + 1),
                   onClick: function () {
                     q.options.splice(oIdx, 1);
-                    renderWorkbenchLeft();
-                    renderWorkbenchWirePreview();
-                    updateRunButton();
+                    onWorkbenchStructureEdit();
                   }
                 })
               ])
@@ -2053,6 +2285,7 @@
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
+                dataset: { fk: 'q-' + qid + '-add-opt' },
                 textContent: '+ Add Option',
                 onClick: function () {
                   let nextOptNum = (Array.isArray(q.options) ? q.options.length : 0) + 1;
@@ -2076,9 +2309,7 @@
                     label: 'Option ' + nextOptNum,
                     description: 'Describe when to choose this option.'
                   });
-                  renderWorkbenchLeft();
-                  renderWorkbenchWirePreview();
-                  updateRunButton();
+                  onWorkbenchStructureEdit();
                 }
               })
             ])
@@ -2086,36 +2317,37 @@
           card.appendChild(optWrap);
         } else if (q.type === 'score') {
           const lvlWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '5px' } });
-          (q.levels || []).forEach(function (lvl, lIdx) {
+          if (!Array.isArray(q.levels)) q.levels = [];
+          q.levels.forEach(function (lvl, lIdx) {
+            const lvlInput = el('input', {
+              type: 'text',
+              className: 'dc-input',
+              value: lvl,
+              dataset: { fk: 'q-' + qid + '-lvl-' + lIdx },
+              'aria-label': 'Rubric level ' + lIdx,
+              placeholder: 'Level ' + lIdx + ' rubric criterion',
+              onInput: function (e) {
+                q.levels[lIdx] = e.target.value;
+                if (Array.isArray(q.levelLabels)) q.levelLabels[lIdx] = '';
+                onWorkbenchEdit();
+              }
+            });
+            fields[qid + '|level|' + lIdx] = lvlInput;
             lvlWrap.appendChild(
               el('div', { className: 'dc-level-row' }, [
                 el('span', { className: 'dc-level-idx', textContent: String(lIdx) }),
-                el('input', {
-                  type: 'text',
-                  className: 'dc-input',
-                  value: lvl,
-                  placeholder: 'Level ' + lIdx + ' rubric criterion',
-                  onInput: function (e) {
-                    q.levels[lIdx] = e.target.value;
-                    if (Array.isArray(q.levelLabels)) q.levelLabels[lIdx] = '';
-                    const v = getValidation();
-                    renderWorkbenchValidation(v);
-                    updateRunButton(v);
-                    renderWorkbenchWirePreview();
-                  }
-                }),
+                lvlInput,
                 el('button', {
                   type: 'button',
                   className: 'dc-btn dc-btn--ghost dc-btn--sm',
+                  dataset: { fk: 'q-' + qid + '-lvl-' + lIdx + '-rm', fkFallback: 'q-' + qid + '-add-lvl' },
                   textContent: '×',
                   disabled: q.levels.length <= 2,
                   'aria-label': 'Remove level ' + lIdx,
                   onClick: function () {
                     q.levels.splice(lIdx, 1);
                     if (Array.isArray(q.levelLabels)) q.levelLabels.splice(lIdx, 1);
-                    renderWorkbenchLeft();
-                    renderWorkbenchWirePreview();
-                    updateRunButton();
+                    onWorkbenchStructureEdit();
                   }
                 })
               ])
@@ -2126,19 +2358,23 @@
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
+                dataset: { fk: 'q-' + qid + '-add-lvl' },
                 textContent: '+ Add Rubric Level',
                 onClick: function () {
                   q.levels.push('Level ' + q.levels.length + ': higher quality criteria.');
                   if (Array.isArray(q.levelLabels)) q.levelLabels.push('Level ' + (q.levels.length - 1));
-                  renderWorkbenchLeft();
-                  renderWorkbenchWirePreview();
-                  updateRunButton();
+                  onWorkbenchStructureEdit();
                 }
               })
             ])
           );
           card.appendChild(lvlWrap);
         }
+
+        // Per-card list of validation messages, filled by renderWorkbenchValidation.
+        const cardErrors = el('div', { className: 'dc-q-errors', hidden: true });
+        fields[qid + '|errors'] = cardErrors;
+        card.appendChild(cardErrors);
 
         qList.appendChild(card);
       });
@@ -2186,9 +2422,7 @@
             ]
           });
         }
-        renderWorkbenchLeft();
-        renderWorkbenchWirePreview();
-        updateRunButton();
+        onWorkbenchStructureEdit();
       }
 
       const activeCount = app.state.questions.filter(function (q) {
@@ -2203,10 +2437,10 @@
       const questionsSection = el('section', { className: 'dc-section' }, [
         el('div', { className: 'dc-section-head' }, [
           questionsCountLabel,
-          el('div', { style: { display: 'flex', gap: '5px' } }, [
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Yes/No (noul)', onClick: function () { addQuestion('noul'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Category (choice)', onClick: function () { addQuestion('choice'); } }),
-            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', textContent: '+ Rubric (score)', onClick: function () { addQuestion('score'); } })
+          el('div', { style: { display: 'flex', gap: '5px', flexWrap: 'wrap' } }, [
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-noul' }, textContent: '+ Yes/No (noul)', onClick: function () { addQuestion('noul'); } }),
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-choice' }, textContent: '+ Category (choice)', onClick: function () { addQuestion('choice'); } }),
+            el('button', { type: 'button', className: 'dc-btn dc-btn--sm', dataset: { fk: 'add-score' }, textContent: '+ Rubric (score)', onClick: function () { addQuestion('score'); } })
           ])
         ]),
         validationBox,
@@ -2216,6 +2450,7 @@
       left.appendChild(inputSection);
       left.appendChild(questionsSection);
       renderWorkbenchValidation();
+      restoreWorkbenchFocus(focusSnap);
     }
 
     function buildResultsStack() {
@@ -2228,18 +2463,22 @@
             el('p', { textContent: app.error.detail }),
             el('p', { style: { fontWeight: '600' }, textContent: app.error.remediation }),
             el('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, [
-              el('button', {
-                type: 'button',
-                className: 'dc-btn dc-btn--sm',
-                textContent: 'Retry Live',
-                onClick: function () {
-                  runEvaluation({ resetGhost: false });
-                }
-              }),
-              app.error.httpStatus === 401 || app.error.code === 'MISSING_KEY'
+              app.error.code !== 'MISSING_KEY'
                 ? el('button', {
                     type: 'button',
                     className: 'dc-btn dc-btn--sm',
+                    dataset: { fk: 'err-retry' },
+                    textContent: 'Retry Live',
+                    onClick: function () {
+                      runEvaluation({ resetGhost: false });
+                    }
+                  })
+                : null,
+              isKeyError(app.error)
+                ? el('button', {
+                    type: 'button',
+                    className: 'dc-btn dc-btn--sm',
+                    dataset: { fk: 'err-key' },
                     textContent: 'Update API Key',
                     onClick: function (e) {
                       e.stopPropagation();
@@ -2252,6 +2491,7 @@
               el('button', {
                 type: 'button',
                 className: 'dc-btn dc-btn--sm',
+                dataset: { fk: 'err-demo', fkFallback: 'tab-results' },
                 textContent: 'Switch to Demo Data',
                 onClick: function () {
                   app.mode = 'simulated';
@@ -2277,11 +2517,29 @@
         return q && q.enabled !== false;
       });
 
+      const invalidKeys = Object.create(null);
+      (Array.isArray(app.result.normalized.invalid) ? app.result.normalized.invalid : []).forEach(function (item) {
+        invalidKeys[item.key] = item.reason;
+      });
+
       activeQuestions.forEach(function (q) {
         const qk = trimKey(q.key);
         const ans = answers[qk];
         const prev = prevAnswers[qk];
-        if (!ans) return;
+        if (!ans) {
+          if (invalidKeys[qk]) {
+            stack.appendChild(
+              el('article', { className: 'dc-res-card' }, [
+                el('div', { className: 'dc-res-key-row' }, [
+                  el('span', { className: 'dc-type-tag', textContent: String(q.type) }),
+                  el('span', { className: 'dc-res-key', textContent: qk })
+                ]),
+                el('div', { className: 'dc-key-note', textContent: 'No valid answer in the response (' + invalidKeys[qk] + '). See Raw Response.' })
+              ])
+            );
+          }
+          return;
+        }
 
         if (ans.type === 'noul') {
           const thresh = Number.isFinite(q.threshold) ? q.threshold : 0.5;
@@ -2307,6 +2565,7 @@
             type: 'button',
             className: 'dc-noul-pin',
             role: 'slider',
+            dataset: { fk: 'wb-pin-' + qk },
             'aria-label': 'Decision cutoff for ' + qk,
             'aria-valuemin': '0.05',
             'aria-valuemax': '0.95',
@@ -2442,13 +2701,14 @@
             className: 'dc-hist-wrap',
             style: { gridTemplateColumns: 'repeat(' + cols + ', 1fr)' }
           });
-          ans.levels.forEach(function (lvl) {
+          const levelPcts = Schema.toDisplayPercents(ans.levels.map(function (l) { return l.prob; }));
+          ans.levels.forEach(function (lvl, idx) {
             hist.appendChild(
-              el('div', { className: 'dc-hist-col', title: 'Level ' + lvl.index + ': ' + fmtPct(lvl.prob) }, [
-                el('span', { className: 'dc-hist-pct', textContent: fmtPct(lvl.prob) }),
+              el('div', { className: 'dc-hist-col', title: 'Level ' + lvl.index + ': ' + levelPcts[idx] + '%' }, [
+                el('span', { className: 'dc-hist-pct', textContent: levelPcts[idx] + '%' }),
                 el('div', {
                   className: 'dc-hist-bar' + (lvl.index === ans.peakIndex ? ' is-peak' : ''),
-                  style: { height: Math.max(3, Math.round(lvl.prob * 72)) + 'px' }
+                  style: { height: Math.max(3, Math.round(Math.min(1, lvl.prob) * 72)) + 'px' }
                 })
               ])
             );
@@ -2470,12 +2730,12 @@
           );
 
           const rubricTable = el('div', { className: 'dc-rubric-table' });
-          ans.levels.forEach(function (lvl) {
+          ans.levels.forEach(function (lvl, idx) {
             rubricTable.appendChild(
               el('div', { className: 'dc-rubric-row' + (lvl.index === ans.peakIndex ? ' is-peak' : '') }, [
                 el('span', { className: 'dc-mono', textContent: String(lvl.index) }),
                 el('span', { textContent: lvl.description }),
-                el('span', { className: 'dc-mono', style: { textAlign: 'right' }, textContent: fmtPct(lvl.prob) })
+                el('span', { className: 'dc-mono', style: { textAlign: 'right' }, textContent: levelPcts[idx] + '%' })
               ])
             );
           });
@@ -2526,6 +2786,7 @@
     function renderWorkbenchRight() {
       const right = wbRefs.rightPane;
       if (!right) return;
+      const focusSnap = captureWorkbenchFocus();
       clearNode(right);
 
       const provMode = app.error ? 'error' : app.result && app.result.mode === 'live' ? 'live' : 'simulated';
@@ -2578,6 +2839,7 @@
             id: 'dc-tab-' + entry[0],
             type: 'button',
             role: 'tab',
+            dataset: { fk: 'tab-' + entry[0] },
             className: 'dc-tab-btn',
             tabindex: isSelected ? '0' : '-1',
             'aria-selected': String(isSelected),
@@ -2621,6 +2883,7 @@
         const copyBtn = el('button', {
           type: 'button',
           className: 'dc-btn dc-btn--sm',
+          dataset: { fk: 'copy-req' },
           textContent: app.requestFormat === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
             const latestBody = Schema.buildRequestBody(app.state);
@@ -2659,6 +2922,7 @@
             el('button', {
               type: 'button',
               className: 'dc-seg-btn',
+              dataset: { fk: 'fmt-json' },
               'aria-pressed': String(app.requestFormat === 'json'),
               textContent: 'JSON Body',
               onClick: function () {
@@ -2669,6 +2933,7 @@
             el('button', {
               type: 'button',
               className: 'dc-seg-btn',
+              dataset: { fk: 'fmt-curl' },
               'aria-pressed': String(app.requestFormat === 'curl'),
               textContent: 'cURL (redacted)',
               onClick: function () {
@@ -2682,6 +2947,7 @@
               ? el('label', { className: 'dc-checkbox-row' }, [
                   el('input', {
                     type: 'checkbox',
+                    dataset: { fk: 'b64' },
                     checked: app.includeBase64,
                     onChange: function (e) {
                       app.includeBase64 = e.target.checked;
@@ -2718,6 +2984,7 @@
         const copyRespBtn = el('button', {
           type: 'button',
           className: 'dc-btn dc-btn--sm',
+          dataset: { fk: 'copy-resp' },
           textContent: 'Copy Response',
           onClick: function () {
             copyToClipboard(rawStr, dialog.open ? dialog : document.body)
@@ -2763,6 +3030,7 @@
       right.appendChild(provBanner);
       right.appendChild(tabs);
       right.appendChild(tabContent);
+      restoreWorkbenchFocus(focusSnap);
     }
 
     function restoreCardTriggerFocus() {
@@ -2792,7 +3060,14 @@
       resetKeyPopoverHiddenState();
       if (!dialogClosePending) return;
       dialogClosePending = false;
-      renderAllCells();
+      // Workbench edits that were never run would leave tile 1 showing the edited input next to
+      // tiles 2–3 answering the old one. Demo runs are free and local, so re-run them now; a live
+      // call is never sent implicitly (the tiles keep a "Live · edited" tag until Run is pressed).
+      if (app.dirty && app.mode === 'simulated' && getValidation().valid) {
+        runEvaluation({ resetGhost: false });
+      } else {
+        renderAllCells();
+      }
       restoreCardTriggerFocus();
     }
 
@@ -2824,7 +3099,8 @@
     }
 
     dialog.addEventListener('close', function () {
-      if (disposed) return;
+      // The close event is queued; if the Workbench was reopened before it fired, it is stale.
+      if (disposed || dialog.open) return;
       finalizeDialogClose();
     });
 

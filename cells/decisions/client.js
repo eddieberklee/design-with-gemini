@@ -182,6 +182,23 @@
       };
     }
 
+    // Google answers a wrong/expired key with HTTP 400 INVALID_ARGUMENT ("API key not valid…",
+    // ErrorInfo reason API_KEY_INVALID), not 401. Treat it as a key problem, not a payload problem.
+    const details = Array.isArray(errObj.details) ? errObj.details : [];
+    const keyReason = details.some(function (d) {
+      return d && typeof d === 'object' && /^API_KEY_(INVALID|EXPIRED)$/.test(String(d.reason || ''));
+    });
+    if (httpStatus === 400 && (keyReason || /api key (not valid|expired)/i.test(detail))) {
+      return {
+        code: 'API_KEY_INVALID',
+        httpStatus: 400,
+        keyProblem: true,
+        headline: 'Gemini API key rejected (HTTP 400)',
+        detail: detail,
+        remediation: 'Check your standard Gemini API key from Google AI Studio and update it.'
+      };
+    }
+
     if (httpStatus === 400) {
       return {
         code: code,
@@ -195,6 +212,7 @@
       return {
         code: code,
         httpStatus: 401,
+        keyProblem: true,
         headline: 'Invalid or rejected Gemini API key (HTTP 401)',
         detail: detail,
         remediation: 'Check your standard Gemini API key from Google AI Studio and update it.'
@@ -235,7 +253,7 @@
       httpStatus: httpStatus || 0,
       headline: 'Gemini Decisions API error' + (httpStatus ? ' (HTTP ' + httpStatus + ')' : ''),
       detail: detail,
-      remediation: 'Retry the live request or switch explicitly to Simulated mode.'
+      remediation: 'Retry the live request or switch to Demo Data.'
     };
   }
 
@@ -247,7 +265,7 @@
         httpStatus: 0,
         headline: 'No Gemini API key configured',
         detail: 'Paste a standard Gemini API key (x-goog-api-key) to run live evaluations.',
-        remediation: 'Open the API Key popover or switch explicitly to Simulated mode.'
+        remediation: 'Open the API Key popover or switch to Demo Data.'
       });
     }
 
@@ -301,7 +319,13 @@
             typeof parsed.answers !== 'object' ||
             Array.isArray(parsed.answers)
           ) {
-            throw classifyApiError(resp.status, parsed, 'Response did not contain an answers map.', null);
+            throw {
+              code: 'MALFORMED_RESPONSE',
+              httpStatus: resp.status,
+              headline: 'Decisions API returned no readable answers (HTTP ' + resp.status + ')',
+              detail: 'The response body was not JSON with an "answers" object.',
+              remediation: 'Retry the live request, or open Raw Response and compare with the v1beta/decisions contract.'
+            };
           }
           return {
             mode: 'live',
@@ -334,7 +358,7 @@
           headline: offline ? 'Browser appears offline' : 'Network request to Gemini Decisions API failed',
           detail: (err && err.message) ? err.message : 'Unable to reach generativelanguage.googleapis.com.',
           remediation: offline
-            ? 'Reconnect to the internet to run Live evaluations, or switch to Simulated mode.'
+            ? 'Reconnect to the internet to run Live evaluations, or switch to Demo Data.'
             : 'Check network connectivity or browser extensions blocking generativelanguage.googleapis.com.'
         };
       })
