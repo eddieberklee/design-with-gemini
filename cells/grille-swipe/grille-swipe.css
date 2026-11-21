@@ -316,16 +316,6 @@
   min-width: 0;
 }
 
-/* A 24 px segment so it sits in the 30 px foot; hit area stays 28 px. */
-.ag-footer .ui-seg {
-  height: var(--ui-ctl-h-sm);
-  padding: 1px;
-}
-
-.ag-footer .ui-seg > button::after {
-  inset: -4px -1px;
-}
-
 .ag-arm-btn {
   min-width: 6.8em;                    /* "● Arm Mic" width, so "■ Live" never moves the segment */
 }

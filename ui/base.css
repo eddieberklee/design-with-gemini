@@ -238,6 +238,20 @@ body {
   box-shadow: 0 0 0 2px var(--ui-surface);
 }
 
+/* The rule above outranks .ui-btn:hover; give overlay buttons their hover face back. */
+.ui-tile-head--overlay .ui-btn:not(.ui-btn--primary):not([data-tone="attention"]):not(:disabled):not([aria-disabled="true"]):hover {
+  background: var(--ui-well);
+}
+
+/* Prose inside a foot (hints, status sentences): sans, sentence case. Labels and readouts stay mono. */
+.ui-tile-foot .ui-prose,
+.ui-prose {
+  font: 400 var(--ui-fs-2) / 1.2 var(--ui-sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ui-ink-3);
+}
+
 .ui-truncate {
   min-width: 0;
   white-space: nowrap;
@@ -436,6 +450,23 @@ body {
   background: var(--ui-surface);
   color: var(--ui-ink);
   box-shadow: 0 0 0 1px var(--ui-line), 0 1px 1px rgba(22, 22, 21, 0.05);
+}
+
+.ui-seg > button:is(:disabled, [aria-disabled="true"]) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--ui-ink-3);
+  cursor: not-allowed;
+}
+
+/* 24 px segment for a 30 px foot or a compact header; hit area stays 28 px. */
+.ui-seg--sm {
+  height: var(--ui-ctl-h-sm);
+  padding: 1px;
+}
+
+.ui-seg--sm > button::after {
+  inset: -4px -1px;
 }
 
 .ui-seg--mono > button {
@@ -721,7 +752,7 @@ body {
 
 /* Compact (< 320 px tile): foot and secondary controls go. */
 @container ui-tile (max-width: 319px) {
-  .ui-tile-foot,
+  .ui-tile-foot:not(.ui-tile-foot--keep),
   .ui-hide-compact {
     display: none !important;
   }
@@ -731,14 +762,15 @@ body {
     gap: 6px;
   }
 
-  .ui-tile-body {
+  .ui-tile-body:not(.ui-tile-body--flush) {
     padding: var(--ui-2);
   }
 }
 
 /* Tiny (< 240 px tile, the 2-column phone layout): header + hero only. */
 @container ui-tile (max-width: 239px) {
-  .ui-hide-tiny {
+  .ui-hide-tiny,
+  .ui-tile-foot--keep {
     display: none !important;
   }
 
@@ -750,14 +782,19 @@ body {
     font-size: var(--ui-fs-2);
   }
 
-  .ui-pill .ui-pill-label {        /* status collapses to its dot; tip + aria keep the words */
+  .ui-pill:not(.ui-pill--keep-label) .ui-pill-label {   /* collapses to its dot; tip + aria keep the words */
     display: none;
   }
 
-  .ui-pill {
+  .ui-pill:not(.ui-pill--keep-label) {
     padding: 0;
     width: 20px;
     justify-content: center;
+  }
+
+  .ui-pill--keep-label {
+    padding: 0 6px 0 5px;
+    gap: 4px;
   }
 
   .ui-pill:is(button, a)::after {
@@ -861,6 +898,7 @@ body {
   .ui-btn,
   .ui-seg > button,
   .ui-pill,
+  .ui-pill:is(button, a),
   .ui-chip,
   .ui-slider::-webkit-slider-thumb {
     transition: none;

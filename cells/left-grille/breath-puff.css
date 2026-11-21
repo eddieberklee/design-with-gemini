@@ -11,17 +11,7 @@
   -webkit-user-select: none;
 }
 
-/* Pill tone comes from code (data-tone); a long label truncates instead of pushing Arm out. */
-.bp-pill {
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.bp-pill .ui-pill-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Pill: `.lg-sensor-pill` (left-grille.css), the one rule for all seven sensors. */
 
 .bp-btn--arm {
   min-width: 64px;                 /* Arm / Arming… / Live / Retry without a layout jump */
@@ -164,10 +154,6 @@
 }
 
 /* Shown only in a narrow mount (240–319 px), where the base step hides the foot. */
-.bp-narrow-note {
-  display: none;
-}
-
 /* --------------------------------------------------------------------------
    Foot: Sim buttons left, band readouts right
    -------------------------------------------------------------------------- */
@@ -221,11 +207,6 @@
   .bp-body {
     grid-template-rows: minmax(0, 1fr) auto;
     gap: var(--ui-2) var(--ui-3);
-  }
-
-  .bp-narrow-note {
-    display: block;
-    grid-column: 1 / -1;
   }
 
   .bp-spectrum-strip,

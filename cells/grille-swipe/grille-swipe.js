@@ -1364,7 +1364,7 @@
       '</div>',
       '<div class="ui-tile-body ui-tile-body--flush ag-workbench">',
       '  <div class="ag-primary-col">',
-      '    <div class="ag-stage-well" tabindex="0" role="slider" aria-orientation="vertical" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0" aria-valuetext="+0.0 · Right Grille" aria-description="Drag or scroll to scrub. Arrow keys play a demo swipe; Home and End jump to the ends.">',
+      '    <div class="ag-stage-well" tabindex="0" role="slider" aria-orientation="vertical" aria-label="Right speaker grille vertical louver scrubber" aria-valuemin="-10" aria-valuemax="10" aria-valuenow="0" aria-valuetext="+0.0 · Right Grille" data-tip="Drag or scroll to scrub; arrow keys play a demo swipe." aria-description="Drag or scroll to scrub. Arrow keys play a demo swipe; Home and End jump to the ends.">',
       '      <div class="ag-canvas-wrap ag-stage-wrap"><canvas class="ag-stage-canvas"></canvas></div>',
       '      <div class="ag-stage-labels" aria-hidden="true">',
       '        <span class="ag-lbl ag-lbl--c ag-lbl-notch" data-tip="The camera notch has no microphones; all three sit under the left grille.">Notch · 0 mics</span>',
@@ -1372,10 +1372,10 @@
       '        <span class="ag-lbl ag-lbl--l ag-lbl-key">~ `</span>',
       '        <span class="ag-lbl ag-lbl--l ag-lbl-key">tab</span>',
       '        <span class="ag-lbl ag-lbl--l ag-lbl-mems" data-tip="Three tiny MEMS mics under the left grille; macOS mixes them into one mono channel."><span class="ag-lbl-strong">3× MEMS</span><span>Mono</span></span>',
-      '        <span class="ag-lbl ag-lbl--c ag-lbl-chord" data-tip="Sound path from the mics to your finger; top and bottom of the grille differ by only 4.5%."><span class="ag-lbl-strong ag-lbl-chord-cm">31.7cm</span><span>Δ4.5%</span></span>',
+      '        <span class="ag-lbl ag-lbl--c ag-lbl-chord" data-tip="Mic-to-finger distance; grille top and bottom differ by only 4.5%."><span class="ag-lbl-strong ag-lbl-chord-cm">31.7cm</span><span>Δ4.5%</span></span>',
       '        <span class="ag-lbl ag-lbl--c ag-lbl-right" data-tip="No microphones under the right grille, only the tweeter and woofers.">Right · 0 mics</span>',
       '        <span class="ag-lbl ag-lbl--c ag-lbl-palm" data-tip="Lower end of the grille, beside the palm rest; it sounds duller than the stiff top.">Palm plate</span>',
-      '        <span class="ag-lbl ag-lbl--r ag-lbl-value ag-vernier-mini ag-num" data-tip="Scrub position, −10 at the palm rest to +10 at the hinge; each swipe moves it one step.">+0.0</span>',
+      '        <span class="ag-lbl ag-lbl--r ag-lbl-value ag-vernier-mini ag-num" data-tip="Scrub position: −10 at the palm rest, +10 at the hinge.">+0.0</span>',
       '        <span class="ag-lbl ag-lbl--r ag-lbl-result" data-dir="">Scrub</span>',
       '        <span class="ag-lbl ag-lbl--r ag-lbl-demo" data-tip="This reading came from a simulated Demo swipe, not the microphone.">Demo</span>',
       '        <span class="ag-lbl ag-lbl--r ag-lbl-tag">19kHz</span>',
@@ -1400,7 +1400,7 @@
       '      <div class="ag-canvas-wrap ag-scope-wrap"><canvas class="ag-scope-canvas"></canvas></div>',
       '    </div>',
       '    <div class="ag-panel">',
-      '      <div class="ag-panel-head"><span class="ui-label" data-tip="One column per swipe: the 19 kHz echo shift, up swipes above the centre line, down below.">Doppler waterfall</span><span class="ag-panel-sub"><span class="ag-term" data-tip="Moving-target filter: hides still echoes so only your moving hand shows.">MTI</span> · ±100 Hz</span><span class="ui-readout ui-readout--quiet ag-num ag-wf-meta" data-tip="Echo shifts under 15 Hz are filtered out as still clutter (the shaded band).">±15 Hz notch</span></div>',
+      '      <div class="ag-panel-head"><span class="ui-label" data-tip="19 kHz echo shift per swipe: up swipes above the line, down below.">Doppler waterfall</span><span class="ag-panel-sub"><span class="ag-term" data-tip="Moving-target filter: hides still echoes so only your moving hand shows.">MTI</span> · ±100 Hz</span><span class="ui-readout ui-readout--quiet ag-num ag-wf-meta" data-tip="Echo shifts under 15 Hz are filtered out as still clutter (the shaded band).">±15 Hz notch</span></div>',
       '      <div class="ag-canvas-wrap ag-wf-wrap"><canvas class="ag-wf-canvas"></canvas></div>',
       '    </div>',
       '    <div class="ag-panel">',
@@ -1413,11 +1413,11 @@
       '  <button type="button" class="ag-micro-cta"><span>Right Grille Lab</span><span>⤢</span></button>',
       '  <div class="ag-controls-bar">',
       '    <button type="button" class="ui-btn ui-btn--sm ag-arm-btn" data-armed="false" data-tone="idle" data-tip="' + ARM_TIPS.idle + '">● Arm Mic</button>',
-      '    <div class="ui-seg ag-seg ag-seg-grille ag-wb-only" role="group" aria-label="Speaker grille to swipe">',
+      '    <div class="ui-seg ui-seg--sm ag-seg ag-seg-grille ag-wb-only" role="group" aria-label="Speaker grille to swipe">',
       '      <button type="button" class="ag-seg-btn" data-grille="right" aria-pressed="true" data-tip="Swipe the right speaker grille, which has no mics under it.">R Grille</button>',
       '      <button type="button" class="ag-seg-btn" data-grille="left" aria-pressed="false" data-tip="Control test: swipe the left grille, right over the three mics.">L Ctrl</button>',
       '    </div>',
-      '    <div class="ui-seg ag-seg ag-seg-mode" role="group" aria-label="Sensing mode">',
+      '    <div class="ui-seg ui-seg--sm ag-seg ag-seg-mode" role="group" aria-label="Sensing mode">',
       '      <button type="button" class="ag-seg-btn" data-mode="sonar" aria-pressed="true" data-tip="Play an inaudible 19 kHz tone from the right speaker and track its echo.">19k Sonar</button>',
       '      <button type="button" class="ag-seg-btn" data-mode="passive" aria-pressed="false" data-tip="Listen to finger friction only; no tone plays.">Passive</button>',
       '    </div>',
@@ -2331,7 +2331,7 @@
         els.hwStatus.setAttribute('data-tip', 'Active mic and sample rate; echo cancelling, noise suppression and auto gain are off.');
       } else {
         els.hwStatus.innerHTML = '<span class="ui-label">Mic</span><span class="ag-strip-val">Off · 3 mics under the left grille</span>';
-        els.hwStatus.setAttribute('data-tip', 'Where the MacBook mics are: all three under the left grille, none on the right or in the notch.');
+        els.hwStatus.setAttribute('data-tip', 'All three MacBook mics sit under the left grille; none on the right.');
       }
 
       var loopTxt, loopTip;

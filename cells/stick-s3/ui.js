@@ -301,7 +301,7 @@
     }, 'OKLCH');
 
     // Status pill is a button: every state opens the Studio, where the link controls live.
-    const statusText = el('span', { className: 'ui-pill-label', textContent: 'TILT PAD' });
+    const statusText = el('span', { className: 'ui-pill-label', textContent: 'No stick' });
     const statusPill = el('button', {
       type: 'button',
       className: 's3-status-pill ui-pill',
@@ -1194,7 +1194,7 @@
         pillTip = (state.linkSource === 'ble' ? 'Bluetooth link' : 'USB port') + ' is open, but no StickS3 data has arrived.';
       } else {
         pillState = 'manual';
-        statusText.textContent = 'TILT PAD';
+        statusText.textContent = 'No stick';
         pillTip = 'No StickS3 connected; the tilt dome steers the colour.';
       }
       statusPill.setAttribute('data-link', pillState);

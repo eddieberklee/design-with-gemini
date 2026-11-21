@@ -1360,7 +1360,7 @@
     const statusPill = h(
       'span',
       {
-        className: 'la-pill ui-pill',
+        className: 'la-pill ui-pill lg-sensor-pill',
         role: 'note',
         tabindex: '0',
         dataset: { tone: 'idle' },
@@ -1416,7 +1416,7 @@
     ]);
 
     const narrowNote = h('span', {
-      className: 'la-narrow-note ui-label',
+      className: 'la-narrow-note lg-compact-note ui-label',
       'data-tip': 'Calibration buttons appear when this tile is at least 320 px wide.',
       textContent: 'Widen to calibrate'
     });

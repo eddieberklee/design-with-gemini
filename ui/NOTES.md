@@ -105,6 +105,9 @@ elements, 0 changed font (every visible text today has its own font-family).
 - `.ui-tile` makes the tile a size container named `ui-tile`. If your cell CSS sets
   `container`/`container-name` on the same element, it overrides this: write
   `container-name: <yours> ui-tile;` instead, or drop yours.
+- `.ui-tile-foot--keep`: a foot that holds the tile's only controls stays at compact size and
+  hides only at tiny (used by the Hand Studio instruments). `.ui-tile-body--flush` stays
+  unpadded at every size.
 - Container steps (tile width): `< 320px` compact hides `.ui-tile-foot` and `.ui-hide-compact`;
   `< 240px` tiny (the 2-column phone grid, about 160–180 px, down to 140 px when Motion shrinks
   tiles) also hides `.ui-hide-tiny`, sets the header to 30 px and collapses `.ui-pill` to its dot.
@@ -119,8 +122,8 @@ elements, 0 changed font (every visible text today has its own font-family).
 | `.ui-btn` | `<button class="ui-btn">Reset</button>` | quiet, hairline, 28 px. `--sm` 24 px visible / 28 hit. `--icon` square. `--quiet` text-only. `aria-pressed="true"` / `aria-expanded="true"` show the on state. |
 | `.ui-btn--primary` | `<button class="ui-btn ui-btn--primary">Confirm</button>` | black pill, one per tile at most (section 0). `aria-pressed="true"` turns it rust. |
 | `.ui-btn[data-tone="attention"]` | `<button class="ui-btn ui-btn--sm" aria-pressed="true" data-tone="attention">● Recording</button>` | quiet button in its running state (mic on, array armed): rust text, border and tint. Remove the attribute when it stops. |
-| `.ui-seg` | `<div class="ui-seg" role="group" aria-label="…"><button aria-pressed="true">All</button>…</div>` | selected = `aria-pressed`, `aria-selected` or `aria-checked` true. `.ui-seg--mono` for codes (OKLCH, RGB). |
-| `.ui-pill` | `<span class="ui-pill" data-tone="ok"><span class="ui-pill-label">Stick S3</span></span>` | dot + label. `data-tone`: none/`idle` grey, `attention` rust, `ok` green (green rule, section 0). Button pills allowed. Always give it a `data-tip` that says what the state means and what a click does. |
+| `.ui-seg` | `<div class="ui-seg" role="group" aria-label="…"><button aria-pressed="true">All</button>…</div>` | selected = `aria-pressed`, `aria-selected` or `aria-checked` true. `.ui-seg--mono` for codes (OKLCH, RGB). `.ui-seg--sm` is 24 px (fits a 30 px foot; buttons keep a 28 px hit area). `:disabled` / `aria-disabled="true"` buttons go flat grey with a not-allowed cursor. |
+| `.ui-pill` | `<span class="ui-pill" data-tone="ok"><span class="ui-pill-label">Stick S3</span></span>` | dot + label. `data-tone`: none/`idle` grey, `attention` rust, `ok` green (green rule, section 0). Button pills allowed. Always give it a `data-tip` that says what the state means and what a click does. `.ui-pill--keep-label` keeps its words at tiny size (use only when the dot alone would be ambiguous). |
 | `.ui-chip` | `<button class="ui-chip">"a little smaller"</button>` | 24 px pill, 28 hit, ellipsis. |
 | `.ui-slider` | `<input type="range" class="ui-slider" aria-label="…">` | 2 px track, ink thumb, focus ring on the thumb. |
 | `.ui-readout` | `<span class="ui-readout">+0.0°</span>` | mono, tabular numerals. `--hero` 24 px, `--quiet` grey, `.ui-readout-unit` for units. |
@@ -128,6 +131,7 @@ elements, 0 changed font (every visible text today has its own font-family).
 | `.ui-kbd` | `<kbd class="ui-kbd">R</kbd>` | keycap. Prefer `data-tip-key` on the control. |
 | `.ui-well` | `<div class="ui-well">` | sunken stage. |
 | `.ui-truncate`, `.ui-sr-only` | | utilities. |
+| `.ui-prose` | `<span class="ui-prose">Tap a phrase, or start the mic.</span>` | prose in a foot or a quiet line: sans 11.5 px, sentence case. Foot rule: labels mono caps (`.ui-label`), readouts mono in their own case (units keep case), prose `.ui-prose`. |
 | `.ui-studio-bar` | `<header class="ui-studio-bar"><span class="ui-tile-index">05</span><h2 class="ui-studio-title">…</h2><div class="ui-studio-actions">… <button class="ui-btn" data-tip="Back to the grid." data-tip-key="Esc">Close</button></div></header>` | top bar of every secondary page and dialog. Close is always last on the right and always closes on Esc. |
 | `.ui-dialog` | `<dialog class="ui-dialog">` | border, radius, shadow, backdrop. |
 

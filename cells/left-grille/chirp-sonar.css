@@ -13,17 +13,7 @@
   overflow: hidden;
 }
 
-/* Same column as `.lg-cell-stage`, so the cell also lays out outside the page grid. */
-.cs-stage {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--ui-surface);
-  color: var(--ui-ink);
-  font-family: var(--ui-sans);
+.cs-stage {                            /* column from `.lg-cell-stage` (left-grille.css) */
   user-select: none;
   -webkit-user-select: none;
 }
@@ -32,12 +22,6 @@
   min-width: 64px;                     /* Sonar / Arming… / Retry: no shift in the head */
 }
 
-@container ui-tile (min-width: 240px) {
-  .cs-pill {
-    min-width: 94px;                   /* measured: LIVE · 48k is 93 px; READY / SIM ONLY keep that width */
-    justify-content: center;
-  }
-}
 
 /* Body ------------------------------------------------------------------------ */
 
@@ -178,11 +162,6 @@
   pointer-events: none;
 }
 
-/* Visible only where the base size step has hidden the foot (tile < 320 px). */
-.cs-compact-note {
-  display: none;
-}
-
 /* Foot ------------------------------------------------------------------------ */
 
 .cs-sim-group {
@@ -196,24 +175,10 @@
   padding-right: var(--ui-1);
 }
 
-.cs-foot-sep {
-  width: 1px;
-  height: 14px;
-  margin: 0 var(--ui-1);
-  background: var(--ui-hairline);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .cs-bal-fill,
   .cs-bal-needle {
     transition: none;
-  }
-}
-
-@container ui-tile (max-width: 319px) {
-  .cs-compact-note {
-    display: block;
-    flex: 0 0 auto;
   }
 }
 

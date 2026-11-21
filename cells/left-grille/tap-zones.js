@@ -1893,7 +1893,7 @@
     const statusWrap = h(
       'span',
       {
-        className: 'ui-pill tz-pill',
+        className: 'ui-pill tz-pill lg-sensor-pill',
         role: 'note',
         tabindex: '0',
         'data-tone': 'idle',
@@ -1986,7 +1986,7 @@
       h('div', { className: 'tz-body ui-tile-body' }, [
         mapWell,
         telemetry,
-        h('span', { className: 'tz-compact-note ui-label', 'data-tip': TZ_TIPS.compact, textContent: 'Widen to calibrate' })
+        h('span', { className: 'tz-compact-note lg-compact-note ui-label', 'data-tip': TZ_TIPS.compact, textContent: 'Widen to calibrate' })
       ]),
       h('footer', { className: 'tz-foot ui-tile-foot' }, [calBtn, zoneSub]),
       srLive

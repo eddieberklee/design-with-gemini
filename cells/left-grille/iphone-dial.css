@@ -15,17 +15,7 @@
   -webkit-user-select: none;
 }
 
-/* Pill: tone from code (data-tone); a long status truncates instead of pushing buttons out. */
-.id-pill {
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.id-pill .ui-pill-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Pill: `.lg-sensor-pill` (left-grille.css), the one rule for all seven sensors. */
 
 .id-bezel-right {
   min-width: 0;
@@ -234,10 +224,6 @@
 }
 
 /* Shown only in a narrow mount (240–319 px), where the base step hides the foot. */
-.id-narrow-note {
-  display: none;
-}
-
 /* Foot: Zero + Sim spins left, link meta right */
 .id-sim-group {               /* "Sim" label, then quiet buttons named for the input */
   display: flex;
@@ -248,13 +234,6 @@
 
 .id-sim-label {
   margin-right: var(--ui-1);
-}
-
-.id-foot-sep {
-  width: 1px;
-  height: 14px;
-  margin: 0 var(--ui-1);
-  background: var(--ui-hairline);
 }
 
 .id-link-meta {
@@ -367,11 +346,6 @@
   .id-body {
     grid-template-rows: minmax(0, 1fr) auto;
     gap: var(--ui-2) var(--ui-3);
-  }
-
-  .id-narrow-note {
-    display: block;
-    grid-column: 1 / -1;
   }
 
   .id-sub-meta,

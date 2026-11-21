@@ -73,8 +73,10 @@ where the base compact step hides the foot):
   go in the foot or the body, not a second header row.
 - Agreed by the three sensor agents (all seven tiles match):
   - Pill: `span.ui-pill` with `role="note" tabindex="0"` (tip on keyboard focus), label in
-    `.ui-pill-label`, tone and tip on the wrapper; 94 px wide, centred (frame rule for
-    `.lg-status-pill` in the grid, or add `.lg-sensor-pill`). Words: READY idle; ARMING…,
+    `.ui-pill-label`, tone and tip on the wrapper. One width rule for all seven: every sensor
+    pill carries `.lg-sensor-pill` (sensor 01: `.lg-status-pill` in the grid), at least 94 px,
+    centred, free to grow, label ellipsized only when the head runs out of room; at tiny
+    tile size it is the shared dot. Sensors keep no local pill width. Words: READY idle; ARMING…,
     LIVE · 48k, vetoes rust; SIM · X idle while a simulation plays; SIM ONLY rust on a mic or bus
     error, with the full error as the tip.
   - Toggle: `ui-btn--sm`, 64 px (`.lg-btn--arm` in the grid, or `.lg-sensor-toggle`), labels
@@ -82,7 +84,14 @@ where the base compact step hides the foot):
   - Foot: `ui-label` "Sim", quiet `ui-btn--sm` verbs, a `.lg-foot-sep` hairline, the tuning
     action ("Calibrate", "Trim", "Zero"), then one `ui-readout--quiet` last on the right.
   - `.lg-compact-note` (a body line, shown only under 320 px tile width) says what the hidden
-    foot holds.
+    foot holds. Sensors add this class (and `.lg-foot-sep`) in markup and keep no local copy.
+  - Foot exceptions, by design: Tap zones (02) and Lid angle (06) have no Sim group because
+    they simulate by direct manipulation of the hero (click a zone; drag the lid). Their foot is
+    the tuning action(s) then the readout: "Calibrate … Factory zones", "Set 110° Set 50° (Reset)
+    … screen bounce". A saved lid reference shows a ✓ after its label (no radio-like dots).
+    Breath puff (05) has Sim verbs but no tuning action, so no separator.
+  - Foot type: buttons are sans; the "Sim" label is mono caps; the right-hand readout is mono
+    in its own case (units such as dB and kHz keep their case).
 - Pills (green rule): idle grey for ready / demo / passive; `attention` for armed, tracking,
   calibrating, error; `ok` only for a real link (lid HID bridge, phone or BLE dial connected).
   A simulated reading says "Sim" in its pill. Every pill has a `data-tip`.
@@ -103,7 +112,7 @@ where the base compact step hides the foot):
   "48 kHz · L" with a tip). The tip on "48 kHz · L" is hover-only: keyboard focus lands on the
   trigger, which has no tip of its own.
 - **Studio bar** (`header.ui-studio-bar.lg-nav-bar`, aligned to the grid, not sticky): `05`, "Left
-  Grille", the bus readout (`02–06` / `48k · CHIRP` / `Arming…` / `Sim only`, rust on error),
+  Grille", the bus readout (empty and hidden while idle; `48k · CHIRP` / `Arming…` / `Sim only`, rust on error),
   ARM ARRAY as the page's one `ui-btn--primary` (`aria-pressed` turns it rust while arming or
   live), then Close (`data-tip-key="Esc"`). The `Esc back` hint text is gone.
 - **Sensor 01**: pill `Ready` / `Sim · up` (idle), `Arming…`, `Live · 48k`, `Tracking`,

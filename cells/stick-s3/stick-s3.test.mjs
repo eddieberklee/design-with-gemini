@@ -685,7 +685,7 @@ test('ui.js VM harness: first-connect + live 91% battery sync, swatch-pin & mode
     assert.equal(microBtn.getAttribute('aria-label'), 'Open M5StickS3 Color Studio');
 
     const statusPill = cellEl.querySelector('.s3-status-pill');
-    assert.equal(statusPill.textContent, 'TILT PAD');
+    assert.equal(statusPill.textContent, 'No stick');
     assert.equal(statusPill.classList.contains('is-live'), false);
 
     const dialog = h.document.body.querySelector('dialog.s3-dialog');
@@ -720,7 +720,7 @@ test('ui.js VM harness: first-connect + live 91% battery sync, swatch-pin & mode
     assert.equal(h.wsInstances.length, 1);
     const ws = h.wsInstances[0];
     ws.openNow();
-    assert.equal(statusPill.textContent, 'TILT PAD');
+    assert.equal(statusPill.textContent, 'No stick');
 
     // First packet arrives before any bridge_status -> must immediately flip .is-live and show 88%
     ws.receiveJson({
@@ -814,12 +814,12 @@ test('ui.js VM harness: first-connect + live 91% battery sync, swatch-pin & mode
     h.advanceTime(4000);
     ws.receiveJson({ t: 'bridge_status', serialConnected: false, port: '' });
     assert.equal(statusPill.classList.contains('is-live'), false);
-    assert.equal(statusPill.textContent, 'TILT PAD');
+    assert.equal(statusPill.textContent, 'No stick');
 
     // Bridge reports a serial port open but no telemetry yet: not a connected StickS3, and no stale 91%
     ws.receiveJson({ t: 'bridge_status', serialConnected: true, port: '/dev/cu.usbmodem1101' });
     assert.equal(statusPill.classList.contains('is-live'), false);
-    assert.equal(statusPill.textContent, 'TILT PAD');
+    assert.equal(statusPill.textContent, 'No stick');
     // Reconnect with unknown battery (-1) must not leak stale 91%
     ws.receiveJson({
       t: 's3', seq: 30, ax: 0.0, ay: 0.0, az: 0.98, tx: 0.0, ty: 0.0, kin: 0, m: 2, h: 0, hex: '#D5C8C0', ev: ''
@@ -842,7 +842,7 @@ test('ui.js VM harness: first-connect + live 91% battery sync, swatch-pin & mode
     assert.equal(arrowRight.defaultPrevented, true);
     assert.equal(arrowUp.defaultPrevented, true);
     assert.equal(holdBtn.getAttribute('aria-pressed'), 'false');
-    assert.equal(statusPill.textContent, 'TILT PAD');
+    assert.equal(statusPill.textContent, 'No stick');
 
     h.stepFrame(820);
     const puck = cellEl.querySelector('.s3-dome-puck');
@@ -1126,7 +1126,7 @@ test('shared UI contract: ui-tile anatomy, pill button + green rule, Studio Clos
     assert.ok(pill.classList.contains('ui-pill'));
     assert.equal(pill.getAttribute('data-tone'), 'idle');
     assert.match(pill.getAttribute('data-tip'), /Click to open the Studio\.$/);
-    assert.match(pill.getAttribute('aria-label'), /^TILT PAD/);
+    assert.match(pill.getAttribute('aria-label'), /^No stick/);
 
     const dialog = h.document.body.querySelector('dialog.s3-dialog');
     pill.click();

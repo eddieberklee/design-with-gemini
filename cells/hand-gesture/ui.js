@@ -506,11 +506,10 @@
       miniPinchLine,
       miniAnchorRing,
       miniAnchorDot,
-      miniGestureBg,
-      miniGestureText,
+      // The detected gesture is shown once, in the Gesture readout and the pill; the inset is
+      // the cursor monitor (named by the Cursor readout), so neither gets a label in the stage.
       miniScreenBox,
       miniScreenAxes,
-      miniScreenLabel,
       miniCursorTrail,
       miniCursorLock,
       miniCursorCross,
@@ -557,8 +556,8 @@
       textContent: 'Studio ↗',
     });
 
-    const portalStatusText = h('span', { className: 'hg-portal-status ui-truncate', textContent: '' });
-    const portalPillLabel = h('span', { className: 'ui-pill-label', textContent: 'STANDBY' });
+    const portalStatusText = h('span', { className: 'hg-portal-status ui-prose ui-truncate', textContent: '' });
+    const portalPillLabel = h('span', { className: 'ui-pill-label', textContent: 'Off' });
     const portalStatePill = h('span', { className: 'ui-pill hg-portal-pill' }, [portalPillLabel]);
 
     const portalStage = h(
@@ -605,15 +604,16 @@
       portalStatePill.setAttribute('data-tip', tip);
     }
     const PILL_TIP_STANDBY = 'Hand cursor is off. Press Cam or Sim to start it.';
-    setPortalPill('STANDBY', 'idle', PILL_TIP_STANDBY);
+    setPortalPill('Off', 'idle', PILL_TIP_STANDBY);
 
     function setPortalStatus(text, tip) {
       if (portalStatusText.textContent !== text) portalStatusText.textContent = text;
       if (tip) portalStatusText.setAttribute('data-tip', tip);
       else portalStatusText.removeAttribute('data-tip');
     }
-    const PORTAL_HINT = 'Tolerances: 200ms arm · pinch <.28 · lock 14px · twist ±3.5° · KBD <.86';
-    setPortalStatus(PORTAL_HINT, '');
+    const PORTAL_HINT = 'Hold an open palm still, then pinch, twist or scroll.';
+    const PORTAL_HINT_TIP = 'Arm 200 ms · pinch < .28 · lock 14 px · twist ±3.5° · above keyboard < .86.';
+    setPortalStatus(PORTAL_HINT, PORTAL_HINT_TIP);
 
     // Cam / Sim: pressed state, running tone (rust) and a tip that says what the next click does.
     // `inStudio` is passed in (not read from `isSecondaryOpen`, which is declared later).
@@ -771,8 +771,8 @@
     const camBanner = h('div', { className: 'hg-cam-banner', hidden: true, role: 'status' }, [camBannerMsg, camBannerDismiss]);
 
     // Studio instrument: the shared tile anatomy (index, title, quiet meta readout, body, foot).
-    // The foot is `.hg-cell-foot`, not `.ui-tile-foot`: instruments are ~273 px wide at a 900 px
-    // page, and the shared compact step hides `.ui-tile-foot` below 320 px with their controls.
+    // The foot is `.ui-tile-foot--keep`: instruments are ~273 px wide at a 900 px page, and the
+    // shared compact step hides a plain `.ui-tile-foot` below 320 px with their controls.
     function metric(text, tip) {
       return h('span', { className: 'ui-readout ui-readout--quiet hg-cell-metric', textContent: text, 'data-tip': tip });
     }
@@ -788,7 +788,7 @@
       ]);
     }
     function foot(kids) {
-      return h('div', { className: 'hg-cell-foot' }, kids);
+      return h('div', { className: 'ui-tile-foot ui-tile-foot--keep hg-cell-foot' }, kids);
     }
     function sm(text, attrs) {
       return h('button', Object.assign({ type: 'button', className: 'ui-btn ui-btn--sm', textContent: text }, attrs || {}));
@@ -813,7 +813,7 @@
 
     const wbCell01 = instrument('01', 'Hand Rig', '01 Hand rig', 'The tracked hand: 21 joints, the cursor area and the keyboard zone.', c1Metric,
       h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [rigStage]),
-      h('div', { className: 'hg-cell-foot hg-rig-controls', role: 'group', 'aria-label': 'Simulated hand pose' }, [
+      h('div', { className: 'ui-tile-foot ui-tile-foot--keep hg-cell-foot hg-rig-controls', role: 'group', 'aria-label': 'Simulated hand pose' }, [
         rigBtnPresent, rigBtnPinch, rigBtnVScroll, rigBtnDorsal, rigBtnDual, rigBtnOrbit,
       ]));
 
@@ -1333,7 +1333,7 @@
       primPinchRow.classList.remove('is-lit');
       primRotRow.classList.remove('is-lit');
       primGestureRow.classList.remove('is-lit');
-      setPortalPill('STANDBY', 'idle', PILL_TIP_STANDBY);
+      setPortalPill('Off', 'idle', PILL_TIP_STANDBY);
     }
 
     // Any manual rig control while Auto Tour (or Pointer) is driving takes over as Synth Rig, so the
@@ -1490,7 +1490,7 @@
         setPortalStatus('Simulated hand is driving the cursor across this page', '');
       } else {
         camBanner.hidden = true;
-        setPortalStatus(PORTAL_HINT, '');
+        setPortalStatus(PORTAL_HINT, PORTAL_HINT_TIP);
       }
       if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) {
         resetPortalPreview();

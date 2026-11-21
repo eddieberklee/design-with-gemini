@@ -266,7 +266,7 @@
           })
         ]),
         h('span', { className: 'ui-tile-foot lg-portal-bottom' }, [
-          h('span', { className: 'ui-truncate lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' }),
+          h('span', { className: 'ui-prose ui-truncate lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' }),
           h('span', {
             className: 'lg-portal-spec',
             'data-tip': 'Samples 48,000 times a second via the left speaker and mics.',
@@ -315,7 +315,7 @@
       className: 'ui-readout ui-readout--quiet lg-bus-meta',
       dataset: { error: 'false' },
       'data-tip': BUS_TIP_IDLE,
-      textContent: '02–06'
+      textContent: ''
     });
 
     const ARM_ARRAY_TIP_IDLE =
@@ -768,7 +768,7 @@
         announce(st.error);
       } else {
         busStatusMeta.dataset.error = 'false';
-        busStatusMeta.textContent = '02–06';
+        busStatusMeta.textContent = '';
         busStatusMeta.setAttribute('data-tip', BUS_TIP_IDLE);
         armArrayBtn.setAttribute('data-tip', ARM_ARRAY_TIP_IDLE);
       }

@@ -314,11 +314,6 @@ body:has(> .hg-secondary-page:not([hidden])) > main.grid[hidden],
   box-shadow: inset 0 0 0 1px var(--ui-accent);
 }
 
-/* base.css's compact step pads every `.ui-tile-body`, flush ones included; instruments stay flush. */
-.hg-wb-cell > .ui-tile-body--flush {
-  padding: 0;
-}
-
 .hg-cell-metric {
   flex: 0 1 auto;
   min-width: 0;
@@ -328,20 +323,8 @@ body:has(> .hg-secondary-page:not([hidden])) > main.grid[hidden],
   font-size: var(--ui-fs-1);
 }
 
-/* Instrument foot: the shared foot look, but kept down to 240 px (its controls live here). */
+/* Instrument foot: `.ui-tile-foot.ui-tile-foot--keep` (kept down to 240 px, its controls live here). */
 .hg-cell-foot {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--ui-2);
-  height: var(--ui-foot-h);
-  padding: 0 var(--ui-2) 0 var(--ui-3);
-  border-top: 1px solid var(--ui-hairline);
-  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
-  letter-spacing: 0.02em;
-  color: var(--ui-ink-3);
-  white-space: nowrap;
-  min-width: 0;
   overflow: clip;
 }
 
@@ -653,7 +636,6 @@ body:has(> .hg-secondary-page:not([hidden])) > main.grid[hidden],
 
 /* Tiny (2-column phone grid): header + instrument only. */
 @container ui-tile (max-width: 239px) {
-  .hg-cell-foot,
   .hg-cell-metric,
   .hg-fader-db-val,
   .hg-fader-badge,

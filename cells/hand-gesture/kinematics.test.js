@@ -1291,7 +1291,19 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.equal(hgPage.hidden, true);
   assert.equal(mainGrid.hidden, false);
 
-  const miniGesture = findFirst(portalCell, '.hg-mini-gesture');
+  // The detected gesture shows in the Gesture readout row (an in-stage badge only repeated it).
+  function findPrimValue(root, label) {
+    if (!root || !root.children) return null;
+    for (let i = 0; i < root.children.length; i++) {
+      const c = root.children[i];
+      if (c.classList && c.classList.contains('hg-prim') && c.children[0] && c.children[0].textContent === label) return c.children[1];
+      const hit = findPrimValue(c, label);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const miniGesture = findPrimValue(portalCell, 'Gesture');
+  assert.equal(findFirst(portalCell, '.hg-mini-gesture'), null, 'Gesture badge must not repeat inside the stage');
   const miniRoiLabel = findFirst(portalCell, '.hg-mini-roi-label');
   const miniKbdLabel = findFirst(portalCell, '.hg-mini-kbd-label');
   const miniGatesLabel = findFirst(portalCell, '.hg-mini-gates-label');
@@ -1320,8 +1332,8 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
     if (miniGesture.textContent === 'OPEN PALM') sawOpenPalm = true;
     if (miniDot.getAttribute('cx') !== dotStartCx) dotMoved = true;
   }
-  assert.ok(sawArming, 'Expected mini gesture badge to pass through ARMING dwell');
-  assert.ok(sawOpenPalm, `Expected mini gesture badge to reach OPEN PALM, got ${miniGesture.textContent}`);
+  assert.ok(sawArming, 'Expected Gesture readout to pass through ARMING dwell');
+  assert.ok(sawOpenPalm, `Expected Gesture readout to reach OPEN PALM, got ${miniGesture.textContent}`);
   assert.ok(dotMoved, 'Expected mini screen cursor dot to move as simulated hand orbits');
   assert.ok(portalStatus.textContent.includes('span ') && portalStatus.textContent.includes('≥.055'),
     `Expected live gate tolerances in tile footer, got: ${portalStatus.textContent}`);

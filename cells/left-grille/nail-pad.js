@@ -1467,7 +1467,7 @@
     const statusPill = h('span', { className: 'ui-pill-label np-status', textContent: 'READY' });
     const statusWrap = h(
       'span',
-      { className: 'ui-pill np-pill-status', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': NP_TIPS.ready },
+      { className: 'ui-pill np-pill-status lg-sensor-pill', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': NP_TIPS.ready },
       [statusPill]
     );
 
@@ -1622,7 +1622,7 @@
         simPadBtn,
         simNailBtn,
         simScratchBtn,
-        h('span', { className: 'np-foot-sep', 'aria-hidden': 'true' }),
+        h('span', { className: 'np-foot-sep lg-foot-sep', 'aria-hidden': 'true' }),
         trimBtn
       ]),
       floorTag
@@ -1738,7 +1738,7 @@
       heroCard,
       metersCard,
       historyTape,
-      h('span', { className: 'np-compact-note ui-label', 'data-tip': NP_TIPS.compact, textContent: 'Widen for Sim and Trim' }),
+      h('span', { className: 'np-compact-note lg-compact-note ui-label', 'data-tip': NP_TIPS.compact, textContent: 'Widen for Sim and Trim' }),
       trimOverlay
     ]);
 

@@ -1420,7 +1420,7 @@
     const statusPill = h('span', { className: 'ui-pill-label cs-status-pill', textContent: 'READY' });
     const statusWrap = h(
       'span',
-      { className: 'ui-pill cs-pill', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': CS_TIPS.ready },
+      { className: 'ui-pill cs-pill lg-sensor-pill', role: 'note', tabindex: '0', 'data-tone': 'idle', 'data-tip': CS_TIPS.ready },
       [statusPill]
     );
 
@@ -1512,7 +1512,7 @@
             h('span', { textContent: '4 cm' })
           ])
         ]),
-        h('span', { className: 'cs-compact-note ui-label', 'data-tip': CS_TIPS.compact, textContent: 'Widen for Sim and Zero' })
+        h('span', { className: 'cs-compact-note lg-compact-note ui-label', 'data-tip': CS_TIPS.compact, textContent: 'Widen for Sim and Zero' })
       ]),
       h('footer', { className: 'ui-tile-foot cs-foot' }, [
         h('div', { className: 'cs-sim-group' }, [
@@ -1520,7 +1520,7 @@
           simPushBtn,
           simPullBtn,
           simWaveBtn,
-          h('span', { className: 'cs-foot-sep', 'aria-hidden': 'true' }),
+          h('span', { className: 'cs-foot-sep lg-foot-sep', 'aria-hidden': 'true' }),
           zeroBtn
         ]),
         h('span', { className: 'ui-readout ui-readout--quiet', 'data-tip': CS_TIPS.fmcw, textContent: 'FMCW' })

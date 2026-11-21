@@ -50,11 +50,6 @@
 
 /* ---------- Hero: live colour card ---------- */
 
-/* Stay flush at every size: ui/base.css's compact step re-pads .ui-tile-body (incl. --flush). */
-.s3-body.ui-tile-body--flush {
-  padding: 0;
-}
-
 .s3-stage {
   position: relative;
   flex: 1 1 auto;

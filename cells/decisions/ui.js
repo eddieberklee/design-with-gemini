@@ -755,15 +755,16 @@
       const modeKey = app.error ? 'error' : verifiedLive ? 'live' : 'simulated';
       // Pill states (ui/NOTES.md green rule): green only after a live call really returned;
       // a saved key that has not answered yet is idle "Key set"; error and an in-flight call are rust.
+      // One vocabulary for the four Gemini tiles: No key / Key set / Running / Error / Live.
       const modeLabel = app.error
-        ? 'API error'
+        ? 'Error'
         : verifiedLive
           ? 'Live'
           : connecting
-            ? 'Connecting…'
-            : hasSavedKey && app.mode === 'live'
+            ? 'Running'
+            : hasSavedKey
               ? 'Key set'
-              : 'Demo data';
+              : 'No key';
       const modeTone = app.error || connecting ? 'attention' : verifiedLive ? 'ok' : 'idle';
       const modeTip = app.error
         ? 'The last live call failed. Click to see why and fix it.'
@@ -973,7 +974,7 @@
       return el(
         'span',
         {
-          className: 'ui-pill dc-result-tag' + (isDemo ? ' is-demo' : ''),
+          className: 'ui-pill ui-pill--keep-label dc-result-tag' + (isDemo ? ' is-demo' : ''),
           dataset: {
             tone: app.dirty ? 'attention' : 'idle',
             tip: app.dirty

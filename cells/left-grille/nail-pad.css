@@ -19,17 +19,7 @@
   overflow: hidden;
 }
 
-/* Same column as `.lg-cell-stage`, so the cell also lays out outside the page grid. */
-.np-stage {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--ui-surface);
-  color: var(--ui-ink);
-  font-family: var(--ui-sans);
+.np-stage {                            /* column from `.lg-cell-stage` (left-grille.css) */
   user-select: none;
   -webkit-user-select: none;
 }
@@ -38,12 +28,6 @@
   min-width: 64px;                     /* Arm / Arming… / Live / Retry: no shift in the head */
 }
 
-@container ui-tile (min-width: 240px) {
-  .np-pill-status {
-    min-width: 94px;                   /* measured: LIVE · 48k is 93 px; READY / SIM ONLY keep that width */
-    justify-content: center;
-  }
-}
 
 /* Body: hero ------------------------------------------------------------------ */
 
@@ -390,11 +374,6 @@
   background: var(--np-scratch);
 }
 
-/* Visible only where the base size step has hidden the foot (tile < 320 px). */
-.np-compact-note {
-  display: none;
-}
-
 /* Foot -------------------------------------------------------------------------- */
 
 .np-sim-group {
@@ -406,13 +385,6 @@
 
 .np-sim-group > .ui-label {
   padding-right: var(--ui-1);
-}
-
-.np-foot-sep {
-  width: 1px;
-  height: 14px;
-  margin: 0 var(--ui-1);
-  background: var(--ui-hairline);
 }
 
 /* Trim panel: covers the body only; head and foot stay reachable. ---------------- */
@@ -465,10 +437,6 @@
 }
 
 @container ui-tile (max-width: 319px) {
-  .np-compact-note {
-    display: block;
-    flex: 0 0 auto;
-  }
 
   .np-zone {
     font-size: 0;

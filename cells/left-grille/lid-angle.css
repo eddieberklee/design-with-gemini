@@ -40,17 +40,7 @@
   min-width: 64px;                 /* Sonar / Arming… / Chirp without a layout jump */
 }
 
-/* The pill tone is set from code as data-tone; base.css colours it. A long label truncates. */
-.la-pill {
-  min-width: 0;
-  flex: 0 1 auto;
-}
-
-.la-pill .ui-pill-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* Pill: `.lg-sensor-pill` (left-grille.css), the one rule for all seven sensors. */
 
 /* --------------------------------------------------------------------------
    Body: hinge drawing (hero) | angle readout + echo
@@ -287,10 +277,6 @@
 }
 
 /* Shown only in a narrow mount (240–319 px), where the base step hides the foot. */
-.la-narrow-note {
-  display: none;
-}
-
 /* --------------------------------------------------------------------------
    Foot: 2-point calibration
    -------------------------------------------------------------------------- */
@@ -309,17 +295,18 @@
   display: none;
 }
 
-.la-cal-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  border: 1px solid var(--ui-ink-3);
-  flex: 0 0 auto;
+.la-cal-dot {                 /* saved-reference mark: nothing until saved, then a check */
+  display: none;
 }
 
 .la-cal-btn[data-calibrated="true"] .la-cal-dot {
-  background: var(--ui-ink);
-  border-color: var(--ui-ink);
+  display: inline;
+  order: 1;
+  color: var(--ui-ink-3);
+}
+
+.la-cal-btn[data-calibrated="true"] .la-cal-dot::before {
+  content: "✓";
 }
 
 .la-cal-note {         /* class name is pinned exactly by a test: truncation lives here */
@@ -338,11 +325,6 @@
   .la-body {
     grid-template-rows: minmax(0, 1fr) auto;
     gap: var(--ui-2);
-  }
-
-  .la-narrow-note {
-    display: block;
-    grid-column: 1 / -1;
   }
 
   .la-metrics {

@@ -555,21 +555,23 @@
         : 'No API key yet. Open the grid to add one.';
       if (counts.probing > 0) {
         tone = 'attention';
-        label = app.isBatchRunning ? 'Probing ' + app.batchCompleted + '/' + app.batchTotal : 'Probing';
-        tip = 'Probes are running. Open the grid to watch or stop them.';
+        label = 'Running';
+        tip = app.isBatchRunning
+          ? 'Testing APIs: ' + app.batchCompleted + ' of ' + app.batchTotal + ' done. Open the grid to watch.'
+          : 'A probe is running. Open the grid to watch or stop it.';
       } else if (anyProbed) {
         if (counts.fail > 0) {
           tone = 'attention';
-          label = counts.fail + ' failed';
-          tip = 'Some APIs failed. Open the grid for the reason and next step.';
+          label = 'Error';
+          tip = counts.fail + ' of ' + counts.total + ' APIs failed. Open the grid for the reason.';
         } else if (counts.warn > 0) {
           tone = 'attention';
-          label = counts.warn + ' warning' + (counts.warn === 1 ? '' : 's');
-          tip = 'Some APIs answered with a warning. Open the grid for details.';
+          label = 'Error';
+          tip = counts.warn + ' of ' + counts.total + ' APIs answered with a warning. Open the grid for details.';
         } else {
           tone = 'ok';
-          label = counts.pass + '/' + counts.total + ' passed';
-          tip = 'Every tested API answered correctly. Open the grid for timings.';
+          label = 'Live';
+          tip = 'Your key works: ' + counts.pass + ' of ' + counts.total + ' APIs passed. Open the grid for timings.';
         }
       }
 

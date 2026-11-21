@@ -927,7 +927,7 @@
     const ledDot = h(
       'span',
       {
-        className: 'id-led id-pill ui-pill',
+        className: 'id-led id-pill ui-pill lg-sensor-pill',
         role: 'note',
         tabindex: '0',
         dataset: { state: 'standby', tone: 'idle' },
@@ -1198,7 +1198,7 @@
     ]);
 
     const narrowNote = h('span', {
-      className: 'id-narrow-note ui-label',
+      className: 'id-narrow-note lg-compact-note ui-label',
       'data-tip': 'Zero and the Sim spins appear when this tile is at least 320 px wide.',
       textContent: 'Widen for Sim'
     });
@@ -1208,7 +1208,7 @@
         h('span', { className: 'id-sim-label ui-label', textContent: 'Sim' }),
         spinSimBtn,
         spinCcwBtn,
-        h('span', { className: 'id-foot-sep', 'aria-hidden': 'true' }),
+        h('span', { className: 'id-foot-sep lg-foot-sep', 'aria-hidden': 'true' }),
         zeroBtn
       ]),
       linkMetaText

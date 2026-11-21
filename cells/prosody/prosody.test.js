@@ -949,7 +949,7 @@ test('key panel: blank and malformed input never clear or store a key', () => {
   ui.badge().click();
   ui.keyButtons()[0].click();
   assert.equal(KS.get(), '');
-  assert.equal(ui.badge().textContent, 'Demo');
+  assert.equal(ui.badge().textContent, 'No key');
   assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
   assert.match(ui.mic().getAttribute('data-tip'), /Needs a Gemini key/);
   ui.unmount();
@@ -995,7 +995,7 @@ test('Start Live Mic: permission denied resets the button and opens no socket', 
   env.NS.Client.KeyStore.set('AIzaKey');
   ui.mic().click();
   assert.match(ui.mic().textContent, /Connecting/);
-  assert.equal(ui.badge().textContent, 'Starting');
+  assert.equal(ui.badge().textContent, 'Running');
   assert.equal(ui.badge().getAttribute('data-tone'), 'attention');
   assert.equal(ui.mic().getAttribute('data-tone'), null, 'rust only once really streaming');
   assert.match(ui.readout().textContent, /microphone/i);
@@ -1083,7 +1083,7 @@ test('live session (fakes): removing the key elsewhere stops the open session', 
   env.win.dispatchEvent({ type: 'gemini-key-changed' });
   assertTornDown(env, sock);
   assert.match(ui.readout().textContent, /key/i);
-  assert.equal(ui.badge().textContent, 'Demo');
+  assert.equal(ui.badge().textContent, 'No key');
   assert.equal(ui.badge().getAttribute('data-tone'), 'idle');
   assert.equal(ui.mic().getAttribute('data-tone'), null);
   ui.unmount();

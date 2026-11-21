@@ -136,28 +136,29 @@
       '  <span class="ui-tile-index">' + cellIndex + '</span>',
       '  <h2 class="ui-tile-title">' + title + '</h2>',
       '  <div class="ui-tile-actions">',
-      '    <select class="ig-model-select" aria-label="Image generation model"></select>',
-      '    <button type="button" class="ui-pill ig-key-btn" data-tone="attention" aria-expanded="false">',
-      '      <span class="ui-pill-label">Key</span>',
+      '    <button type="button" class="ui-pill ig-key-btn" aria-expanded="false">',
+      '      <span class="ui-pill-label">No key</span>',
       '    </button>',
+      '    <select class="ig-model-select ui-hide-compact" aria-label="Image generation model"',
+      '      data-tip="Gemini model that draws the image; the list updates from your key."></select>',
       '  </div>',
       '</header>',
       '<div class="ig-key-bar" hidden>',
       '  <input type="password" class="ig-key-input" placeholder="Paste Gemini API key (AIza...)" autocomplete="off" spellcheck="false" aria-label="Gemini API key">',
-      '  <label class="ig-key-persist"><input type="checkbox" class="ig-key-persist-cb" checked> Local</label>',
-      '  <button type="button" class="ui-btn ui-btn--sm ig-key-save">Save</button>',
-      '  <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-key-clear">Clear</button>',
+      '  <label class="ig-key-persist" data-tip="Keep the key after this tab closes, stored in this browser."><input type="checkbox" class="ig-key-persist-cb" checked> Remember</label>',
+      '  <button type="button" class="ui-btn ui-btn--sm ig-key-save" data-tip="Use this key here and in the other Gemini tiles." data-tip-key="Enter">Save</button>',
+      '  <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-key-clear" data-tip="Remove the saved key from every Gemini tile.">Clear</button>',
       '</div>',
       '<div class="ui-tile-body ig-body">',
       isTryOn ? [
-        '  <div class="ig-refs">',
-        '    <div class="ig-ref-spot ig-ref-person" role="button" tabindex="0" aria-label="Drop person reference image">',
+        '  <div class="ig-refs ui-hide-tiny">',
+        '    <div class="ig-ref-spot ig-ref-person" role="button" tabindex="0" aria-label="Drop person reference image" data-tip="Drop, paste or click to add a photo of the person.">',
         '      <img class="ig-ref-thumb" alt="Person reference" hidden>',
         '      <span class="ig-ref-label">1 · Person</span>',
         '      <button type="button" class="ig-ref-clear" aria-label="Clear person" hidden>×</button>',
         '      <input type="file" class="ig-ref-file" accept="image/*">',
         '    </div>',
-        '    <div class="ig-ref-spot ig-ref-product" role="button" tabindex="0" aria-label="Drop product reference image">',
+        '    <div class="ig-ref-spot ig-ref-product" role="button" tabindex="0" aria-label="Drop product reference image" data-tip="Drop, paste or click to add a photo of the product to wear.">',
         '      <img class="ig-ref-thumb" alt="Product reference" hidden>',
         '      <span class="ig-ref-label">2 · Product</span>',
         '      <button type="button" class="ig-ref-clear" aria-label="Clear product" hidden>×</button>',
@@ -170,7 +171,7 @@
       '    <div class="ig-empty">',
       isTryOn
         ? '      <p class="ig-empty-copy">Drop a person (1) and a product (2), then click Try On.</p>'
-        : '      <p class="ig-empty-copy">Generate with Nano Banana Pro / Gemini native image API.</p><div class="ig-presets"></div>',
+        : '      <p class="ig-empty-copy">Write a prompt or pick an example.</p><div class="ig-presets ui-hide-compact"></div>',
       '    </div>',
       '    <div class="ig-loading" hidden>',
       '      <div class="ig-spinner" aria-hidden="true"></div>',
@@ -179,36 +180,37 @@
       '    <div class="ig-error" role="alert" hidden></div>',
       '  </div>',
       isTryOn ? [
-        '  <div class="ig-tryon-bar">',
-        '    <span class="ig-tryon-hint">Hardcoded human try-on prompt</span>',
-        '    <select class="ig-aspect" aria-label="Aspect ratio"></select>',
-        '    <button type="button" class="ui-btn ui-btn--primary ig-submit">Try On</button>',
+        '  <div class="ig-tryon-bar ui-hide-tiny">',
+        '    <span class="ig-tryon-hint" data-tip="Gemini gets a fixed prompt: dress the person in the product.">Fixed try-on prompt</span>',
+        '    <select class="ig-aspect" aria-label="Aspect ratio" data-tip="Requested width to height; a model may return its default shape."></select>',
+        '    <button type="button" class="ui-btn ui-btn--primary ig-submit" data-tip="Ask Gemini for one image of the person wearing the product.">Try On</button>',
         '  </div>'
       ].join('\n') : [
-        '  <form class="ig-form">',
+        '  <form class="ig-form ui-hide-tiny">',
         '    <input type="file" class="ig-ref-file ig-single-ref-file" accept="image/*">',
-        '    <button type="button" class="ui-btn ui-btn--sm ig-ref-pill-btn" title="Attach optional reference image">+ Ref</button>',
-        '    <input type="text" class="ig-prompt" placeholder="Describe an image..." aria-label="Image prompt">',
-        '    <select class="ig-aspect" aria-label="Aspect ratio"></select>',
-        '    <button type="submit" class="ui-btn ui-btn--primary ig-submit">Generate</button>',
+        '    <button type="button" class="ui-btn ui-btn--sm ig-ref-pill-btn ui-hide-compact" aria-label="Reference image" data-tip="Add an optional reference image (or drop one on the preview); click again to remove it.">+ Ref</button>',
+        '    <input type="text" class="ig-prompt" placeholder="Describe an image…" aria-label="Image prompt">',
+        '    <select class="ig-aspect ui-hide-compact" aria-label="Aspect ratio" data-tip="Requested width to height; a model may return its default shape."></select>',
+        '    <button type="submit" class="ui-btn ui-btn--primary ig-submit" data-tip="Send the prompt to Gemini and draw one image." data-tip-key="Enter">Generate</button>',
         '  </form>'
       ].join('\n'),
       '</div>',
       '<footer class="ui-tile-foot">',
       '  <span class="ig-status ui-truncate">Ready</span>',
       '  <span class="ig-foot-actions" hidden>',
-      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-full-btn">Full</button>',
-      '    <a class="ui-btn ui-btn--sm ui-btn--quiet ig-dl-btn" download="gemini-image.png">Save</a>',
+      '    <button type="button" class="ui-btn ui-btn--sm ui-btn--quiet ig-full-btn" data-tip="Open the image full size with its details.">View</button>',
+      '    <a class="ui-btn ui-btn--sm ui-btn--quiet ig-dl-btn" download="gemini-image.png">Download</a>',
       '  </span>',
       '</footer>',
       '<dialog class="ui-dialog ig-dialog" aria-label="Generated image full view">',
-      '  <div class="ui-studio-bar">',
-      '    <span class="ui-studio-title">' + title + '</span>',
+      '  <header class="ui-studio-bar">',
+      '    <span class="ui-tile-index">' + cellIndex + '</span>',
+      '    <h2 class="ui-studio-title">' + title + '</h2>',
       '    <div class="ui-studio-actions">',
-      '      <a class="ui-btn ui-btn--sm ig-dialog-dl" download="gemini-image.png">Download</a>',
-      '      <button type="button" class="ui-btn ui-btn--sm ig-dialog-close">Close</button>',
+      '      <a class="ui-btn ig-dialog-dl" download="gemini-image.png">Download</a>',
+      '      <button type="button" class="ui-btn ig-dialog-close" data-tip="Back to the grid." data-tip-key="Esc">Close</button>',
       '    </div>',
-      '  </div>',
+      '  </header>',
       '  <div class="ig-dialog-body">',
       '    <img class="ig-dialog-img" alt="Full resolution generated image">',
       '  </div>',
@@ -320,10 +322,30 @@
       });
     }
 
+    // One vocabulary for the four Gemini tiles (ui/NOTES.md section 0):
+    // No key / Key set (idle), Running / Error (rust), Live (green: a call really returned).
+    let pillState = null;
+    const PILL = {
+      none: ['No key', null, 'No Gemini key yet. Click to add one.'],
+      key: ['Key set', null, 'Key saved; nothing generated yet. Click to edit the key.'],
+      running: ['Running', 'attention', 'Gemini is drawing the image now.'],
+      error: ['Error', 'attention', 'The last request failed; the reason is shown on the preview.'],
+      live: ['Live', 'ok', 'Your key works: the last image came back from Gemini.']
+    };
+    function renderPill(next) {
+      if (next !== undefined) pillState = next;
+      const hasKey = Boolean(client.KeyStore.get());
+      if (!hasKey) pillState = null;
+      const p = PILL[pillState || (hasKey ? 'key' : 'none')];
+      keyBtn.querySelector('.ui-pill-label').textContent = p[0];
+      if (p[1]) keyBtn.setAttribute('data-tone', p[1]);
+      else keyBtn.removeAttribute('data-tone');
+      keyBtn.setAttribute('data-tip', p[2]);
+    }
+
     function refreshKeyState() {
       const hasKey = Boolean(client.KeyStore.get());
-      keyBtn.setAttribute('data-tone', hasKey ? 'ok' : 'attention');
-      keyBtn.querySelector('.ui-pill-label').textContent = hasKey ? 'Key ✓' : 'Key';
+      renderPill();
       if (hasKey && client.KeyStore.get() !== modelsDiscoveredForKey) {
         modelsDiscoveredForKey = client.KeyStore.get();
         client.discoverImageModels(modelsDiscoveredForKey)
@@ -351,6 +373,7 @@
         loadingLabel.textContent = 'Generating 0.0s';
         submitBtn.textContent = 'Cancel';
         submitBtn.setAttribute('aria-pressed', 'true');
+        renderPill('running');
         statusEl.textContent = 'Generating with ' + modelSelect.value + '...';
         timerId = global.setInterval(function () {
           const sec = ((Date.now() - t0) / 1000).toFixed(1);
@@ -373,6 +396,7 @@
         activeController = null;
         setBusy(false);
         statusEl.textContent = 'Cancelled';
+        renderPill(null);
         return;
       }
 
@@ -438,6 +462,7 @@
 
         const sec = (result.elapsedMs / 1000).toFixed(1);
         statusEl.textContent = sec + 's · ' + result.model;
+        renderPill('live');
 
         imgEl.onload = function () {
           const dims = imgEl.naturalWidth + '×' + imgEl.naturalHeight;
@@ -447,10 +472,12 @@
       } catch (err) {
         if (err && err.name === 'AbortError') {
           statusEl.textContent = 'Cancelled';
+          renderPill(null);
         } else {
           const msg = (err && err.message) ? err.message : String(err);
           showError(msg);
           statusEl.textContent = 'Error';
+          renderPill('error');
         }
       } finally {
         activeController = null;
@@ -464,6 +491,7 @@
         btn.type = 'button';
         btn.className = 'ui-chip';
         btn.textContent = preset.label;
+        btn.setAttribute('data-tip', 'Fill in this example prompt and generate it now.');
         btn.addEventListener('click', function () {
           promptInput.value = preset.prompt;
           runGeneration(preset.prompt);

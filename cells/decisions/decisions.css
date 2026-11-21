@@ -781,14 +781,6 @@
 
 /* Tiny (< 240 px, phone grid): header + hero. Demo labels stay readable (not a bare dot). */
 @container ui-tile (max-width: 239px) {
-  .dc-result-tag.ui-pill {
-    width: auto;
-    padding: 0 6px 0 5px;
-  }
-  .dc-result-tag .ui-pill-label {
-    display: inline;
-  }
-
   .dc-plain-q,
   .dc-specimen-heading {
     font-size: var(--ui-fs-2);
@@ -880,14 +872,6 @@
 
 .dc-select:hover {
   border-color: var(--ui-ink-3);
-}
-
-/* ui-seg has no disabled look: Detail (image resolution) is disabled without an image. */
-.dc-dialog .ui-seg > button:disabled {
-  background: transparent;
-  box-shadow: none;
-  color: var(--ui-ink-3);
-  cursor: not-allowed;
 }
 
 .dc-key-btn {

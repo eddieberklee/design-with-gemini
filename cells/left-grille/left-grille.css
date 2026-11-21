@@ -136,6 +136,10 @@ body:has(main.grid[hidden]) .mg-hud {
   text-align: right;
 }
 
+.lg-bus-meta:empty {               /* idle: the Arm array button says it all */
+  display: none;
+}
+
 .lg-bus-meta[data-error="true"] {
   color: var(--ui-accent);
 }
@@ -213,15 +217,29 @@ body:has(main.grid[hidden]) .mg-hud {
 /* Shared sensor-tile parts. Pill: fixed width, centred ("LIVE · 48K" is about 93 px).
    Toggle: fixed width for Arm / Arming… / Live / Retry. Foot: "Sim" label, verbs, a hairline
    separator, then the tuning action. The compact note replaces the foot under 320 px. */
-#left-grille-secondary-grid .lg-status-pill,
+/* One pill rule for all seven sensors: at least 94 px, centred, may grow; the label
+   ellipsizes only if the head runs out of room. At tiny size it is the shared dot. */
+@container ui-tile (min-width: 240px) {
+  #left-grille-secondary-grid .lg-status-pill,
+  .lg-sensor-pill {
+    min-width: 94px;
+    justify-content: center;
+  }
+}
+
 .lg-sensor-pill {
-  min-width: 94px;
-  justify-content: center;
+  flex: 0 1 auto;
+}
+
+.lg-sensor-pill .ui-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 #left-grille-secondary-grid .lg-btn--arm,
 .lg-sensor-toggle {
-  min-width: 64px;
+  min-width: 64px;                 /* Arm / Arming… / Live / Retry keep one width */
 }
 
 .lg-foot-sep {

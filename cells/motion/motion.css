@@ -57,9 +57,11 @@
 
 /* Hero: tile width, scale beside it, column meta on its own line so its length never moves them. */
 .mg-hero {
+  flex: 1 1 auto;                 /* takes the free space above the meters; centred in it */
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
+  align-content: center;
   column-gap: var(--ui-2);
   row-gap: var(--ui-1);
 }

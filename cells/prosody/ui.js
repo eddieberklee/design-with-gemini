@@ -52,7 +52,7 @@
   // idle grey). Labels are sentence case; .ui-pill shows them in mono caps.
   const BADGE_STATES = {
     demo: {
-      label: 'Demo',
+      label: 'No key',
       tone: 'idle',
       tip: 'Demo: phrases simulate speech. Click to add a Gemini key for the live mic.'
     },
@@ -62,7 +62,7 @@
       tip: 'Key saved, not streaming. Start the mic to go live, or click to edit the key.'
     },
     connecting: {
-      label: 'Starting',
+      label: 'Running',
       tone: 'attention',
       tip: 'Starting: asking for the mic and opening a Gemini Live session. Click to edit the key.'
     },
@@ -279,7 +279,7 @@
 
     // --- Footer: status line + TX/RX counters ---
     const footer = el('footer', 'ui-tile-foot ps-footer');
-    const readoutText = el('div', 'ui-truncate ps-readout-text', IDLE_HINT);
+    const readoutText = el('div', 'ui-prose ui-truncate ps-readout-text', IDLE_HINT);
     readoutText.setAttribute('role', 'status');
     readoutText.setAttribute('aria-live', 'polite');
     const txRxBadge = el('span', 'ps-tx-rx', '');

@@ -1239,7 +1239,7 @@
     const pillEl = h(
       'span',
       {
-        className: 'bp-pill ui-pill',
+        className: 'bp-pill ui-pill lg-sensor-pill',
         role: 'note',
         tabindex: '0',
         dataset: { tone: 'idle' },
@@ -1365,7 +1365,7 @@
     ]);
 
     const narrowNote = h('span', {
-      className: 'bp-narrow-note ui-label',
+      className: 'bp-narrow-note lg-compact-note ui-label',
       'data-tip': 'Sim buttons appear when this tile is at least 320 px wide.',
       textContent: 'Widen for Sim'
     });

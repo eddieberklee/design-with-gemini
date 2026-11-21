@@ -14,30 +14,13 @@
   overflow: hidden;
 }
 
-/* Same column as `.lg-cell-stage`, so the cell also lays out outside the page grid. */
-.tz-stage {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--ui-surface);
-  color: var(--ui-ink);
-  font-family: var(--ui-sans);
+.tz-stage {                            /* column from `.lg-cell-stage` (left-grille.css) */
   user-select: none;
   -webkit-user-select: none;
 }
 
 .tz-bezel .ui-btn {
   min-width: 64px;                     /* Arm / Arming… / Live / Paused / Retry: no shift */
-}
-
-@container ui-tile (min-width: 240px) {
-  .tz-pill {
-    min-width: 94px;                   /* measured: LIVE · 48k is 93 px; READY / SIM ONLY keep that width */
-    justify-content: center;
-  }
 }
 
 /* Body: chassis map (hero) -------------------------------------------------------- */
@@ -291,11 +274,6 @@
   text-align: right;
 }
 
-/* Visible only where the base size step has hidden the foot (tile < 320 px). */
-.tz-compact-note {
-  display: none;
-}
-
 /* Foot -------------------------------------------------------------------------------- */
 
 .tz-metric-sub {
@@ -318,11 +296,6 @@
 }
 
 @container ui-tile (max-width: 319px) {
-  .tz-compact-note {
-    display: block;
-    flex: 0 0 auto;
-  }
-
   .tz-cal-bar {
     padding-left: var(--ui-2);
   }
