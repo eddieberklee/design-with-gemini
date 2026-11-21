@@ -822,6 +822,13 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
         }
       },
       getAttribute(k) { return Object.prototype.hasOwnProperty.call(attrs, k) ? attrs[k] : null; },
+      removeAttribute(k) {
+        delete attrs[k];
+        if (k === 'hidden') el.hidden = false;
+      },
+      getClientRects() {
+        return el.hidden ? [] : [el.getBoundingClientRect()];
+      },
       appendChild(child) {
         if (!child || typeof child !== 'object') return child;
         child.parentNode = el;
@@ -1044,9 +1051,10 @@ test('Multi-portal hash transitions, popstate+hashchange VT deduplication, Abort
   assert.equal(mainGrid.hidden, true);
   assert.equal(hgPage.hidden, false);
 
-  // 2. Click `← Grid` -> triggers history.back() firing BOTH popstate + hashchange before VT callback runs!
+  // 2. Click `Close` (the shared studio-bar close button, formerly `← Grid`) -> triggers history.back()
+  // firing BOTH popstate + hashchange before VT callback runs!
   vtCalls = 0;
-  const backBtn = findByText(hgPage, '← Grid');
+  const backBtn = findByText(hgPage, 'Close');
   backBtn.click();
   assert.equal(vtCalls, 1, 'popstate + hashchange must coalesce to exactly 1 startViewTransition');
   if (activeVtAbort) activeVtAbort();

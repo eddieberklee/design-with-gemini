@@ -7,7 +7,7 @@
  *    hand preview, quick `Cam` (enables live webcam spatial cursor across the entire main page!) +
  *    `Sim` (figure-8 synthetic hand cursor) + `Studio ↗` portal button. Zero idle RAF when inactive.
  * 2. Secondary Page (`#hand-gesture-page`): Seamless in-page 3x3 `.grid` of 9 `.cell` instruments
- *    (`#hand-gesture` hash sync, `← Grid`, `Escape`, spatial View Transition `hg-stage-portal`)
+ *    (`#hand-gesture` hash sync, `Close`, `Escape`, spatial View Transition `hg-stage-portal`)
  *    implementing all 5 webcam gesture primitives (hand raise recognition, cursor position, pinch,
  *    rotate, and up/down) plus live 60fps 1-Euro jitter oscilloscope & sensitivity tuners.
  * 3. Global Spatial Reticle Overlay (`#hg-spatial-overlay`): Renders primary + secondary hand
@@ -156,6 +156,43 @@
     const synthRig = new SyntheticHandRig();
     synthRig.autoOrbit = !prefersReducedMotion();
 
+    // Palette for SVG attributes and canvas drawing: read once from the shared `--ui-` tokens
+    // (ui/base.css). Ink for the hand and instruments, the one accent for live or rejected states.
+    const rootStyle = global.getComputedStyle ? global.getComputedStyle(document.documentElement) : null;
+    function tok(name, fallback) {
+      const v = rootStyle ? rootStyle.getPropertyValue(name).trim() : '';
+      return v || fallback;
+    }
+    function withAlpha(hex, a) {
+      const m = /^#([0-9a-f]{6})$/i.exec(hex);
+      if (!m) return hex;
+      const n = parseInt(m[1], 16);
+      return 'rgba(' + ((n >> 16) & 255) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255) + ', ' + a + ')';
+    }
+    const PAL = {
+      ink: tok('--ui-ink', '#161615'),
+      ink2: tok('--ui-ink-2', '#4f4f4b'),
+      ink3: tok('--ui-ink-3', '#66665f'),
+      line: tok('--ui-line', '#d3d3ce'),
+      hairline: tok('--ui-hairline', '#e5e5e2'),
+      well: tok('--ui-well', '#f7f7f5'),
+      surface: tok('--ui-surface', '#ffffff'),
+      accent: tok('--ui-accent', '#b4441a'),
+    };
+    const MONO = tok('--ui-mono', 'ui-monospace, monospace');
+    // Canvas-only derived colours and fonts, built once (the draw loop runs every frame).
+    const CAN = {
+      accentA05: withAlpha(PAL.accent, 0.05),
+      accentA10: withAlpha(PAL.accent, 0.1),
+      accentA14: withAlpha(PAL.accent, 0.14),
+      accentA45: withAlpha(PAL.accent, 0.45),
+      accentA70: withAlpha(PAL.accent, 0.7),
+      inkA06: withAlpha(PAL.ink, 0.06),
+      inkA25: withAlpha(PAL.ink, 0.25),
+      font: '500 10px ' + MONO,
+      fontBold: '600 10px ' + MONO,
+    };
+
     // -----------------------------------------------------------------------
     // 1. Primary 1x1 Grid Cell (`#cell-hand-gesture`)
     // -----------------------------------------------------------------------
@@ -163,20 +200,20 @@
     const miniBoneLines = [];
     for (let i = 0; i < HAND_BONES.length; i += 2) {
       miniBoneLines.push(
-        svgEl('line', { x1: 60, y1: 60, x2: 60, y2: 60, stroke: '#52525b', 'stroke-width': '1.4', 'stroke-linecap': 'round' })
+        svgEl('line', { x1: 60, y1: 60, x2: 60, y2: 60, stroke: PAL.ink2, 'stroke-width': '1.5', 'stroke-linecap': 'round' })
       );
     }
     const miniPinchLine = svgEl('line', {
       x1: 60, y1: 40, x2: 72, y2: 42,
-      stroke: '#e11d48', 'stroke-width': '1.4', 'stroke-dasharray': '2 2',
+      stroke: PAL.ink3, 'stroke-width': '1.25', 'stroke-dasharray': '3 3',
     });
-    const miniAnchorDot = svgEl('circle', { cx: 60, cy: 52, r: '2', fill: '#2563eb' });
+    const miniAnchorDot = svgEl('circle', { cx: 60, cy: 52, r: '1.3', fill: PAL.accent });
     const miniAnchorRing = svgEl('circle', {
-      cx: 60, cy: 52, r: '4.5', fill: 'none', stroke: '#2563eb', 'stroke-width': '1.2',
+      cx: 60, cy: 52, r: '3.6', fill: 'none', stroke: PAL.accent, 'stroke-width': '1.5',
     });
     const miniRoiRect = svgEl('rect', {
       x: 26, y: 20, width: 68, height: 50, rx: '3',
-      fill: 'none', stroke: '#cbd5e1', 'stroke-width': '1', 'stroke-dasharray': '3 2',
+      fill: 'none', stroke: PAL.line, 'stroke-width': '1', 'stroke-dasharray': '4 3',
     });
     const miniSvg = svgEl('svg', { className: 'hg-mini-svg', viewBox: '0 0 120 90', 'aria-hidden': 'true' }, [
       miniRoiRect,
@@ -186,42 +223,50 @@
       miniAnchorDot,
     ]);
 
-    const primPosVal = h('span', { className: 'hg-prim-val', textContent: '0.50, 0.50' });
-    const primPinchVal = h('span', { className: 'hg-prim-val', textContent: 'OPEN 0.72' });
-    const primRotVal = h('span', { className: 'hg-prim-val', textContent: '+0.0°' });
-    const primUpDnVal = h('span', { className: 'hg-prim-val', textContent: 'V-IDLE' });
-
-    const primPosRow = h('div', { className: 'hg-prim-row' }, [h('span', { className: 'hg-prim-key', textContent: 'POS' }), primPosVal]);
-    const primPinchRow = h('div', { className: 'hg-prim-row' }, [h('span', { className: 'hg-prim-key', textContent: 'PINCH' }), primPinchVal]);
-    const primRotRow = h('div', { className: 'hg-prim-row' }, [h('span', { className: 'hg-prim-key', textContent: 'ROT' }), primRotVal]);
-    const primUpDnRow = h('div', { className: 'hg-prim-row' }, [h('span', { className: 'hg-prim-key', textContent: 'UP/DN' }), primUpDnVal]);
+    // One quiet row of label + value pairs under the hero (hidden at compact size).
+    function primPair(label, value, tip) {
+      const val = h('span', { className: 'ui-readout hg-prim-val', textContent: value });
+      const row = h('div', { className: 'hg-prim', 'data-tip': tip }, [
+        h('span', { className: 'ui-label', textContent: label }),
+        val,
+      ]);
+      return { row: row, val: val };
+    }
+    const primPos = primPair('Pos', '0.50, 0.50', 'Cursor position, 0 to 1 from the left and from the top.');
+    const primPinch = primPair('Pinch', 'OPEN 0.72', 'Finger gap over palm width; LOCK means a pinch is held.');
+    const primRot = primPair('Twist', '+0.0°', 'Hand twist since the gesture began, in degrees.');
+    const primUpDn = primPair('Scroll', 'V-IDLE', 'Two-finger scroll speed in pixels per second, or idle.');
+    const primPosVal = primPos.val;
+    const primPinchVal = primPinch.val;
+    const primRotVal = primRot.val;
+    const primUpDnVal = primUpDn.val;
+    const primPosRow = primPos.row;
+    const primPinchRow = primPinch.row;
+    const primRotRow = primRot.row;
+    const primUpDnRow = primUpDn.row;
 
     const portalCamBtn = h('button', {
       type: 'button',
-      className: 'hg-btn',
+      className: 'ui-btn ui-btn--sm ui-hide-tiny',
       'aria-pressed': 'false',
-      title: 'Toggle live webcam hand cursor across the whole page',
       textContent: 'Cam',
     });
     const portalSimBtn = h('button', {
       type: 'button',
-      className: 'hg-btn',
+      className: 'ui-btn ui-btn--sm ui-hide-tiny',
       'aria-pressed': 'false',
-      title: 'Toggle simulated hand cursor on main grid',
       textContent: 'Sim',
     });
     const portalStudioBtn = h('button', {
       type: 'button',
-      className: 'hg-btn hg-btn--primary',
-      title: 'Open 9-cell Hand & Gesture Studio',
+      className: 'ui-btn ui-btn--sm ui-btn--quiet ui-hide-compact',
+      'data-tip': 'Open the Studio: nine gesture instruments to try and tune.',
       textContent: 'Studio ↗',
     });
 
-    const portalStatusText = h('span', {
-      className: 'hg-portal-status',
-      textContent: 'Raise open palm 200ms · Pinch · Twist · V-Scroll',
-    });
-    const portalStatePill = h('span', { className: 'hg-portal-pill', textContent: 'STANDBY' });
+    const portalStatusText = h('span', { className: 'hg-portal-status ui-truncate', textContent: '' });
+    const portalPillLabel = h('span', { className: 'ui-pill-label', textContent: 'STANDBY' });
+    const portalStatePill = h('span', { className: 'ui-pill hg-portal-pill' }, [portalPillLabel]);
 
     const portalStage = h(
       'div',
@@ -229,11 +274,14 @@
         className: 'hg-portal-stage',
         tabindex: '0',
         role: 'button',
-        'aria-label': 'Open 9-cell Webcam Hand and Gesture Studio',
+        'aria-label': 'Open the Hand Cursor Studio',
+        'data-tip': 'Open the Studio.',
       },
       [
-        h('div', { className: 'hg-mini-cam-box' }, [miniVideo, miniSvg]),
-        h('div', { className: 'hg-mini-primitives' }, [
+        h('div', { className: 'hg-mini-cam-box' }, [
+          h('div', { className: 'hg-mini-frame ui-well' }, [miniVideo, miniSvg]),
+        ]),
+        h('div', { className: 'hg-mini-primitives ui-hide-compact' }, [
           primPosRow,
           primPinchRow,
           primRotRow,
@@ -242,20 +290,63 @@
       ]
     );
 
-    const portalShell = h('div', { className: 'hg-portal-shell' }, [
-      h('div', { className: 'hg-portal-head' }, [
-        h('div', { className: 'hg-portal-id' }, [
-          h('span', { className: 'hg-idx-badge', textContent: '08' }),
-          h('span', { className: 'hg-portal-title', textContent: 'Webcam Hand Cursor' }),
-        ]),
-        h('div', { className: 'hg-portal-actions' }, [portalCamBtn, portalSimBtn, portalStudioBtn]),
-      ]),
-      portalStage,
-      h('div', { className: 'hg-portal-foot' }, [portalStatusText, portalStatePill]),
-    ]);
-
     portalCell.textContent = '';
-    portalCell.appendChild(portalShell);
+    portalCell.classList.add('ui-tile');
+    portalCell.appendChild(h('header', { className: 'ui-tile-head' }, [
+      h('span', { className: 'ui-tile-index', textContent: '08' }),
+      h('span', { className: 'ui-tile-title', textContent: 'Hand Cursor' }),
+      h('div', { className: 'ui-tile-actions' }, [portalStatePill, portalCamBtn, portalSimBtn, portalStudioBtn]),
+    ]));
+    portalCell.appendChild(h('div', { className: 'ui-tile-body hg-portal-body' }, [portalStage]));
+    portalCell.appendChild(h('footer', { className: 'ui-tile-foot' }, [portalStatusText]));
+
+    // Status pill: label, tone and tip written only when they change (the frame loop calls this).
+    let portalPillKey = '';
+    function setPortalPill(label, tone, tip) {
+      const key = label + '|' + tone + '|' + tip;
+      if (key === portalPillKey) return;
+      portalPillKey = key;
+      portalPillLabel.textContent = label;
+      if (tone) portalStatePill.setAttribute('data-tone', tone);
+      else portalStatePill.removeAttribute('data-tone');
+      portalStatePill.setAttribute('data-tip', tip);
+    }
+    const PILL_TIP_STANDBY = 'Hand cursor is off. Press Cam or Sim to start it.';
+    setPortalPill('STANDBY', 'idle', PILL_TIP_STANDBY);
+
+    function setPortalStatus(text, tip) {
+      if (portalStatusText.textContent !== text) portalStatusText.textContent = text;
+      if (tip) portalStatusText.setAttribute('data-tip', tip);
+      else portalStatusText.removeAttribute('data-tip');
+    }
+    const PORTAL_HINT = 'Hold an open palm still to arm, then pinch, twist or two-finger scroll';
+    setPortalStatus(PORTAL_HINT, '');
+
+    // Cam / Sim: pressed state, running tone (rust) and a tip that says what the next click does.
+    // `inStudio` is passed in (not read from `isSecondaryOpen`, which is declared later).
+    function syncPortalToggles(mode, camPending, inStudio) {
+      const camOn = mode === TRACKER_MODE.WEBCAM || (!inStudio && camPending);
+      const simOn = !camPending && (mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR);
+      setAttr(portalCamBtn, 'aria-pressed', String(camOn));
+      setAttr(portalSimBtn, 'aria-pressed', String(simOn));
+      if (camOn || camPending) portalCamBtn.setAttribute('data-tone', 'attention');
+      else portalCamBtn.removeAttribute('data-tone');
+      if (simOn) portalSimBtn.setAttribute('data-tone', 'attention');
+      else portalSimBtn.removeAttribute('data-tone');
+      setAttr(portalCamBtn, 'data-tip',
+        camPending ? 'Cancel the camera request.'
+          : camOn ? 'Turn the webcam cursor off.'
+            : 'Use your webcam to move a cursor across this page with your hand.');
+      setAttr(portalSimBtn, 'data-tip',
+        simOn ? 'Stop the simulated hand cursor.'
+          : 'Move a simulated hand cursor across this page; no camera needed.');
+      // Escape on the grid turns a running cursor off (document keydown handler below).
+      [[portalCamBtn, camOn || camPending], [portalSimBtn, simOn]].forEach(function (pair) {
+        if (pair[1]) pair[0].setAttribute('data-tip-key', 'Escape');
+        else pair[0].removeAttribute('data-tip-key');
+      });
+    }
+    syncPortalToggles(TRACKER_MODE.IDLE, false, false);
 
     // Paint static neutral skeleton in mini SVG before RAF ever runs
     function drawStaticMiniHand() {
@@ -269,11 +360,14 @@
         setAttr(line, 'y1', (lm[a + 1] * 90).toFixed(1));
         setAttr(line, 'x2', ((1 - lm[b]) * 120).toFixed(1));
         setAttr(line, 'y2', (lm[b + 1] * 90).toFixed(1));
+        setAttr(line, 'stroke', PAL.ink2);
       }
       setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 120).toFixed(1));
       setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 90).toFixed(1));
       setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 120).toFixed(1));
       setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 90).toFixed(1));
+      setAttr(miniPinchLine, 'stroke', PAL.ink3);
+      setAttr(miniPinchLine, 'stroke-dasharray', '3 3');
       const ax = (1 - (0.5 * lm[LM.INDEX_MCP * 3] + 0.3 * lm[LM.MIDDLE_MCP * 3] + 0.2 * lm[0])) * 120;
       const ay = (0.5 * lm[LM.INDEX_MCP * 3 + 1] + 0.3 * lm[LM.MIDDLE_MCP * 3 + 1] + 0.2 * lm[1]) * 90;
       setAttr(miniAnchorDot, 'cx', ax.toFixed(1));
@@ -290,95 +384,145 @@
     const wbVideo = h('video', { className: 'hg-wb-video', playsinline: true, muted: true });
     const tracker = new HandTrackerController(engine, synthRig, miniVideo);
 
-    const backBtn = h('button', { type: 'button', className: 'hg-btn', textContent: '← Grid' });
-    const modeSynthBtn = h('button', { type: 'button', className: 'hg-mode-btn', 'aria-pressed': 'true', textContent: 'Synth Rig' });
-    const modeTourBtn = h('button', { type: 'button', className: 'hg-mode-btn', 'aria-pressed': 'false', textContent: 'Auto Tour' });
-    const modeWebcamBtn = h('button', { type: 'button', className: 'hg-mode-btn', 'aria-pressed': 'false', textContent: 'Webcam Live' });
-    const modePointerBtn = h('button', { type: 'button', className: 'hg-mode-btn', 'aria-pressed': 'false', textContent: 'Pointer' });
+    const backBtn = h('button', {
+      type: 'button', className: 'ui-btn', 'data-tip': 'Back to the grid.', 'data-tip-key': 'Esc', textContent: 'Close',
+    });
+    const modeSynthBtn = h('button', { type: 'button', 'aria-pressed': 'true', textContent: 'Synth', 'data-tip': 'A simulated hand you steer by dragging the rig or with its buttons.' });
+    const modeTourBtn = h('button', { type: 'button', 'aria-pressed': 'false', textContent: 'Tour', 'data-tip': 'The simulated hand demonstrates every gesture by itself.' });
+    const modeWebcamBtn = h('button', { type: 'button', 'aria-pressed': 'false', textContent: 'Webcam', 'data-tip': 'Track your real hand with the webcam.', 'data-tip-key': 'C' });
+    const modePointerBtn = h('button', { type: 'button', 'aria-pressed': 'false', textContent: 'Pointer', 'data-tip': 'Feed your mouse position to the smoothing scope instead of a hand.' });
     const mapModeBtn = h('button', {
       type: 'button',
-      className: 'hg-btn',
+      className: 'ui-btn ui-btn--sm',
       'aria-pressed': 'false',
-      title: 'Switch between Absolute ROI [0.22..0.78] and Relative Fist-Clutch trackpad mode',
       textContent: 'Map: ROI',
     });
 
-    const gateSpan = h('span', { className: 'hg-gate-pill', title: 'Palm span >= 0.055' }, [h('span', { className: 'hg-gate-dot' }), h('span', { textContent: 'SPAN' })]);
-    const gateFacing = h('span', { className: 'hg-gate-pill', title: 'Chiral 3D palm normal >= 0.22' }, [h('span', { className: 'hg-gate-dot' }), h('span', { textContent: '3D NORM' })]);
-    const gateKbd = h('span', { className: 'hg-gate-pill', title: 'Bottom keyboard exclusion y < 0.86' }, [h('span', { className: 'hg-gate-dot' }), h('span', { textContent: 'KBD <.86' })]);
-    const gateArmText = h('span', { textContent: 'IDLE' });
-    const gateArm = h('span', { className: 'hg-gate-pill', title: '200ms open-palm dwell + 4-frame coasting' }, [h('span', { className: 'hg-gate-dot' }), gateArmText]);
-    const gateGestureText = h('span', { textContent: 'OPEN' });
-    const gateGesture = h('span', { className: 'hg-gate-pill', title: 'Active gesture state' }, [h('span', { className: 'hg-gate-dot' }), gateGestureText]);
+    // Gate pills: idle (no hand), pass (ink), fail or active (rust). Written only on change.
+    function gatePill(label, tip) {
+      const text = h('span', { className: 'ui-pill-label', textContent: label });
+      const el = h('span', { className: 'ui-pill hg-gate', 'data-tip': tip }, [text]);
+      return { el: el, text: text, key: '' };
+    }
+    function setGate(g, state, label) {
+      const key = state + '|' + label;
+      if (g.key === key) return;
+      g.key = key;
+      if (state === 'attention') { g.el.setAttribute('data-tone', 'attention'); g.el.removeAttribute('data-state'); }
+      else if (state === 'pass') { g.el.removeAttribute('data-tone'); g.el.setAttribute('data-state', 'pass'); }
+      else { g.el.removeAttribute('data-tone'); g.el.removeAttribute('data-state'); }
+      if (label !== undefined && g.text.textContent !== label) g.text.textContent = label;
+    }
+    const gSpan = gatePill('SPAN', 'Close enough: palm width in the frame is above the minimum.');
+    const gFacing = gatePill('FACING', 'Palm faces the camera, not edge-on or back of the hand.');
+    const gKbd = gatePill('ABOVE KBD', 'Hand is above the keyboard zone at the bottom of the camera view.');
+    const gArm = gatePill('IDLE', 'Arming: hold an open palm still for 0.2 s to take the cursor.');
+    const gGesture = gatePill('OPEN', 'Current gesture: open hand, pinch lock or drag, two hands, scroll or clutch.');
+    const gateSpan = gSpan.el;
+    const gateFacing = gFacing.el;
+    const gateKbd = gKbd.el;
+    const gateArm = gArm.el;
+    const gateGesture = gGesture.el;
 
-    const btnToggleKeys = h('button', { type: 'button', className: 'hg-btn', 'aria-expanded': 'false', textContent: '? Keys' });
-    const fpsReadout = h('span', { className: 'hg-wb-fps', textContent: '60 FPS · 0 GC' });
+    const btnToggleKeys = h('button', {
+      type: 'button', className: 'ui-btn ui-btn--sm', 'aria-expanded': 'false', textContent: 'Keys',
+      'data-tip': 'Show keyboard shortcuts.', 'data-tip-key': '?',
+    });
+    const fpsReadout = h('span', {
+      className: 'ui-readout ui-readout--quiet hg-wb-fps', textContent: '60 FPS · 16.7ms',
+      'data-tip': 'Tracking frames per second and time per frame.',
+    });
 
-    const keysDrawer = h('section', { className: 'hg-wb-drawer', hidden: true, 'aria-label': 'Keyboard Shortcuts' }, [
+    function kbdItem(keys, label) {
+      const kids = [];
+      keys.forEach(function (k, i) {
+        if (i) kids.push(' ');
+        kids.push(h('kbd', { className: 'ui-kbd', textContent: k }));
+      });
+      kids.push(h('span', { textContent: label }));
+      return h('span', { className: 'hg-kbd-item' }, kids);
+    }
+    const keysDrawer = h('section', { className: 'hg-wb-drawer', hidden: true, 'aria-label': 'Keyboard shortcuts' }, [
       h('div', { className: 'hg-kbd-list' }, [
-        h('span', {}, [h('kbd', { textContent: 'Esc' }), ' Back']),
-        h('span', {}, [h('kbd', { textContent: 'Space' }), ' Hand/Coast']),
-        h('span', {}, [h('kbd', { textContent: 'P' }), ' Pinch']),
-        h('span', {}, [h('kbd', { textContent: 'V' }), ' V-Scroll']),
-        h('span', {}, [h('kbd', { textContent: 'G' }), ' Fist Clutch']),
-        h('span', {}, [h('kbd', { textContent: 'F' }), ' 3D Flip']),
-        h('span', {}, [h('kbd', { textContent: 'D' }), ' 2-Hand']),
-        h('span', {}, [h('kbd', { textContent: 'O' }), ' Orbit']),
-        h('span', {}, [h('kbd', { textContent: '[' }), ' ', h('kbd', { textContent: ']' }), ' Twist ±6°']),
-        h('span', {}, [h('kbd', { textContent: 'C' }), ' Webcam']),
+        kbdItem(['Esc'], 'Close'),
+        kbdItem(['Space'], 'Show or hide hand'),
+        kbdItem(['P'], 'Pinch (hold)'),
+        kbdItem(['V'], 'Two-finger scroll'),
+        kbdItem(['G'], 'Fist clutch'),
+        kbdItem(['F'], 'Flip palm'),
+        kbdItem(['D'], 'Second hand'),
+        kbdItem(['O'], 'Orbit'),
+        kbdItem(['[', ']'], 'Twist ±6°'),
+        kbdItem(['C'], 'Webcam'),
       ]),
     ]);
 
     const camBannerMsg = h('span', { textContent: '' });
-    const camBannerDismiss = h('button', { type: 'button', className: 'hg-btn', textContent: 'Dismiss' });
+    const camBannerDismiss = h('button', { type: 'button', className: 'ui-btn ui-btn--sm', textContent: 'Dismiss' });
     const camBanner = h('div', { className: 'hg-cam-banner', hidden: true, role: 'status' }, [camBannerMsg, camBannerDismiss]);
 
+    // Studio instrument: the shared tile anatomy (index, title, quiet meta readout, body, foot).
+    // The foot is `.hg-cell-foot`, not `.ui-tile-foot`: instruments are ~273 px wide at a 900 px
+    // page, and the shared compact step hides `.ui-tile-foot` below 320 px with their controls.
+    function metric(text, tip) {
+      return h('span', { className: 'ui-readout ui-readout--quiet hg-cell-metric', textContent: text, 'data-tip': tip });
+    }
+    function instrument(idx, title, ariaLabel, titleTip, metricEl, body, foot) {
+      return h('section', { className: 'cell ui-tile hg-wb-cell', 'aria-label': ariaLabel }, [
+        h('header', { className: 'ui-tile-head' }, [
+          h('span', { className: 'ui-tile-index', textContent: idx }),
+          h('span', { className: 'ui-tile-title', textContent: title, 'data-tip': titleTip || null }),
+          metricEl,
+        ]),
+        body,
+        foot || null,
+      ]);
+    }
+    function foot(kids) {
+      return h('div', { className: 'hg-cell-foot' }, kids);
+    }
+    function sm(text, attrs) {
+      return h('button', Object.assign({ type: 'button', className: 'ui-btn ui-btn--sm', textContent: text }, attrs || {}));
+    }
+
     // Build 9 Workbench Cells
-    const c1Metric = h('span', { className: 'hg-cell-metric', textContent: 'SYNTH · ROI [.22–.78]' });
+    const c1Metric = metric('SYNTH · ROI', 'Input source and how hand position maps to the cursor.');
     const rigCanvas = h('canvas', { className: 'hg-rig-canvas' });
     const rigStage = h('div', {
       className: 'hg-rig-stage',
       tabindex: '0',
       role: 'application',
-      'aria-label': 'Hand Rig Viewport. Drag to move, Shift+Drag or [ ] to roll wrist, double-click to pinch.',
+      'aria-label': 'Hand rig. Drag to move, Shift-drag or [ ] to twist the wrist, double-click to pinch.',
+      'data-tip': 'Drag to move the hand; Shift-drag or the wheel twists; double-click pinches.',
     }, [wbVideo, rigCanvas]);
-    const rigBtnPresent = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'true', textContent: 'Hand' });
-    const rigBtnPinch = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'false', textContent: 'Pinch' });
-    const rigBtnVScroll = h('button', { type: 'button', className: 'hg-btn hg-btn--warn', 'aria-pressed': 'false', textContent: 'V-Scroll' });
-    const rigBtnDorsal = h('button', { type: 'button', className: 'hg-btn hg-btn--warn', 'aria-pressed': 'false', textContent: '3D Flip' });
-    const rigBtnDual = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'false', textContent: '2-Hand' });
-    const rigBtnOrbit = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': String(synthRig.autoOrbit), textContent: 'Orbit' });
+    const rigBtnPresent = sm('Hand', { 'aria-pressed': 'true', 'data-tip': 'Show or hide the simulated hand.', 'data-tip-key': ' ' });
+    const rigBtnPinch = sm('Pinch', { 'aria-pressed': 'false', 'data-tip': 'Hold to pinch; a quick tap latches it, tap again to release.', 'data-tip-key': 'P' });
+    const rigBtnVScroll = sm('Scroll', { 'aria-pressed': 'false', 'data-tip': 'Raise two fingers so the simulated hand scrolls.', 'data-tip-key': 'V' });
+    const rigBtnDorsal = sm('Flip', { 'aria-pressed': 'false', 'data-tip': 'Turn the back of the hand to the camera; the facing gate rejects it.', 'data-tip-key': 'F' });
+    const rigBtnDual = sm('2 Hands', { 'aria-pressed': 'false', 'data-tip': 'Add a second simulated hand for two-hand zoom and turn.', 'data-tip-key': 'D' });
+    const rigBtnOrbit = sm('Orbit', { 'aria-pressed': String(synthRig.autoOrbit), 'data-tip': 'Let the simulated hand drift around on its own.', 'data-tip-key': 'O' });
 
-    const wbCell01 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '01 Optical Rig and 21-Joint' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '01' }), h('span', { className: 'hg-cell-title', textContent: 'Optical Rig & 21-Joint' })]),
-        c1Metric,
-      ]),
-      rigStage,
-      h('div', { className: 'hg-rig-controls', 'aria-label': 'Synthetic Hand Posture Controls' }, [
+    const wbCell01 = instrument('01', 'Hand Rig', '01 Hand rig', 'The tracked hand: 21 joints, the cursor area and the keyboard zone.', c1Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [rigStage]),
+      h('div', { className: 'hg-cell-foot hg-rig-controls', role: 'group', 'aria-label': 'Simulated hand pose' }, [
         rigBtnPresent, rigBtnPinch, rigBtnVScroll, rigBtnDorsal, rigBtnDual, rigBtnOrbit,
-      ]),
-    ]);
+      ]));
 
-    const c2Metric = h('span', { className: 'hg-cell-metric', textContent: 'fc 1.15Hz · 0.0dB' });
+    const c2Metric = metric('fc 1.15Hz · 0.0dB', 'Filter cutoff now, and how much jitter the filter removes, in dB.');
     const scopeCanvas = h('canvas', {
       className: 'hg-scope-canvas',
       tabindex: '0',
       role: 'img',
-      'aria-label': '2D XY Locus and 60fps Raw versus 1-Euro Smoothed Oscilloscope',
+      'aria-label': 'Cursor path, and raw versus smoothed position over time',
+      'data-tip': 'Left: cursor path, drag to set a target. Right: raw and smoothed traces.',
     });
-    const c2XyReadout = h('span', { textContent: 'LOCUS 0.500, 0.500' });
-    const c2FreezeBtn = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'false', textContent: 'Hold Trace' });
-    const wbCell02 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '02 XY Locus and 1-Euro Scope' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '02' }), h('span', { className: 'hg-cell-title', textContent: 'XY Locus & 1€ Scope' })]),
-        c2Metric,
-      ]),
-      h('div', { className: 'hg-cell-body hg-cell-body--bleed' }, [scopeCanvas]),
-      h('div', { className: 'hg-cell-foot' }, [c2XyReadout, c2FreezeBtn]),
-    ]);
+    const c2XyReadout = h('span', { className: 'hg-foot-read', textContent: 'LOCUS 0.500, 0.500', 'data-tip': 'Smoothed cursor position, 0 to 1 across and down.' });
+    const c2FreezeBtn = sm('Hold Trace', { 'aria-pressed': 'false', 'data-tip': 'Freeze the trace so you can study it.' });
+    const wbCell02 = instrument('02', 'Smoothing Scope', '02 Smoothing scope', '1€ filter: smooths jitter when the hand is still, follows fast moves.', c2Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [scopeCanvas]),
+      foot([c2XyReadout, c2FreezeBtn]));
 
-    const c3Metric = h('span', { className: 'hg-cell-metric', textContent: 'd/s 0.72 · OPEN' });
+    const c3Metric = metric('d/s 0.72 · OPEN', 'Finger gap divided by palm width, and the pinch state.');
     const c3SchmittFill = h('div', { className: 'hg-schmitt-fill' });
     const c3MarkEngage = h('div', { className: 'hg-schmitt-mark', style: 'left: 35%' });
     const c3MarkRelease = h('div', { className: 'hg-schmitt-mark', style: 'left: 50%' });
@@ -394,15 +538,11 @@
         ])
       );
     }
-    const c3ClickStats = h('span', { textContent: 'CLICKS 0 · DWELL — · SLIP 0.0px' });
-    const c3ClearBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Clear' });
-    const wbCell03 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '03 Schmitt Pinch Matrix' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '03' }), h('span', { className: 'hg-cell-title', textContent: 'Schmitt Pinch Matrix' })]),
-        c3Metric,
-      ]),
-      h('div', { className: 'hg-cell-body' }, [
-        h('div', { className: 'hg-schmitt-meter', 'aria-hidden': 'true' }, [
+    const c3ClickStats = h('span', { className: 'hg-foot-read', textContent: 'CLICKS 0 · DWELL — · SLIP 0.0px', 'data-tip': 'Clicks so far, how long the last pinch was held, and cursor slip.' });
+    const c3ClearBtn = sm('Clear', { 'data-tip': 'Turn every pad off and reset the click count.' });
+    const wbCell03 = instrument('03', 'Pinch Pads', '03 Pinch pads', 'Schmitt trigger: separate pinch and release gaps stop clicks from flickering.', c3Metric,
+      h('div', { className: 'ui-tile-body' }, [
+        h('div', { className: 'hg-schmitt-meter', 'aria-hidden': 'true', 'data-tip': 'Finger gap: a pinch starts left of the first mark and ends right of the second.' }, [
           h('div', { className: 'hg-schmitt-track' }, [c3SchmittFill, c3MarkEngage, c3MarkRelease]),
           h('div', { className: 'hg-schmitt-labels' }, [
             h('span', { textContent: '0.00' }),
@@ -411,39 +551,34 @@
             h('span', { textContent: 'LOCK 14px' }),
           ]),
         ]),
-        h('div', { className: 'hg-pinch-matrix', role: 'group', 'aria-label': '3x3 Zero-Slip Pinch Matrix' }, c3Pads),
+        h('div', {
+          className: 'hg-pinch-matrix', role: 'group', 'aria-label': 'Pinch practice pads',
+          'data-tip': 'Practice targets: pinch or click a pad to toggle it; pinch-drag turns pads on.',
+        }, c3Pads),
       ]),
-      h('div', { className: 'hg-cell-foot' }, [c3ClickStats, c3ClearBtn]),
-    ]);
+      foot([c3ClickStats, c3ClearBtn]));
 
-    const c4Metric = h('span', { className: 'hg-cell-metric', textContent: '+0.0° · 2.0×' });
+    const c4Metric = metric('+0.0° · 2.0×', 'Dial angle; your hand twist counts double.');
     const dialCanvas = h('canvas', { className: 'hg-dial-canvas' });
     const c4DialWrap = h('div', {
       className: 'hg-dial-wrap',
       tabindex: '0',
       role: 'slider',
-      'aria-label': 'Unwrapped Knuckle Rotary Encoder',
+      'aria-label': 'Twist dial, degrees',
       'aria-valuemin': '-720',
       'aria-valuemax': '720',
       'aria-valuenow': '0',
       'aria-valuetext': '+0.0° (0 turns)',
+      'data-tip': 'Pinch here and twist, drag up or down, scroll, or use the arrow keys.',
     }, [dialCanvas]);
-    const c4DzStatus = h('span', { textContent: 'DZ ±3.5° · FUSED 72/28' });
-    const c4VecBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Vec: Fused' });
-    const c4ZeroBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Zero' });
-    const wbCell04 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '04 Knuckle Rotary Dial' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '04' }), h('span', { className: 'hg-cell-title', textContent: 'Knuckle Rotary Dial' })]),
-        c4Metric,
-      ]),
-      c4DialWrap,
-      h('div', { className: 'hg-cell-foot' }, [
-        c4DzStatus,
-        h('div', { style: 'display:flex;gap:3px;' }, [c4VecBtn, c4ZeroBtn]),
-      ]),
-    ]);
+    const c4DzStatus = h('span', { className: 'hg-foot-read', textContent: 'DEAD ZONE ±3.5° · FUSED', 'data-tip': 'Twists under 3.5° are ignored so the dial does not drift.' });
+    const c4VecBtn = sm('Angle: Fused', { 'data-tip': 'Which hand angle turns the dial: fused, knuckle line, or wrist lever.' });
+    const c4ZeroBtn = sm('Zero', { 'data-tip': 'Set the dial back to 0°.' });
+    const wbCell04 = instrument('04', 'Twist Dial', '04 Twist dial', 'Turns as far as two full turns either way, following your wrist.', c4Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [c4DialWrap]),
+      foot([c4DzStatus, h('div', { className: 'hg-foot-btns' }, [c4VecBtn, c4ZeroBtn])]));
 
-    const c5Metric = h('span', { className: 'hg-cell-metric', textContent: '1.00× · +0.0°' });
+    const c5Metric = metric('1.00× · +0.0°', 'Card zoom and rotation.');
     const c5CardXy = h('span', { textContent: '0, 0' });
     const c5CardSr = h('span', { textContent: '1.00×' });
     const c5Card = h('div', { className: 'hg-stage-card' }, [
@@ -451,12 +586,12 @@
       h('span', { className: 'hg-stage-handle hg-stage-handle--tr' }),
       h('span', { className: 'hg-stage-handle hg-stage-handle--bl' }),
       h('span', { className: 'hg-stage-handle hg-stage-handle--br' }),
-      h('div', { className: 'hg-stage-card-label', textContent: 'ARTBOARD // NODE_05' }),
+      h('div', { className: 'hg-stage-card-label', textContent: 'Card' }),
       h('div', { className: 'hg-stage-card-vec', 'aria-hidden': 'true' }, [
         svgEl('svg', { width: '38', height: '26', viewBox: '0 0 38 26', fill: 'none' }, [
-          svgEl('rect', { x: '1', y: '1', width: '36', height: '24', rx: '3', stroke: '#d4d4d8', 'stroke-dasharray': '2 2' }),
-          svgEl('circle', { cx: '19', cy: '13', r: '6', stroke: '#2563eb', 'stroke-width': '1.5' }),
-          svgEl('path', { d: 'M19 4V22M10 13H28', stroke: '#09090b', 'stroke-width': '1' }),
+          svgEl('rect', { x: '1', y: '1', width: '36', height: '24', rx: '3', stroke: PAL.line, 'stroke-dasharray': '2 2' }),
+          svgEl('circle', { cx: '19', cy: '13', r: '6', stroke: PAL.accent, 'stroke-width': '1.5' }),
+          svgEl('path', { d: 'M19 4V22M10 13H28', stroke: PAL.ink, 'stroke-width': '1' }),
         ]),
       ]),
       h('div', { className: 'hg-stage-card-coords' }, [c5CardXy, c5CardSr]),
@@ -465,23 +600,19 @@
       className: 'hg-stage-viewport show-guides',
       tabindex: '0',
       role: 'application',
-      'aria-label': 'Spatial Transform Stage. Pinch-drag or arrows to pan, twist to rotate, 2-hand pinch or +/- to zoom.',
+      'aria-label': 'Transform stage. Pinch-drag or arrows to move, twist to rotate, two-hand pinch or plus and minus to zoom.',
+      'data-tip': 'Pinch-drag or arrow keys move the card; twist turns it; two hands zoom.',
     }, [
       h('div', { className: 'hg-stage-guide-h' }),
       h('div', { className: 'hg-stage-guide-v' }),
       c5Card,
     ]);
-    const c5ResetBtn = h('button', { type: 'button', className: 'hg-btn', textContent: '1:1 Reset' });
-    const wbCell05 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '05 Spatial Transform Stage' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '05' }), h('span', { className: 'hg-cell-title', textContent: 'Spatial Transform Stage' })]),
-        c5Metric,
-      ]),
-      c5Viewport,
-      h('div', { className: 'hg-cell-foot' }, [h('span', { textContent: '1H DRAG+TWIST · 2H ZOOM+STEER' }), c5ResetBtn]),
-    ]);
+    const c5ResetBtn = sm('Reset', { 'data-tip': 'Put the card back: centred, 1× zoom, no rotation.' });
+    const wbCell05 = instrument('05', 'Transform Stage', '05 Transform stage', '', c5Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [c5Viewport]),
+      foot([c5ResetBtn]));
 
-    const c6Metric = h('span', { className: 'hg-cell-metric', textContent: '68.0% · -0.9 dB' });
+    const c6Metric = metric('68.0% · -0.9 dB', 'Fader level in percent and decibels; 75% is 0 dB.');
     const c6Fill = h('div', { className: 'hg-fader-fill' });
     const c6Peak = h('div', { className: 'hg-fader-peak', style: 'bottom: 68%' });
     const c6Thumb = h('div', { className: 'hg-fader-thumb' });
@@ -489,16 +620,17 @@
       className: 'hg-fader-track-wrap',
       tabindex: '0',
       role: 'slider',
-      'aria-label': 'Target-Latched Vertical Fader',
+      'aria-label': 'Fader level, percent',
       'aria-orientation': 'vertical',
       'aria-valuemin': '0',
       'aria-valuemax': '100',
       'aria-valuenow': '68',
       'aria-valuetext': '68.0% (-0.9 dB)',
+      'data-tip': 'Pinch anywhere in this panel and move up or down; drag or arrows also work.',
     }, [h('div', { className: 'hg-fader-rail' }, [c6Fill]), c6Peak, c6Thumb]);
-    const c6BigPct = h('div', { className: 'hg-fader-big-val', textContent: '68.0%' });
-    const c6BigDb = h('div', { className: 'hg-fader-db-val', textContent: '-0.9 dB' });
-    const c6LatchBadge = h('span', { className: 'hg-fader-badge', textContent: 'READY' });
+    const c6BigPct = h('div', { className: 'ui-readout hg-fader-big-val', textContent: '68.0%' });
+    const c6BigDb = h('div', { className: 'ui-readout ui-readout--quiet hg-fader-db-val', textContent: '-0.9 dB' });
+    const c6LatchBadge = h('span', { className: 'ui-pill hg-fader-badge', textContent: 'READY', 'data-tip': 'Whether the fader is grabbed, by pointer or by pinch.' });
     const c6FaderArea = h('div', { className: 'hg-fader-layout' }, [
       h('div', { className: 'hg-fader-scale', 'aria-hidden': 'true' }, [
         h('span', { textContent: '+6 dB' }),
@@ -510,94 +642,95 @@
       c6Track,
       h('div', { className: 'hg-fader-readout-col' }, [c6BigPct, c6BigDb, c6LatchBadge]),
     ]);
-    const c6UnityBtn = h('button', { type: 'button', className: 'hg-btn', textContent: '0 dB (75%)' });
-    const wbCell06 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '06 Target-Latched Vertical Fader' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '06' }), h('span', { className: 'hg-cell-title', textContent: 'Target-Latched Fader' })]),
-        c6Metric,
-      ]),
-      c6FaderArea,
-      h('div', { className: 'hg-cell-foot' }, [h('span', { textContent: 'OFF-AXIS PINCH LATCH' }), c6UnityBtn]),
-    ]);
+    const c6UnityBtn = sm('0 dB', { 'data-tip': 'Set the fader to 0 dB, 75% of its travel.' });
+    const wbCell06 = instrument('06', 'Pinch Fader', '06 Pinch fader', 'Grab with a pinch anywhere in the panel, then move up or down.', c6Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush' }, [c6FaderArea]),
+      foot([c6UnityBtn]));
 
-    const c7Metric = h('span', { className: 'hg-cell-metric', textContent: 'VEL 0 px/s · γ=0.94' });
+    const c7Metric = metric('VEL 0 px/s', 'Scroll speed in pixels per second.');
     const c7Tape = h('div', {
-      className: 'hg-tape-list',
-      tabindex: '0',
-      role: 'listbox',
-      'aria-label': 'Momentum Scroll Specification Tape',
+      className: 'hg-tape-list', tabindex: '0', role: 'listbox', 'aria-label': 'Scroll tape of tracking settings',
       'aria-activedescendant': 'hg-tape-opt-0',
+      'data-tip': 'Two raised fingers scroll it with momentum; slow scrolls snap to rows.',
     });
     const c7VelBar = h('div', { className: 'hg-tape-vel-bar' });
-    const c7PosReadout = h('span', { textContent: 'ROW 01/28 · V-PEACE POSE' });
-    const c7FlickDown = h('button', { type: 'button', className: 'hg-btn', textContent: 'Flick ↓' });
-    const c7FlickUp = h('button', { type: 'button', className: 'hg-btn', textContent: 'Flick ↑' });
-    const wbCell07 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '07 V-Scroll Momentum Tape' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '07' }), h('span', { className: 'hg-cell-title', textContent: 'V-Scroll Momentum Tape' })]),
-        c7Metric,
-      ]),
-      h('div', { className: 'hg-tape-wrap' }, [
+    const c7PosReadout = h('span', { className: 'hg-foot-read', textContent: 'ROW 01/28 · PIN #01', 'data-tip': 'Top visible row, and the row you pinned by clicking.' });
+    const c7FlickDown = sm('Flick ↓', { 'aria-label': 'Flick down', 'data-tip': 'Throw the tape down, like a fast two-finger flick.' });
+    const c7FlickUp = sm('Flick ↑', { 'aria-label': 'Flick up', 'data-tip': 'Throw the tape up, like a fast two-finger flick.' });
+    const wbCell07 = instrument('07', 'Scroll Tape', '07 Scroll tape', '', c7Metric,
+      h('div', { className: 'ui-tile-body ui-tile-body--flush hg-tape-wrap' }, [
         c7Tape,
         h('div', { className: 'hg-tape-vel-rail', 'aria-hidden': 'true' }, [c7VelBar]),
       ]),
-      h('div', { className: 'hg-cell-foot' }, [
-        c7PosReadout,
-        h('div', { style: 'display:flex;gap:3px;' }, [c7FlickDown, c7FlickUp]),
-      ]),
-    ]);
+      foot([c7PosReadout, h('div', { className: 'hg-foot-btns' }, [c7FlickDown, c7FlickUp])]));
 
-    const c8Metric = h('span', { className: 'hg-cell-metric', textContent: 'TAP=MUTE · ≥14px=SWAP' });
-    const c8Bay = h('div', { className: 'hg-puck-bay', role: 'list', 'aria-label': 'Reorderable Signal Chain Pucks' });
-    const c8OrderReadout = h('span', { textContent: 'CHAIN: GATE → 1€ → PINCH → TWIST' });
-    const c8ResetBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Order' });
-    const wbCell08 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '08 Magnetic Signal Pucks' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '08' }), h('span', { className: 'hg-cell-title', textContent: 'Magnetic Signal Pucks' })]),
-        c8Metric,
-      ]),
-      h('div', { className: 'hg-cell-body' }, [c8Bay]),
-      h('div', { className: 'hg-cell-foot' }, [c8OrderReadout, c8ResetBtn]),
-    ]);
+    const c8Metric = metric('4/4 ON', 'Stages switched on. Demo only: tracking ignores this chain.');
+    const c8Bay = h('div', {
+      className: 'hg-puck-bay', role: 'list', 'aria-label': 'Signal chain stages',
+      'data-tip': 'Tap a stage to bypass it; drag it 14 px or more to reorder.',
+    });
+    const c8OrderReadout = h('span', { className: 'hg-foot-read', textContent: 'CHAIN: GATE → 1€ → PINCH → TWIST', 'data-tip': 'Stage order; brackets mark bypassed stages.' });
+    const c8ResetBtn = sm('Reset', { 'data-tip': 'Restore the default order and switch every stage on.' });
+    const wbCell08 = instrument('08', 'Signal Chain', '08 Signal chain', 'Demo of the processing stages; reordering does not change tracking.', c8Metric,
+      h('div', { className: 'ui-tile-body' }, [c8Bay]),
+      foot([c8OrderReadout, c8ResetBtn]));
 
-    const c9Metric = h('span', { className: 'hg-cell-metric', textContent: '0.04ms · ZERO-GC' });
-    const tuneMinCutoff = h('input', { type: 'range', className: 'hg-tuner-range', min: '0.30', max: '3.50', step: '0.05', value: '1.15' });
-    const valMinCutoff = h('span', { className: 'hg-tuner-val', textContent: '1.15Hz' });
-    const tuneBeta = h('input', { type: 'range', className: 'hg-tuner-range', min: '0.00', max: '2.00', step: '0.05', value: '0.85' });
-    const valBeta = h('span', { className: 'hg-tuner-val', textContent: '0.85' });
-    const tunePinch = h('input', { type: 'range', className: 'hg-tuner-range', min: '0.18', max: '0.34', step: '0.01', value: '0.28' });
-    const valPinch = h('span', { className: 'hg-tuner-val', textContent: '0.28' });
-    const tuneNoise = h('input', { type: 'range', className: 'hg-tuner-range', min: '0.000', max: '0.014', step: '0.0005', value: '0.0032' });
-    const valNoise = h('span', { className: 'hg-tuner-val', textContent: '0.32%' });
+    const c9Metric = metric('detect 0.04ms', 'Hand-model time per frame; a fixed 0.04 ms in simulated modes.');
+    const tuneMinCutoff = h('input', { type: 'range', className: 'ui-slider hg-tuner-range', min: '0.30', max: '3.50', step: '0.05', value: '1.15' });
+    const valMinCutoff = h('span', { className: 'ui-readout hg-tuner-val', textContent: '1.15Hz' });
+    const tuneBeta = h('input', { type: 'range', className: 'ui-slider hg-tuner-range', min: '0.00', max: '2.00', step: '0.05', value: '0.85' });
+    const valBeta = h('span', { className: 'ui-readout hg-tuner-val', textContent: '0.85' });
+    const tunePinch = h('input', { type: 'range', className: 'ui-slider hg-tuner-range', min: '0.18', max: '0.34', step: '0.01', value: '0.28' });
+    const valPinch = h('span', { className: 'ui-readout hg-tuner-val', textContent: '0.28' });
+    const tuneNoise = h('input', { type: 'range', className: 'ui-slider hg-tuner-range', min: '0.000', max: '0.014', step: '0.0005', value: '0.0032' });
+    const valNoise = h('span', { className: 'ui-readout hg-tuner-val', textContent: '0.32%' });
 
+    function tunerRow(label, tip, input, val) {
+      return h('label', { className: 'hg-tuner-row', 'data-tip': tip }, [h('span', { className: 'ui-label hg-tuner-label', textContent: label }), input, val]);
+    }
     const tunerRows = [
-      h('label', { className: 'hg-tuner-row' }, [h('span', { className: 'hg-tuner-label', textContent: '1€ MinCut' }), tuneMinCutoff, valMinCutoff]),
-      h('label', { className: 'hg-tuner-row' }, [h('span', { className: 'hg-tuner-label', textContent: '1€ Beta' }), tuneBeta, valBeta]),
-      h('label', { className: 'hg-tuner-row' }, [h('span', { className: 'hg-tuner-label', textContent: 'Pinch Eng' }), tunePinch, valPinch]),
-      h('label', { className: 'hg-tuner-row' }, [h('span', { className: 'hg-tuner-label', textContent: 'Sim Tremor' }), tuneNoise, valNoise]),
+      tunerRow('Cutoff', '1€ filter at rest: lower is steadier, higher follows faster.', tuneMinCutoff, valMinCutoff),
+      tunerRow('Beta', '1€ filter speed boost: higher drops smoothing sooner on fast moves.', tuneBeta, valBeta),
+      tunerRow('Pinch at', 'Finger gap, as a share of palm width, that starts a pinch.', tunePinch, valPinch),
+      tunerRow('Jitter', 'Random shake added to the simulated hand, to test the filter.', tuneNoise, valNoise),
     ];
 
-    const teleSpan = h('strong', { textContent: '0.14' });
-    const teleNz = h('strong', { textContent: '+0.94' });
-    const teleY = h('strong', { textContent: '0.50' });
-    const c9ChiralBtn = h('button', { type: 'button', className: 'hg-btn', 'aria-pressed': 'false', textContent: 'Chiral: Auto' });
-    const c9DefaultsBtn = h('button', { type: 'button', className: 'hg-btn', textContent: 'Defaults' });
+    const teleSpan = h('span', { className: 'ui-readout', textContent: '0.14' });
+    const teleNz = h('span', { className: 'ui-readout', textContent: '+0.94' });
+    const teleY = h('span', { className: 'ui-readout', textContent: '0.50' });
+    const c9ChiralBtn = sm('Chiral: Auto', { 'aria-pressed': 'false' });
+    const c9DefaultsBtn = sm('Defaults', { 'data-tip': 'Reset sliders, mapping, dial angle and chirality to their defaults.' });
 
-    const wbCell09 = h('section', { className: 'cell hg-wb-cell', 'aria-label': '09 Kinematic Tuner and Gates' }, [
-      h('div', { className: 'hg-cell-head' }, [
-        h('div', { className: 'hg-cell-title-group' }, [h('span', { className: 'hg-idx-badge', textContent: '09' }), h('span', { className: 'hg-cell-title', textContent: 'Kinematic Tuner & Gates' })]),
-        c9Metric,
-      ]),
-      h('div', { className: 'hg-cell-body' }, [
+    function teleKv(label, tip, val) {
+      return h('div', { className: 'hg-tele-kv', 'data-tip': tip }, [h('span', { className: 'ui-label', textContent: label }), val]);
+    }
+    const wbCell09 = instrument('09', 'Tuning', '09 Tuning and gate readings', '', c9Metric,
+      h('div', { className: 'ui-tile-body' }, [
         h('div', { className: 'hg-tuner-list' }, tunerRows),
         h('div', { className: 'hg-telemetry-strip' }, [
-          h('div', { className: 'hg-tele-kv' }, [h('span', { textContent: 's_palm' }), teleSpan]),
-          h('div', { className: 'hg-tele-kv' }, [h('span', { textContent: 'n_z 3D' }), teleNz]),
-          h('div', { className: 'hg-tele-kv' }, [h('span', { textContent: 'y_cam' }), teleY]),
+          teleKv('Span', 'Palm width as a share of the frame; the span gate needs 0.055.', teleSpan),
+          teleKv('Facing', 'How squarely the palm faces the camera, -1 to 1; needs 0.22.', teleNz),
+          teleKv('Height', 'Palm height in the frame, 0 top to 1 bottom; under 0.86 passes.', teleY),
         ]),
       ]),
-      h('div', { className: 'hg-cell-foot' }, [c9ChiralBtn, c9DefaultsBtn]),
-    ]);
+      foot([c9ChiralBtn, c9DefaultsBtn]));
+
+    // Map and Chiral labels + tips: one place, called by their handlers and by Defaults.
+    function syncMapChiralUi() {
+      const isClutch = engine.config.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH;
+      setAttr(mapModeBtn, 'aria-pressed', String(isClutch));
+      mapModeBtn.textContent = isClutch ? 'Map: Clutch' : 'Map: ROI';
+      setAttr(mapModeBtn, 'data-tip', isClutch
+        ? 'Clutch: moves like a trackpad, close your fist to lift. Click for ROI.'
+        : 'ROI: the middle of the camera view maps to the whole screen. Click for Clutch.');
+      const inv = Boolean(engine.config.invertChirality);
+      setAttr(c9ChiralBtn, 'aria-pressed', String(inv));
+      c9ChiralBtn.textContent = inv ? 'Chiral: Inv' : 'Chiral: Auto';
+      setAttr(c9ChiralBtn, 'data-tip', inv
+        ? 'Left and right hands are swapped for the facing check. Click for automatic.'
+        : 'Swap left and right hands if the facing gate rejects your open palm.');
+    }
+    syncMapChiralUi();
 
     const wbCells = [
       wbCell01, wbCell02, wbCell03, wbCell04, wbCell05, wbCell06, wbCell07, wbCell08, wbCell09,
@@ -608,21 +741,19 @@
       id: 'hand-gesture-page',
       className: 'hg-secondary-page',
       hidden: true,
-      'aria-label': 'Webcam Hand and Spatial Gesture Workbench',
+      'aria-label': 'Hand Cursor Studio',
     }, [
-      h('header', { className: 'hg-workbench-bar' }, [
-        h('div', { className: 'hg-wb-left' }, [
-          backBtn,
-          h('div', { className: 'hg-wb-brand' }, [
-            h('span', { textContent: '08 · HAND & GESTURE STUDIO' }),
-          ]),
-          h('div', { className: 'hg-mode-switch', role: 'group', 'aria-label': 'Tracking Input Source' }, [
+      h('header', { className: 'ui-studio-bar hg-studio-bar' }, [
+        h('span', { className: 'ui-tile-index', textContent: '08' }),
+        h('h2', { className: 'ui-studio-title', textContent: 'Hand Studio' }),
+        h('div', { className: 'hg-studio-ctl' }, [
+          h('div', { className: 'ui-seg', role: 'group', 'aria-label': 'Hand input' }, [
             modeSynthBtn, modeTourBtn, modeWebcamBtn, modePointerBtn,
           ]),
           mapModeBtn,
         ]),
-        h('div', { className: 'hg-wb-center' }, [gateSpan, gateFacing, gateKbd, gateArm, gateGesture]),
-        h('div', { className: 'hg-wb-right' }, [btnToggleKeys, fpsReadout]),
+        h('div', { className: 'hg-gates', role: 'group', 'aria-label': 'Tracking gates' }, [gateSpan, gateFacing, gateKbd, gateArm, gateGesture]),
+        h('div', { className: 'ui-studio-actions' }, [fpsReadout, btnToggleKeys, backBtn]),
       ]),
       keysDrawer,
       camBanner,
@@ -636,36 +767,36 @@
     // -----------------------------------------------------------------------
     const chordLine = svgEl('line', {
       x1: 0, y1: 0, x2: 0, y2: 0,
-      stroke: '#2563eb', 'stroke-width': '1.5', 'stroke-dasharray': '4 3', visibility: 'hidden',
+      stroke: PAL.accent, 'stroke-width': '1.5', 'stroke-dasharray': '4 3', visibility: 'hidden',
     });
     const dragTetherLine = svgEl('line', {
       x1: 0, y1: 0, x2: 0, y2: 0,
-      stroke: 'rgba(37,99,235,0.45)', 'stroke-width': '1.25', 'stroke-dasharray': '2 2', visibility: 'hidden',
+      stroke: withAlpha(PAL.accent, 0.55), 'stroke-width': '1.25', 'stroke-dasharray': '2 2', visibility: 'hidden',
     });
     const lockOriginRing = svgEl('circle', {
       cx: 0, cy: 0, r: '14',
-      fill: 'rgba(37,99,235,0.06)', stroke: '#2563eb', 'stroke-width': '1', 'stroke-dasharray': '2 2', visibility: 'hidden',
+      fill: withAlpha(PAL.accent, 0.06), stroke: PAL.accent, 'stroke-width': '1', 'stroke-dasharray': '2 2', visibility: 'hidden',
     });
     const cursorDwellRing = svgEl('circle', {
-      cx: '22', cy: '22', r: '16', stroke: '#2563eb', 'stroke-width': '2.2',
+      cx: '22', cy: '22', r: '16', stroke: PAL.ink, 'stroke-width': '2.2',
       'stroke-linecap': 'round', 'stroke-dasharray': '100.53', 'stroke-dashoffset': '100.53',
       transform: 'rotate(-90 22 22)',
     });
-    const cursorCore = svgEl('circle', { cx: '22', cy: '22', r: '3.2', fill: '#2563eb' });
+    const cursorCore = svgEl('circle', { cx: '22', cy: '22', r: '3.2', fill: PAL.ink });
     const cursorPrimaryTag = h('span', { className: 'hg-spatial-cursor-tag', textContent: 'ARMED' });
     const cursorPrimary = h('div', { className: 'hg-spatial-cursor' }, [
       svgEl('svg', { width: '44', height: '44', viewBox: '0 0 44 44', fill: 'none' }, [
-        svgEl('circle', { cx: '22', cy: '22', r: '16', stroke: '#d4d4d8', 'stroke-width': '1.5' }),
+        svgEl('circle', { cx: '22', cy: '22', r: '16', stroke: PAL.line, 'stroke-width': '1.5' }),
         cursorDwellRing,
-        svgEl('path', { d: 'M22 11V17M22 27V33M11 22H17M27 22H33', stroke: '#09090b', 'stroke-width': '1.4', 'stroke-linecap': 'round' }),
+        svgEl('path', { d: 'M22 11V17M22 27V33M11 22H17M27 22H33', stroke: PAL.ink, 'stroke-width': '1.4', 'stroke-linecap': 'round' }),
         cursorCore,
       ]),
       cursorPrimaryTag,
     ]);
     const cursorSecondary = h('div', { className: 'hg-spatial-cursor' }, [
       svgEl('svg', { width: '44', height: '44', viewBox: '0 0 44 44', fill: 'none' }, [
-        svgEl('circle', { cx: '22', cy: '22', r: '13', stroke: '#2563eb', 'stroke-width': '1.5', 'stroke-dasharray': '3 2' }),
-        svgEl('circle', { cx: '22', cy: '22', r: '3', fill: '#2563eb' }),
+        svgEl('circle', { cx: '22', cy: '22', r: '13', stroke: PAL.ink2, 'stroke-width': '1.5', 'stroke-dasharray': '3 2' }),
+        svgEl('circle', { cx: '22', cy: '22', r: '3', fill: PAL.ink2 }),
       ]),
       h('span', { className: 'hg-spatial-cursor-tag', textContent: 'H2' }),
     ]);
@@ -739,7 +870,7 @@
         }, [
           h('div', { className: 'hg-puck-top' }, [
             h('span', { className: 'hg-puck-slot-num', textContent: '0' + (i + 1) }),
-            h('span', { className: 'hg-puck-state-dot', textContent: p.bypassed ? 'BYP' : 'ON' }),
+            h('span', { className: 'hg-puck-state-dot', textContent: p.bypassed ? 'OFF' : 'ON' }),
           ]),
           h('div', { className: 'hg-puck-name', textContent: p.name }),
           h('div', { className: 'hg-puck-sub', textContent: p.sub }),
@@ -747,6 +878,8 @@
         c8Bay.appendChild(card);
         return card;
       });
+      const onCount = c8.pucks.filter(function (p) { return !p.bypassed; }).length;
+      c8Metric.textContent = onCount + '/' + c8.pucks.length + ' ON';
       c8OrderReadout.textContent =
         'CHAIN: ' +
         c8.pucks
@@ -887,8 +1020,7 @@
       primPinchRow.classList.remove('is-lit');
       primRotRow.classList.remove('is-lit');
       primUpDnRow.classList.remove('is-lit');
-      portalStatePill.className = 'hg-portal-pill';
-      portalStatePill.textContent = 'STANDBY';
+      setPortalPill('STANDBY', 'idle', PILL_TIP_STANDBY);
     }
 
     // Any manual rig control while Auto Tour (or Pointer) is driving takes over as Synth Rig, so the
@@ -1014,45 +1146,54 @@
       miniVideo.classList.toggle('is-live', isLive && !isSecondaryOpen);
       wbVideo.classList.toggle('is-live', isLive && isSecondaryOpen);
 
-      setAttr(portalCamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM || (!isSecondaryOpen && camPending)));
-      setAttr(portalSimBtn, 'aria-pressed', String(!camPending && (mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR)));
-
       setAttr(modeSynthBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.SYNTH));
       setAttr(modeTourBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.TOUR));
       setAttr(modeWebcamBtn, 'aria-pressed', String(mode === TRACKER_MODE.WEBCAM || camPending));
       setAttr(modePointerBtn, 'aria-pressed', String(!camPending && mode === TRACKER_MODE.POINTER));
 
-      const mapSuffix = engine.config.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH' : 'ROI [.22–.78]';
+      const mapSuffix = engine.config.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH' : 'ROI';
       if (camStatus === CAMERA_STATUS.LOADING_MODEL) c1Metric.textContent = 'LOADING MODEL…';
       else if (camStatus === CAMERA_STATUS.REQUESTING_CAM) c1Metric.textContent = 'REQUESTING CAM…';
       else if (isLive) c1Metric.textContent = 'CAM ' + delegate + ' · ' + mapSuffix;
-      else if (mode === TRACKER_MODE.TOUR) c1Metric.textContent = 'AUTO TOUR · ' + mapSuffix;
-      else if (mode === TRACKER_MODE.POINTER) c1Metric.textContent = 'POINTER DIRECT MODE';
-      else c1Metric.textContent = 'SYNTH · ' + mapSuffix;
+      else if (mode === TRACKER_MODE.TOUR) c1Metric.textContent = 'SIM TOUR · ' + mapSuffix;
+      else if (mode === TRACKER_MODE.POINTER) c1Metric.textContent = 'POINTER';
+      else c1Metric.textContent = 'SIM · ' + mapSuffix;
 
-      setAttr(portalCamBtn, 'aria-busy', String(camPending));
+      // The tracker's failure emit can still report `isWebcamStarting` (its promise clears after the
+      // emit), so the tile's toggle and pill treat a reported error as "not pending".
+      const camBusy = camPending && !camError;
+      setAttr(portalCamBtn, 'aria-busy', String(camBusy));
+      syncPortalToggles(mode, camBusy, isSecondaryOpen);
       if (camError) {
         camBannerMsg.textContent = camError;
         camBanner.hidden = false;
-        portalStatusText.textContent = camError;
+        setPortalStatus(camError, camError);
       } else if (camPending) {
         camBanner.hidden = true;
-        portalStatusText.textContent = camStatus === CAMERA_STATUS.REQUESTING_CAM ? 'Requesting camera…' : 'Loading hand model…';
+        setPortalStatus(camStatus === CAMERA_STATUS.REQUESTING_CAM ? 'Requesting camera…' : 'Loading hand model…', '');
       } else if (isLive) {
         camBanner.hidden = true;
-        portalStatusText.textContent = 'Live webcam (' + delegate + ') · Raise open palm to control cursor';
+        setPortalStatus('Live webcam (' + delegate + '): hold an open palm still to take the cursor', '');
       } else if (mode === TRACKER_MODE.SYNTH || mode === TRACKER_MODE.TOUR) {
         camBanner.hidden = true;
-        portalStatusText.textContent = 'Simulated hand cursor active across grid';
+        setPortalStatus('Simulated hand is driving the cursor across this page', '');
       } else {
         camBanner.hidden = true;
-        portalStatusText.textContent = 'Raise open palm 200ms · Pinch · Twist · V-Scroll';
+        setPortalStatus(PORTAL_HINT, '');
       }
       if (mode === TRACKER_MODE.IDLE && !isSecondaryOpen) {
         resetPortalPreview();
-        if (camPending) {
-          portalStatePill.className = 'hg-portal-pill is-warn';
-          portalStatePill.textContent = 'STARTING';
+        // Set after the reset: during a request and after a failure the mode is still IDLE.
+        if (camBusy) {
+          setPortalPill(
+            camStatus === CAMERA_STATUS.REQUESTING_CAM ? 'WAITING' : 'LOADING',
+            'attention',
+            camStatus === CAMERA_STATUS.REQUESTING_CAM
+              ? 'Waiting for camera permission. Press Cam again to cancel.'
+              : 'Camera is on; loading the hand-tracking model. Press Cam to cancel.'
+          );
+        } else if (camError) {
+          setPortalPill('NO CAM', 'attention', camError);
         }
       }
       rectsDirty = true;
@@ -1126,9 +1267,7 @@
           ? MAPPING_MODE.RELATIVE_CLUTCH
           : MAPPING_MODE.ABSOLUTE_ROI;
       engine.updateConfig({ mappingMode: next });
-      const isClutch = next === MAPPING_MODE.RELATIVE_CLUTCH;
-      setAttr(mapModeBtn, 'aria-pressed', String(isClutch));
-      mapModeBtn.textContent = isClutch ? 'Map: Clutch' : 'Map: ROI';
+      syncMapChiralUi();
       tracker.notifyStatus();
     });
 
@@ -1613,8 +1752,8 @@
 
     function syncRotationSourceUi() {
       const src = engine.config.rotationSource;
-      c4VecBtn.textContent = src === ROTATION_SOURCE.FUSED ? 'Vec: Fused' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'Vec: Bar' : 'Vec: Lever';
-      c4DzStatus.textContent = src === ROTATION_SOURCE.FUSED ? 'DZ ±3.5° · FUSED 72/28' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'DZ ±3.5° · L17–L5 BAR' : 'DZ ±3.5° · MID(4,8)–L0';
+      c4VecBtn.textContent = src === ROTATION_SOURCE.FUSED ? 'Angle: Fused' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'Angle: Knuckles' : 'Angle: Wrist';
+      c4DzStatus.textContent = src === ROTATION_SOURCE.FUSED ? 'DEAD ZONE ±3.5° · FUSED' : src === ROTATION_SOURCE.KNUCKLE_BAR ? 'DEAD ZONE ±3.5° · KNUCKLES' : 'DEAD ZONE ±3.5° · WRIST';
     }
 
     tunePinch.addEventListener('input', function () {
@@ -1632,8 +1771,7 @@
     c9ChiralBtn.addEventListener('click', function () {
       const next = !engine.config.invertChirality;
       engine.updateConfig({ invertChirality: next });
-      setAttr(c9ChiralBtn, 'aria-pressed', String(next));
-      c9ChiralBtn.textContent = next ? 'Chiral: Inv' : 'Chiral: Auto';
+      syncMapChiralUi();
     });
     c9DefaultsBtn.addEventListener('click', function () {
       engine.updateConfig(DEFAULT_CONFIG);
@@ -1646,10 +1784,7 @@
       valPinch.textContent = DEFAULT_CONFIG.pinchEngage.toFixed(2);
       tuneNoise.value = '0.0032';
       valNoise.textContent = '0.32%';
-      setAttr(c9ChiralBtn, 'aria-pressed', 'false');
-      c9ChiralBtn.textContent = 'Chiral: Auto';
-      setAttr(mapModeBtn, 'aria-pressed', 'false');
-      mapModeBtn.textContent = 'Map: ROI';
+      syncMapChiralUi();
       syncSchmittMarks();
       syncRotationSourceUi();
       tracker.notifyStatus();
@@ -1740,13 +1875,14 @@
           setAttr(line, 'y1', (lm[a + 1] * 90).toFixed(1));
           setAttr(line, 'x2', ((1 - lm[b]) * 120).toFixed(1));
           setAttr(line, 'y2', (lm[b + 1] * 90).toFixed(1));
-          setAttr(line, 'stroke', s0.gateFacingOk ? '#52525b' : '#e11d48');
+          setAttr(line, 'stroke', s0.gateFacingOk ? PAL.ink2 : PAL.accent);
         }
         setAttr(miniPinchLine, 'x1', ((1 - lm[LM.THUMB_TIP * 3]) * 120).toFixed(1));
         setAttr(miniPinchLine, 'y1', (lm[LM.THUMB_TIP * 3 + 1] * 90).toFixed(1));
         setAttr(miniPinchLine, 'x2', ((1 - lm[LM.INDEX_TIP * 3]) * 120).toFixed(1));
         setAttr(miniPinchLine, 'y2', (lm[LM.INDEX_TIP * 3 + 1] * 90).toFixed(1));
-        setAttr(miniPinchLine, 'stroke', s0.pinched ? '#2563eb' : '#e11d48');
+        setAttr(miniPinchLine, 'stroke', s0.pinched ? PAL.accent : PAL.ink3);
+        setAttr(miniPinchLine, 'stroke-dasharray', s0.pinched ? 'none' : '3 3');
         setAttr(miniAnchorDot, 'cx', ((1 - s0.anchorCamX) * 120).toFixed(1));
         setAttr(miniAnchorDot, 'cy', (s0.anchorCamY * 90).toFixed(1));
         setAttr(miniAnchorRing, 'cx', ((1 - s0.anchorCamX) * 120).toFixed(1));
@@ -1763,15 +1899,16 @@
       primRotRow.classList.toggle('is-lit', s0.twistBrokenOut);
       primUpDnRow.classList.toggle('is-lit', s0.vScrollActive);
 
+      const sim = tracker.mode !== TRACKER_MODE.WEBCAM;
       if (s0.state === HAND_STATE.ARMED) {
-        portalStatePill.className = 'hg-portal-pill is-armed';
-        portalStatePill.textContent = s0.pinched ? 'PINCHED' : 'ARMED';
-      } else if (s0.state === HAND_STATE.ARMING || s0.state === HAND_STATE.COASTING) {
-        portalStatePill.className = 'hg-portal-pill is-warn';
-        portalStatePill.textContent = s0.state === HAND_STATE.ARMING ? 'ARMING' : 'COAST';
+        if (s0.pinched) setPortalPill('PINCHED', 'attention', 'Pinch held: a click or drag is in progress.');
+        else setPortalPill('ARMED', 'attention', sim ? 'The simulated hand controls the cursor and can click.' : 'Your hand controls the cursor. Pinch to click.');
+      } else if (s0.state === HAND_STATE.ARMING) {
+        setPortalPill('ARMING', 'attention', 'Open palm seen; hold still for 0.2 s to take the cursor.');
+      } else if (s0.state === HAND_STATE.COASTING) {
+        setPortalPill('COAST', 'attention', 'Hand lost for a moment; the cursor holds for a few frames.');
       } else {
-        portalStatePill.className = 'hg-portal-pill';
-        portalStatePill.textContent = 'IDLE';
+        setPortalPill('IDLE', 'idle', sim ? 'Simulated cursor is on but not armed yet.' : 'Camera is on. Hold an open palm still to take the cursor.');
       }
     }
 
@@ -2028,20 +2165,21 @@
       cursorPrimary.style.transform = 'translate3d(' + px.toFixed(1) + 'px, ' + py.toFixed(1) + 'px, 0)';
       setAttr(cursorDwellRing, 'stroke-dashoffset', (CIRC_R16 * (1 - s0.armProgress)).toFixed(2));
 
+      // Ink and one accent: the tag text names the state; colour only says quiet, ready or active.
       let tag = 'IDLE';
-      let color = '#94a3b8';
-      if (s0.state === HAND_STATE.ARMING) { tag = 'ARM ' + Math.round(s0.armProgress * 200) + 'ms'; color = '#d97706'; }
-      else if (s0.state === HAND_STATE.COASTING) { tag = 'COAST ' + s0.coastFrames + '/4'; color = '#d97706'; }
+      let color = PAL.ink3;
+      if (s0.state === HAND_STATE.ARMING) { tag = 'ARM ' + Math.round(s0.armProgress * 200) + 'ms'; color = PAL.ink; }
+      else if (s0.state === HAND_STATE.COASTING) { tag = 'COAST ' + s0.coastFrames + '/4'; color = PAL.ink3; }
       else if (s0.state === HAND_STATE.ARMED) {
-        if (events.twoHandActive) { tag = '2H ' + events.twoHandScaleRatio.toFixed(2) + '×'; color = '#2563eb'; }
-        else if (s0.clutchReleased) { tag = 'CLUTCH FREE'; color = '#64748b'; }
-        else if (s0.pinchMode === PINCH_MODE.CLICK_LOCK) { tag = 'LOCK ' + s0.pinchSlipPx.toFixed(0) + '/14px'; color = '#e11d48'; }
-        else if (s0.pinchMode === PINCH_MODE.DRAG) { tag = s0.twistBrokenOut ? ('DRAG ' + s0.twistTotalDeg.toFixed(0) + '°') : 'DRAG'; color = '#2563eb'; }
-        else if (s0.vScrollActive) { tag = 'V-SCROLL'; color = '#d97706'; }
-        else if (s0.velocityDamped) { tag = 'DAMP 0.08×'; color = '#d97706'; }
-        else { tag = 'ARMED'; color = '#059669'; }
-      } else if (!s0.gateFacingOk) { tag = 'DORSAL REJ'; color = '#e11d48'; }
-      else if (!s0.gateKeyboardOk) { tag = 'KBD GUARD'; color = '#d97706'; }
+        if (events.twoHandActive) { tag = '2H ' + events.twoHandScaleRatio.toFixed(2) + '×'; color = PAL.accent; }
+        else if (s0.clutchReleased) { tag = 'CLUTCH FREE'; color = PAL.ink3; }
+        else if (s0.pinchMode === PINCH_MODE.CLICK_LOCK) { tag = 'LOCK ' + s0.pinchSlipPx.toFixed(0) + '/14px'; color = PAL.accent; }
+        else if (s0.pinchMode === PINCH_MODE.DRAG) { tag = s0.twistBrokenOut ? ('DRAG ' + s0.twistTotalDeg.toFixed(0) + '°') : 'DRAG'; color = PAL.accent; }
+        else if (s0.vScrollActive) { tag = 'SCROLL'; color = PAL.accent; }
+        else if (s0.velocityDamped) { tag = 'DAMP 0.08×'; color = PAL.ink; }
+        else { tag = 'ARMED'; color = PAL.ink; }
+      } else if (!s0.gateFacingOk) { tag = 'BACK OF HAND'; color = PAL.accent; }
+      else if (!s0.gateKeyboardOk) { tag = 'KBD ZONE'; color = PAL.accent; }
 
       setAttr(cursorDwellRing, 'stroke', color);
       setAttr(cursorCore, 'fill', color);
@@ -2098,16 +2236,16 @@
       ctx.clearRect(0, 0, w, hPx);
 
       if (tracker.mode !== TRACKER_MODE.WEBCAM) {
-        ctx.fillStyle = '#e4e4e7';
+        ctx.fillStyle = PAL.hairline;
         for (let gx = 14; gx < w; gx += 16) {
           for (let gy = 14; gy < hPx; gy += 16) ctx.fillRect(gx, gy, 1.2, 1.2);
         }
       }
 
       const kbdY = cfg.keyboardExclusionY * hPx;
-      ctx.fillStyle = 'rgba(217, 119, 6, 0.06)';
+      ctx.fillStyle = CAN.accentA05;
       ctx.fillRect(0, kbdY, w, hPx - kbdY);
-      ctx.strokeStyle = 'rgba(217, 119, 6, 0.45)';
+      ctx.strokeStyle = CAN.accentA45;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
@@ -2115,18 +2253,18 @@
       ctx.lineTo(w, kbdY);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = '#b45309';
-      ctx.font = '600 8.5px ui-monospace, monospace';
-      ctx.fillText('KBD EXCLUSION ≥ 0.86', 6, hPx - 4);
+      ctx.fillStyle = PAL.accent;
+      ctx.font = CAN.font;
+      ctx.fillText('KEYBOARD ZONE', 6, hPx - 5);
 
       const rx = cfg.roiMinX * w;
       const ry = cfg.roiMinY * hPx;
       const rw = (cfg.roiMaxX - cfg.roiMinX) * w;
       const rh = (cfg.roiMaxY - cfg.roiMinY) * hPx;
-      ctx.strokeStyle = '#cbd5e1';
+      ctx.strokeStyle = PAL.line;
       ctx.strokeRect(rx, ry, rw, rh);
       const tk = 7;
-      ctx.strokeStyle = '#64748b';
+      ctx.strokeStyle = PAL.ink3;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(rx, ry + tk); ctx.lineTo(rx, ry); ctx.lineTo(rx + tk, ry);
@@ -2134,23 +2272,24 @@
       ctx.moveTo(rx, ry + rh - tk); ctx.lineTo(rx, ry + rh); ctx.lineTo(rx + tk, ry + rh);
       ctx.moveTo(rx + rw - tk, ry + rh); ctx.lineTo(rx + rw, ry + rh); ctx.lineTo(rx + rw, ry + rh - tk);
       ctx.stroke();
-      ctx.fillStyle = '#52525b';
-      ctx.font = '500 8.5px ui-monospace, monospace';
-      ctx.fillText(cfg.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'REL CLUTCH (FIST=FREE)' : 'ROI [0.22..0.78]', rx + 4, ry + 10);
+      ctx.fillStyle = PAL.ink3;
+      ctx.font = CAN.font;
+      ctx.fillText(cfg.mappingMode === MAPPING_MODE.RELATIVE_CLUTCH ? 'CLUTCH: FIST LIFTS' : 'CURSOR AREA', rx + 4, ry + 12);
 
       if (s1.visible) drawSingleHandSkeleton(ctx, s1, w, hPx, false);
       if (s0.visible) drawSingleHandSkeleton(ctx, s0, w, hPx, true);
       else if (s0.state === HAND_STATE.COASTING) {
         const ax = (1 - s0.anchorCamX) * w;
         const ay = s0.anchorCamY * hPx;
-        ctx.strokeStyle = '#d97706';
+        ctx.strokeStyle = PAL.ink3;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([3, 2]);
         ctx.beginPath();
         ctx.arc(ax, ay, 14, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = '#b45309';
+        ctx.fillStyle = PAL.ink3;
+        ctx.font = CAN.font;
         ctx.fillText('COAST ' + s0.coastFrames + '/4', ax - 24, ay - 18);
       }
     }
@@ -2166,7 +2305,7 @@
       const x17 = (1 - lm[LM.PINKY_MCP * 3]) * w;
       const y17 = lm[LM.PINKY_MCP * 3 + 1] * hPx;
 
-      ctx.fillStyle = slot.gateFacingOk ? 'rgba(37, 99, 235, 0.10)' : 'rgba(225, 29, 72, 0.12)';
+      ctx.fillStyle = slot.gateFacingOk ? CAN.inkA06 : CAN.accentA14;
       ctx.beginPath();
       ctx.moveTo(x0, y0);
       ctx.lineTo(x5, y5);
@@ -2174,14 +2313,14 @@
       ctx.closePath();
       ctx.fill();
 
-      ctx.strokeStyle = isPrimary ? '#2563eb' : '#64748b';
+      ctx.strokeStyle = isPrimary ? PAL.ink : PAL.ink3;
       ctx.lineWidth = 2.2;
       ctx.beginPath();
       ctx.moveTo(x5, y5);
       ctx.lineTo(x17, y17);
       ctx.stroke();
 
-      ctx.strokeStyle = slot.gateFacingOk ? '#52525b' : '#e11d48';
+      ctx.strokeStyle = slot.gateFacingOk ? PAL.ink2 : PAL.accent;
       ctx.lineWidth = 1.25;
       ctx.beginPath();
       for (let i = 0; i < HAND_BONES.length; i += 2) {
@@ -2196,7 +2335,7 @@
       const y4 = lm[LM.THUMB_TIP * 3 + 1] * hPx;
       const x8 = (1 - lm[LM.INDEX_TIP * 3]) * w;
       const y8 = lm[LM.INDEX_TIP * 3 + 1] * hPx;
-      ctx.strokeStyle = slot.pinched ? '#2563eb' : '#e11d48';
+      ctx.strokeStyle = slot.pinched ? PAL.accent : PAL.ink3;
       ctx.lineWidth = slot.pinched ? 2.2 : 1.2;
       ctx.setLineDash(slot.pinched ? [] : [2, 2]);
       ctx.beginPath();
@@ -2210,8 +2349,8 @@
         const jx = (1 - lm[jb]) * w;
         const jy = lm[jb + 1] * hPx;
         const isTip = j === 4 || j === 8 || j === 12 || j === 16 || j === 20;
-        ctx.fillStyle = j === 8 ? '#e11d48' : (isTip ? '#18181b' : '#ffffff');
-        ctx.strokeStyle = '#18181b';
+        ctx.fillStyle = j === 8 ? PAL.accent : (isTip ? PAL.ink : PAL.surface);
+        ctx.strokeStyle = PAL.ink;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(jx, jy, isTip ? 2.8 : 2.1, 0, Math.PI * 2);
@@ -2222,12 +2361,12 @@
       if (!isPrimary) return;
       const ax = (1 - slot.anchorCamX) * w;
       const ay = slot.anchorCamY * hPx;
-      ctx.strokeStyle = slot.state === HAND_STATE.ARMED ? '#059669' : '#2563eb';
+      ctx.strokeStyle = slot.state === HAND_STATE.ARMED ? PAL.ink : PAL.ink3;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(ax, ay, 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * slot.armProgress);
       ctx.stroke();
-      ctx.fillStyle = '#2563eb';
+      ctx.fillStyle = PAL.accent;
       ctx.beginPath();
       ctx.arc(ax, ay, 3.2, 0, Math.PI * 2);
       ctx.fill();
@@ -2239,7 +2378,7 @@
       const w = canvasSizes.scopeW;
       const hPx = canvasSizes.scopeH;
       const scope = engine.scope;
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = PAL.surface;
       ctx.fillRect(0, 0, w, hPx);
 
       const splitX = Math.floor(w * 0.47);
@@ -2247,9 +2386,9 @@
       const pw = Math.max(24, splitX - m * 2);
       const ph = Math.max(24, hPx - m * 2);
 
-      ctx.fillStyle = '#f8f9fb';
+      ctx.fillStyle = PAL.well;
       ctx.fillRect(m, m, pw, ph);
-      ctx.strokeStyle = '#e5e7eb';
+      ctx.strokeStyle = PAL.hairline;
       ctx.lineWidth = 1;
       ctx.strokeRect(m, m, pw, ph);
       ctx.beginPath();
@@ -2261,7 +2400,7 @@
 
       const wx = m + c2.waypointU * pw;
       const wy = m + c2.waypointV * ph;
-      ctx.strokeStyle = '#94a3b8';
+      ctx.strokeStyle = PAL.ink3;
       ctx.beginPath();
       ctx.moveTo(wx - 6, wy); ctx.lineTo(wx + 6, wy);
       ctx.moveTo(wx, wy - 6); ctx.lineTo(wx, wy + 6);
@@ -2274,7 +2413,7 @@
       if (c2.trailCount < 56) c2.trailCount++;
 
       if (c2.trailCount > 2) {
-        ctx.strokeStyle = 'rgba(37, 99, 235, 0.35)';
+        ctx.strokeStyle = CAN.inkA25;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
         for (let k = 0; k < c2.trailCount; k++) {
@@ -2287,12 +2426,12 @@
         ctx.stroke();
       }
 
-      ctx.strokeStyle = '#e11d48';
+      ctx.strokeStyle = PAL.accent;
       ctx.lineWidth = 1.2;
       ctx.beginPath();
       ctx.arc(m + s0.rawU * pw, m + s0.rawV * ph, 3.5, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.fillStyle = '#2563eb';
+      ctx.fillStyle = PAL.ink;
       ctx.beginPath();
       ctx.arc(m + s0.cursorU * pw, m + s0.cursorV * ph, 4, 0, Math.PI * 2);
       ctx.fill();
@@ -2303,10 +2442,10 @@
       const topY = 8;
       const botY = topY + topH + 4;
       const botH = Math.max(18, hPx - botY - 8);
-      ctx.fillStyle = '#f8f9fb';
+      ctx.fillStyle = PAL.well;
       ctx.fillRect(ox, topY, ow, topH);
       ctx.fillRect(ox, botY, ow, botH);
-      ctx.strokeStyle = '#e5e7eb';
+      ctx.strokeStyle = PAL.hairline;
       ctx.strokeRect(ox, topY, ow, topH);
       ctx.strokeRect(ox, botY, ow, botH);
 
@@ -2327,7 +2466,7 @@
         const mid = 0.5 * (minVal + maxVal);
         const halfSpan = Math.max(0.028, (maxVal - minVal) * 0.62);
 
-        ctx.fillStyle = 'rgba(217, 119, 6, 0.14)';
+        ctx.fillStyle = CAN.accentA10;
         for (let i = 0; i < n; i++) {
           const bi = (scope.head - n + i + cap) % cap;
           if (scope.damped[bi]) {
@@ -2350,18 +2489,18 @@
         };
 
         const normOsc = function (v) { return clamp((v - mid) / (halfSpan * 2) + 0.5, 0.04, 0.96); };
-        drawTrace(scope.rawX, 'rgba(225, 29, 72, 0.72)', 1.05, normOsc, topY, topH);
-        drawTrace(scope.smoothX, '#2563eb', 1.8, normOsc, topY, topH);
-        drawTrace(scope.speed, '#059669', 1.25, function (v) { return clamp(v / 2.2, 0.04, 0.95); }, botY, botH);
+        drawTrace(scope.rawX, CAN.accentA70, 1.05, normOsc, topY, topH);
+        drawTrace(scope.smoothX, PAL.ink, 1.8, normOsc, topY, topH);
+        drawTrace(scope.speed, PAL.ink3, 1.25, function (v) { return clamp(v / 2.2, 0.04, 0.95); }, botY, botH);
       }
 
-      ctx.font = '600 8px ui-monospace, monospace';
-      ctx.fillStyle = '#e11d48';
-      ctx.fillText('RAW', ox + 4, topY + 9);
-      ctx.fillStyle = '#2563eb';
-      ctx.fillText('1-EURO', ox + 26, topY + 9);
-      ctx.fillStyle = '#047857';
-      ctx.fillText('||V||', ox + 4, botY + 9);
+      ctx.font = CAN.fontBold;
+      ctx.fillStyle = PAL.accent;
+      ctx.fillText('RAW', ox + 4, topY + 11);
+      ctx.fillStyle = PAL.ink;
+      ctx.fillText('SMOOTHED', ox + 30, topY + 11);
+      ctx.fillStyle = PAL.ink3;
+      ctx.fillText('SPEED', ox + 4, botY + 11);
     }
 
     function drawCell04Dial(s0) {
@@ -2373,8 +2512,8 @@
       const cy = hPx * 0.5;
       const r = Math.max(28, Math.min(w, hPx) * 0.41);
 
-      ctx.fillStyle = '#f8f9fb';
-      ctx.strokeStyle = '#e4e4e7';
+      ctx.fillStyle = PAL.well;
+      ctx.strokeStyle = PAL.hairline;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(cx, cy, r + 6, 0, Math.PI * 2);
@@ -2382,7 +2521,7 @@
       ctx.stroke();
 
       const dzRad = (engine.config.twistDeadzoneDeg * Math.PI) / 180;
-      ctx.fillStyle = 'rgba(217, 119, 6, 0.18)';
+      ctx.fillStyle = CAN.accentA14;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.arc(cx, cy, r + 4, -Math.PI / 2 - dzRad * 2.2, -Math.PI / 2 + dzRad * 2.2);
@@ -2393,7 +2532,7 @@
         const a = (i / 36) * Math.PI * 2 - Math.PI / 2;
         const major = i % 3 === 0;
         const r0 = major ? r - 6 : r - 3;
-        ctx.strokeStyle = major ? '#71717a' : '#d4d4d8';
+        ctx.strokeStyle = major ? PAL.ink3 : PAL.line;
         ctx.lineWidth = major ? 1.3 : 1;
         ctx.beginPath();
         ctx.moveTo(cx + Math.cos(a) * r0, cy + Math.sin(a) * r0);
@@ -2403,7 +2542,7 @@
 
       const curRad = (c4.angleDeg * Math.PI) / 180;
       if (Math.abs(curRad) > 0.01) {
-        ctx.strokeStyle = '#2563eb';
+        ctx.strokeStyle = PAL.accent;
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(cx, cy, r - 9, -Math.PI / 2, -Math.PI / 2 + clamp(curRad, -Math.PI * 2, Math.PI * 2), curRad < 0);
@@ -2411,8 +2550,8 @@
       }
 
       const knobR = r * 0.66;
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = s0.twistBrokenOut && spatial.latchedType === 'c4-dial' ? '#2563eb' : '#18181b';
+      ctx.fillStyle = PAL.surface;
+      ctx.strokeStyle = s0.twistBrokenOut && spatial.latchedType === 'c4-dial' ? PAL.accent : PAL.ink;
       ctx.lineWidth = 1.6;
       ctx.beginPath();
       ctx.arc(cx, cy, knobR, 0, Math.PI * 2);
@@ -2420,7 +2559,7 @@
       ctx.stroke();
 
       const ptrAngle = -Math.PI / 2 + curRad;
-      ctx.strokeStyle = '#2563eb';
+      ctx.strokeStyle = PAL.accent;
       ctx.lineWidth = 2.2;
       ctx.lineCap = 'round';
       ctx.beginPath();
@@ -2428,8 +2567,8 @@
       ctx.lineTo(cx + Math.cos(ptrAngle) * (knobR - 4), cy + Math.sin(ptrAngle) * (knobR - 4));
       ctx.stroke();
 
-      ctx.fillStyle = '#09090b';
-      ctx.font = '600 10px ui-monospace, monospace';
+      ctx.fillStyle = PAL.ink;
+      ctx.font = CAN.fontBold;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const turns = Math.trunc(c4.angleDeg / 360);
@@ -2442,20 +2581,20 @@
       const st = tracker.stats;
       if (tracker.mode === TRACKER_MODE.TOUR) syncRigButtons();
       fpsReadout.textContent = Math.round(st.fps) + ' FPS · ' + st.frameMs.toFixed(1) + 'ms';
-      gateSpan.className = 'hg-gate-pill' + (s0.visible && s0.gateSpanOk ? ' is-pass' : '');
-      gateFacing.className = 'hg-gate-pill' + (s0.visible ? (s0.gateFacingOk ? ' is-pass' : ' is-warn') : '');
-      gateKbd.className = 'hg-gate-pill' + (s0.visible ? (s0.gateKeyboardOk ? ' is-pass' : ' is-warn') : '');
+      setGate(gSpan, s0.visible && s0.gateSpanOk ? 'pass' : 'idle');
+      setGate(gFacing, s0.visible ? (s0.gateFacingOk ? 'pass' : 'attention') : 'idle');
+      setGate(gKbd, s0.visible ? (s0.gateKeyboardOk ? 'pass' : 'attention') : 'idle');
 
-      if (s0.state === HAND_STATE.ARMED) { gateArm.className = 'hg-gate-pill is-pass'; gateArmText.textContent = 'ARMED'; }
-      else if (s0.state === HAND_STATE.COASTING) { gateArm.className = 'hg-gate-pill is-warn'; gateArmText.textContent = 'COAST ' + s0.coastFrames + '/4'; }
-      else if (s0.state === HAND_STATE.ARMING) { gateArm.className = 'hg-gate-pill is-warn'; gateArmText.textContent = 'DWELL ' + Math.round(s0.armProgress * 100) + '%'; }
-      else { gateArm.className = 'hg-gate-pill'; gateArmText.textContent = 'IDLE'; }
+      if (s0.state === HAND_STATE.ARMED) setGate(gArm, 'pass', 'ARMED');
+      else if (s0.state === HAND_STATE.COASTING) setGate(gArm, 'attention', 'COAST ' + s0.coastFrames + '/4');
+      else if (s0.state === HAND_STATE.ARMING) setGate(gArm, 'attention', 'DWELL ' + String(Math.round(s0.armProgress * 100)).padStart(2, '0') + '%');
+      else setGate(gArm, 'idle', 'IDLE');
 
-      if (events.twoHandActive) { gateGesture.className = 'hg-gate-pill is-active'; gateGestureText.textContent = '2H ' + events.twoHandScaleRatio.toFixed(2) + '×'; }
-      else if (s0.pinched) { gateGesture.className = 'hg-gate-pill is-active'; gateGestureText.textContent = s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'PINCH LOCK' : 'PINCH DRAG'; }
-      else if (s0.vScrollActive) { gateGesture.className = 'hg-gate-pill is-warn'; gateGestureText.textContent = 'V-SCROLL'; }
-      else if (s0.clutchReleased) { gateGesture.className = 'hg-gate-pill is-warn'; gateGestureText.textContent = 'CLUTCH FREE'; }
-      else { gateGesture.className = 'hg-gate-pill'; gateGestureText.textContent = 'OPEN'; }
+      if (events.twoHandActive) setGate(gGesture, 'attention', '2H ' + events.twoHandScaleRatio.toFixed(2) + '×');
+      else if (s0.pinched) setGate(gGesture, 'attention', s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'PINCH LOCK' : 'PINCH DRAG');
+      else if (s0.vScrollActive) setGate(gGesture, 'attention', 'SCROLL');
+      else if (s0.clutchReleased) setGate(gGesture, 'attention', 'CLUTCH FREE');
+      else setGate(gGesture, 'idle', 'OPEN');
 
       c2Metric.textContent = 'fc ' + s0.euroFilter.cutoffHz.toFixed(2) + 'Hz · ' + engine.scope.attenuationDb.toFixed(1) + 'dB';
       c2XyReadout.textContent = 'LOCUS ' + s0.cursorU.toFixed(3) + ', ' + s0.cursorV.toFixed(3);
@@ -2467,13 +2606,13 @@
       c3Metric.textContent = 'd/s ' + pr.toFixed(2) + ' · ' + (s0.pinched ? (s0.pinchMode === PINCH_MODE.CLICK_LOCK ? 'LOCK' : 'DRAG') : (s0.velocityDamped ? 'DAMP' : 'OPEN'));
 
       const vel = c7.displayVelPx;
-      c7Metric.textContent = 'VEL ' + Math.round(vel) + ' px/s · γ=0.94';
+      c7Metric.textContent = 'VEL ' + Math.round(vel) + ' px/s';
       const barMag = clamp(Math.abs(vel) / 900, 0, 0.5) * 100;
       c7VelBar.style.top = vel >= 0 ? '50%' : (50 - barMag).toFixed(1) + '%';
       c7VelBar.style.height = barMag.toFixed(1) + '%';
       updateTapePosReadout();
 
-      c9Metric.textContent = st.detectMs.toFixed(2) + 'ms · ZERO-GC';
+      c9Metric.textContent = 'detect ' + st.detectMs.toFixed(2) + 'ms';
       teleSpan.textContent = s0.visible ? s0.palmSpan.toFixed(3) : '—';
       teleNz.textContent = s0.visible ? ((s0.palmFacingCos >= 0 ? '+' : '') + s0.palmFacingCos.toFixed(2)) : '—';
       teleY.textContent = s0.visible ? s0.palmY.toFixed(2) : '—';
@@ -2563,7 +2702,8 @@
       ensureLoopState();
       if (restoreFocus && !crossCellHash && !mainGrid.hidden) {
         if (typeof global.scrollTo === 'function') global.scrollTo(0, savedMainScrollY);
-        portalStudioBtn.focus({ preventScroll: true });
+        // `Studio ↗` is hidden at compact tile sizes; the stage opens the Studio too.
+        (portalStudioBtn.getClientRects().length ? portalStudioBtn : portalStage).focus({ preventScroll: true });
       }
     }
 
