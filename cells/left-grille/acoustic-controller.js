@@ -3,14 +3,14 @@
  *
  * Responsibilities:
  * - Requests raw unprocessed 48 kHz capture (`echoCancellation: false`, `noiseSuppression: false`,
- *   `autoGainControl: false`) so macOS VoiceProcessingIO never cancels speaker pilots or erases
- *   broadband skin-on-aluminum grille friction.
- * - Guards async `getUserMedia` / `AudioWorklet` startup with `sessionEpoch` so navigating Back
- *   or pressing `Escape` mid-permission-prompt aborts immediately without leaking mic capture.
+ *   `autoGainControl: false`) without double-prompting on `NotAllowedError`.
+ * - Isolates async `start()` local handles per `sessionEpoch` and detaches instance handles
+ *   synchronously at the top of `stop()` so mid-prompt Back/Escape or rapid stop->start cycles
+ *   never clobber a newer active session or trap UI state in `'requesting'`.
  * - Auto-pins Built-in MacBook Microphone & Built-in MacBook Speakers (`enumerateDevices` +
- *   `AudioContext.setSinkId`) when Bluetooth AirPods or external displays are system defaults.
- * - Hard-pans ultrasonic pilot comb to Left Speaker (`StereoPannerNode.pan = -1.0`, Right = `0.0`).
- * - Executes a smooth zero-pop TX ramp-down before closing `AudioContext` and stopping tracks.
+ *   `AudioContext.setSinkId`) when AirPods or external displays are system defaults.
+ * - Blocks ultrasonic pilot synthesis whenever hardware sampleRate < 40 kHz (Bluetooth HFP).
+ * - Suppresses live room-noise telemetry while `simTimer` is playing (`Sim ↑` / `Sim ↓`).
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -25,12 +25,34 @@
   const BUILTIN_RE = /(macbook|built-in|internal)/i;
   const EXTERNAL_HEADSET_RE = /(airpods|bluetooth|headphone|headset|earbuds|iphone|continuity|usb|display)/i;
 
+  function sanitizeCalibrationObj(cal) {
+    if (!cal || typeof cal !== 'object') return null;
+    const out = {};
+    let count = 0;
+    for (const k of ['specBottomDb', 'specTopDb', 'snrBottomDb', 'snrTopDb']) {
+      if (Number.isFinite(cal[k])) {
+        out[k] = cal[k];
+        count++;
+      }
+    }
+    return count > 0 ? out : null;
+  }
+
   function loadStoredCalibration() {
     try {
+      if (typeof localStorage === 'undefined') return null;
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' ? parsed : null;
+      if (!parsed || typeof parsed !== 'object') return null;
+      const polarity =
+        typeof parsed.polarity === 'number' && Number.isFinite(parsed.polarity)
+          ? parsed.polarity < 0
+            ? -1
+            : 1
+          : 1;
+      const calibration = sanitizeCalibrationObj(parsed.calibration);
+      return { polarity, calibration };
     } catch (_) {
       return null;
     }
@@ -38,9 +60,46 @@
 
   function saveStoredCalibration(data) {
     try {
+      if (typeof localStorage === 'undefined') return;
       if (!data) localStorage.removeItem(STORAGE_KEY);
       else localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (_) {}
+  }
+
+  function disposeLocalHandles(handles) {
+    if (!handles) return;
+    if (handles.workletNode) {
+      try {
+        handles.workletNode.port.onmessage = null;
+        handles.workletNode.disconnect();
+      } catch (_) {}
+    }
+    if (handles.scriptNode) {
+      try {
+        handles.scriptNode.onaudioprocess = null;
+        handles.scriptNode.disconnect();
+      } catch (_) {}
+    }
+    if (handles.pannerNode) {
+      try {
+        handles.pannerNode.disconnect();
+      } catch (_) {}
+    }
+    if (handles.micSource) {
+      try {
+        handles.micSource.disconnect();
+      } catch (_) {}
+    }
+    if (handles.stream) {
+      try {
+        handles.stream.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+    }
+    if (handles.audioCtx) {
+      try {
+        handles.audioCtx.close().catch(() => {});
+      } catch (_) {}
+    }
   }
 
   class LeftGrilleSensorController {
@@ -53,6 +112,7 @@
       this.state = 'idle'; // 'idle' | 'requesting' | 'listening' | 'error'
       this.errorMessage = '';
       this.sessionEpoch = 0;
+      this._startPromise = null;
       this.audioCtx = null;
       this.stream = null;
       this.micSource = null;
@@ -63,13 +123,14 @@
       this.simTimer = null;
       this.txEnabled = true;
       this.txGain = 0.036;
+      this.hiddenMuted = false;
       this.activeMicLabel = '';
       this.activeSpeakerLabel = 'Left Speaker';
       this.sampleRate = 48000;
 
-      const saved = typeof localStorage !== 'undefined' ? loadStoredCalibration() : null;
-      this.polarity = saved && typeof saved.polarity === 'number' ? saved.polarity : 1;
-      this.calibration = saved && saved.calibration ? saved.calibration : null;
+      const saved = loadStoredCalibration();
+      this.polarity = saved ? saved.polarity : 1;
+      this.calibration = saved ? saved.calibration : null;
     }
 
     _emitState(nextState, extra = {}) {
@@ -78,7 +139,8 @@
       this.onStateChange({
         state: this.state,
         error: this.errorMessage,
-        txEnabled: this.txEnabled,
+        txEnabled: this.txEnabled && this.sampleRate >= 40000,
+        canUseSonar: this.sampleRate >= 40000,
         polarity: this.polarity,
         calibrated: Boolean(this.calibration),
         micLabel: this.activeMicLabel,
@@ -87,8 +149,19 @@
       });
     }
 
-    async start(options = {}) {
-      if (this.state === 'listening' || this.state === 'requesting') return true;
+    start(options = {}) {
+      if (this.state === 'listening') return Promise.resolve(true);
+      if (this.state === 'requesting' && this._startPromise) {
+        return this._startPromise;
+      }
+      const p = this._runStart(options).finally(() => {
+        if (this._startPromise === p) this._startPromise = null;
+      });
+      this._startPromise = p;
+      return p;
+    }
+
+    async _runStart(options = {}) {
       const myEpoch = ++this.sessionEpoch;
       this._emitState('requesting', { error: '' });
 
@@ -102,17 +175,25 @@
         return false;
       }
 
-      let tempStream = null;
+      const local = {
+        stream: null,
+        audioCtx: null,
+        micSource: null,
+        pannerNode: null,
+        workletNode: null,
+        scriptNode: null
+      };
+
       try {
-        tempStream = await this._requestRawMic(options.deviceId || null);
+        local.stream = await this._requestRawMic(options.deviceId || null);
         if (myEpoch !== this.sessionEpoch) {
-          tempStream.getTracks().forEach((t) => t.stop());
+          disposeLocalHandles(local);
           return false;
         }
 
         const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
         if (myEpoch !== this.sessionEpoch) {
-          tempStream.getTracks().forEach((t) => t.stop());
+          disposeLocalHandles(local);
           return false;
         }
 
@@ -120,7 +201,7 @@
         const audioOutputs = devices.filter((d) => d.kind === 'audiooutput');
 
         if (!options.deviceId && audioInputs.length > 1) {
-          const currentTrack = tempStream.getAudioTracks()[0];
+          const currentTrack = local.stream.getAudioTracks()[0];
           const currentLabel = (currentTrack && currentTrack.label) || '';
           const builtInMic = audioInputs.find((d) => BUILTIN_RE.test(d.label));
           if (builtInMic && !BUILTIN_RE.test(currentLabel) && EXTERNAL_HEADSET_RE.test(currentLabel)) {
@@ -128,55 +209,50 @@
               const betterStream = await this._requestRawMic(builtInMic.deviceId);
               if (myEpoch !== this.sessionEpoch) {
                 betterStream.getTracks().forEach((t) => t.stop());
-                tempStream.getTracks().forEach((t) => t.stop());
+                disposeLocalHandles(local);
                 return false;
               }
-              tempStream.getTracks().forEach((t) => t.stop());
-              tempStream = betterStream;
+              local.stream.getTracks().forEach((t) => t.stop());
+              local.stream = betterStream;
             } catch (_) {}
           }
         }
 
-        const activeTrack = tempStream.getAudioTracks()[0];
-        this.activeMicLabel = (activeTrack && activeTrack.label) || 'Built-in Mic Array';
-        this.stream = tempStream;
-        tempStream = null;
+        const activeTrack = local.stream.getAudioTracks()[0];
+        const micLabel = (activeTrack && activeTrack.label) || 'Built-in Mic Array';
 
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const AudioCtx =
+          (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) ||
+          globalThis.AudioContext ||
+          globalThis.webkitAudioContext;
         const ctx = new AudioCtx({
           latencyHint: 'interactive',
           sampleRate: 48000
         });
-        this.audioCtx = ctx;
-        this.sampleRate = ctx.sampleRate;
-
-        // Disable ultrasonic pilot if Bluetooth HFP forced low sample rate (<40 kHz)
-        if (this.sampleRate < 40000) {
-          this.txEnabled = false;
-        }
+        local.audioCtx = ctx;
+        const sr = ctx.sampleRate || 48000;
+        const effectiveTx = this.txEnabled && sr >= 40000 && !this.hiddenMuted;
 
         if (ctx.state === 'suspended') {
           await ctx.resume();
         }
         if (myEpoch !== this.sessionEpoch) {
-          await this.stop({ silent: true });
+          disposeLocalHandles(local);
           return false;
         }
 
+        let speakerLabel = 'Left Speaker (Ch 1)';
         const builtInOut = audioOutputs.find((d) => BUILTIN_RE.test(d.label));
         if (builtInOut && typeof ctx.setSinkId === 'function' && builtInOut.deviceId) {
           try {
             await ctx.setSinkId(builtInOut.deviceId);
-            this.activeSpeakerLabel = `${builtInOut.label} (L)`;
+            speakerLabel = `${builtInOut.label} (L)`;
           } catch (_) {
-            this.activeSpeakerLabel = 'Left Speaker';
+            speakerLabel = 'Left Speaker';
           }
-        } else {
-          this.activeSpeakerLabel = 'Left Speaker (Ch 1)';
         }
-
         if (myEpoch !== this.sessionEpoch) {
-          await this.stop({ silent: true });
+          disposeLocalHandles(local);
           return false;
         }
 
@@ -188,18 +264,18 @@
           } catch (_) {}
         }
 
-        const micSource = ctx.createMediaStreamSource(this.stream);
-        this.micSource = micSource;
+        local.micSource = ctx.createMediaStreamSource(local.stream);
 
         const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
         if (panner) {
           panner.pan.value = -1.0;
           panner.connect(ctx.destination);
-          this.pannerNode = panner;
+          local.pannerNode = panner;
         }
         const targetOut = panner || ctx.destination;
 
         let workletStarted = false;
+        let fallbackCore = null;
         if (ctx.audioWorklet && typeof Blob !== 'undefined' && typeof URL !== 'undefined') {
           let blobUrl = '';
           try {
@@ -208,8 +284,7 @@
             blobUrl = URL.createObjectURL(blob);
             await ctx.audioWorklet.addModule(blobUrl);
             if (myEpoch !== this.sessionEpoch) {
-              if (blobUrl) URL.revokeObjectURL(blobUrl);
-              await this.stop({ silent: true });
+              disposeLocalHandles(local);
               return false;
             }
             const node = new AudioWorkletNode(ctx, 'left-grille-swipe-processor', {
@@ -217,16 +292,16 @@
               numberOfOutputs: 1,
               outputChannelCount: [2],
               processorOptions: {
-                txEnabled: this.txEnabled,
+                txEnabled: effectiveTx,
                 txGain: this.txGain,
                 polarity: this.polarity,
                 calibration: this.calibration
               }
             });
-            node.port.onmessage = (ev) => this._handleDspEvent(ev.data);
-            micSource.connect(node);
+            node.port.onmessage = (ev) => this._handleDspEvent(ev.data, false);
+            local.micSource.connect(node);
             node.connect(targetOut);
-            this.workletNode = node;
+            local.workletNode = node;
             workletStarted = true;
           } catch (_) {
             workletStarted = false;
@@ -237,13 +312,13 @@
 
         if (!workletStarted) {
           const core = new Engine.AcousticDspCore({
-            sampleRate: ctx.sampleRate,
-            txEnabled: this.txEnabled,
+            sampleRate: sr,
+            txEnabled: effectiveTx,
             txGain: this.txGain,
             polarity: this.polarity,
             calibration: this.calibration || undefined
           });
-          this.fallbackCore = core;
+          fallbackCore = core;
           const sp = ctx.createScriptProcessor(512, 1, 2);
           sp.onaudioprocess = (audioEv) => {
             const outL = audioEv.outputBuffer.getChannelData(0);
@@ -253,24 +328,35 @@
             const inCh = audioEv.inputBuffer.getChannelData(0);
             const events = core.processSamples(inCh);
             for (let i = 0; i < events.length; i++) {
-              this._handleDspEvent(events[i]);
+              this._handleDspEvent(events[i], false);
             }
           };
-          micSource.connect(sp);
+          local.micSource.connect(sp);
           sp.connect(targetOut);
-          this.scriptNode = sp;
+          local.scriptNode = sp;
+        }
+
+        // Commit local handles atomically to controller instance
+        this.stream = local.stream;
+        this.audioCtx = local.audioCtx;
+        this.micSource = local.micSource;
+        this.pannerNode = local.pannerNode;
+        this.workletNode = local.workletNode;
+        this.scriptNode = local.scriptNode;
+        this.fallbackCore = fallbackCore;
+        this.activeMicLabel = micLabel;
+        this.activeSpeakerLabel = speakerLabel;
+        this.sampleRate = sr;
+        if (sr < 40000) {
+          this.txEnabled = false;
         }
 
         this._emitState('listening', { error: '' });
         return true;
       } catch (err) {
-        if (tempStream) {
-          try {
-            tempStream.getTracks().forEach((t) => t.stop());
-          } catch (_) {}
-        }
-        await this.stop({ silent: true });
-        if (myEpoch !== this.sessionEpoch) return false;
+        const aborted = myEpoch !== this.sessionEpoch;
+        disposeLocalHandles(local);
+        if (aborted) return false;
         const msg =
           err && err.name === 'NotAllowedError'
             ? 'Mic permission denied — allow mic access, or drag rail / use Sim ↑↓.'
@@ -293,7 +379,12 @@
       }
       try {
         return await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false });
-      } catch (_) {
+      } catch (err) {
+        // Only retry relaxed constraints on OverconstrainedError / TypeError — never double-prompt on NotAllowedError!
+        const name = err && err.name;
+        if (name !== 'OverconstrainedError' && name !== 'TypeError') {
+          throw err;
+        }
         const fallback = {
           echoCancellation: false,
           noiseSuppression: false,
@@ -304,7 +395,7 @@
       }
     }
 
-    _handleDspEvent(msg) {
+    _handleDspEvent(msg, fromSim) {
       if (!msg) return;
       if (msg.type === 'calibrationResult') {
         if (msg.result && msg.result.ok) {
@@ -316,6 +407,10 @@
         this.onCalibrationResult(msg.result);
         return;
       }
+      // Suppress live mic room-noise packets while a simulated swipe playback is actively running
+      if (!fromSim && this.simTimer !== null) {
+        return;
+      }
       this.onTelemetry(msg);
       if (msg.type === 'swipe' && msg.swipe) {
         this.onSwipe(msg.swipe);
@@ -323,14 +418,36 @@
     }
 
     setSonarEnabled(enabled) {
+      if (enabled && this.state === 'listening' && this.sampleRate < 40000) {
+        this.txEnabled = false;
+        this._emitState(this.state);
+        return false;
+      }
       this.txEnabled = Boolean(enabled);
+      const activeTx = this.txEnabled && !this.hiddenMuted;
       if (this.workletNode) {
-        this.workletNode.port.postMessage({ type: 'setTx', enabled: this.txEnabled, gain: this.txGain });
+        this.workletNode.port.postMessage({ type: 'setTx', enabled: activeTx, gain: this.txGain });
       }
       if (this.fallbackCore) {
-        this.fallbackCore.txEnabled = this.txEnabled;
+        this.fallbackCore.setTxEnabled(activeTx, this.txGain);
       }
       this._emitState(this.state);
+      return this.txEnabled;
+    }
+
+    setHiddenMuted(hidden) {
+      this.hiddenMuted = Boolean(hidden);
+      const activeTx = this.txEnabled && !this.hiddenMuted && this.sampleRate >= 40000;
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({
+          type: 'setTx',
+          enabled: activeTx,
+          gain: activeTx ? this.txGain : 0
+        });
+      }
+      if (this.fallbackCore) {
+        this.fallbackCore.setTxEnabled(activeTx, activeTx ? this.txGain : 0);
+      }
     }
 
     togglePolarity() {
@@ -354,12 +471,20 @@
       }
     }
 
+    cancelCalibrationStep() {
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'cancelCalStep' });
+      } else if (this.fallbackCore) {
+        this.fallbackCore.cancelCalibrationStep();
+      }
+    }
+
     finishCalibrationStep() {
       if (this.workletNode) {
         this.workletNode.port.postMessage({ type: 'finishCalStep' });
       } else if (this.fallbackCore) {
         const res = this.fallbackCore.finishCalibrationStep();
-        this._handleDspEvent({ type: 'calibrationResult', result: res });
+        this._handleDspEvent({ type: 'calibrationResult', result: res }, false);
       }
     }
 
@@ -383,10 +508,6 @@
       this._emitState(this.state);
     }
 
-    /**
-     * Synthesizes a realistic 48 kHz waveform and feeds it through `AcousticDspCore`
-     * with real-time frame pacing (~340ms) so simulated swipes exercise the genuine DSP path.
-     */
     runSimulatedSwipe(direction = 'up', options = {}) {
       if (this.simTimer) {
         clearInterval(this.simTimer);
@@ -459,71 +580,57 @@
           this.simTimer = null;
           return;
         }
-        this._handleDspEvent(playback[idx++]);
+        this._handleDspEvent(playback[idx++], true);
       }, stepMs);
       return events.find((e) => e.type === 'swipe')?.swipe || null;
     }
 
     async stop(opts = {}) {
       this.sessionEpoch++;
+      this._startPromise = null;
       if (this.simTimer) {
         clearInterval(this.simTimer);
         this.simTimer = null;
       }
-      if (this.workletNode) {
-        try {
-          this.workletNode.port.postMessage({ type: 'setTx', enabled: false, gain: 0 });
-        } catch (_) {}
-      }
-      if (this.fallbackCore) {
-        this.fallbackCore.txEnabled = false;
-      }
-      // Brief 24 ms fade window if audioCtx is actively running to prevent speaker click
-      if (this.audioCtx && this.audioCtx.state === 'running' && !opts.immediate) {
-        await new Promise((r) => setTimeout(r, 24));
-      }
-      if (this.workletNode) {
-        try {
-          this.workletNode.port.onmessage = null;
-          this.workletNode.disconnect();
-        } catch (_) {}
-        this.workletNode = null;
-      }
-      if (this.scriptNode) {
-        try {
-          this.scriptNode.onaudioprocess = null;
-          this.scriptNode.disconnect();
-        } catch (_) {}
-        this.scriptNode = null;
-      }
-      if (this.pannerNode) {
-        try {
-          this.pannerNode.disconnect();
-        } catch (_) {}
-        this.pannerNode = null;
-      }
-      if (this.micSource) {
-        try {
-          this.micSource.disconnect();
-        } catch (_) {}
-        this.micSource = null;
-      }
-      if (this.stream) {
-        try {
-          this.stream.getTracks().forEach((t) => t.stop());
-        } catch (_) {}
-        this.stream = null;
-      }
-      if (this.audioCtx) {
-        try {
-          await this.audioCtx.close();
-        } catch (_) {}
-        this.audioCtx = null;
-      }
+
+      // Synchronously detach instance handles so rapid stop()->start() never races across the 24ms fade
+      const detached = {
+        workletNode: this.workletNode,
+        scriptNode: this.scriptNode,
+        pannerNode: this.pannerNode,
+        micSource: this.micSource,
+        stream: this.stream,
+        audioCtx: this.audioCtx,
+        fallbackCore: this.fallbackCore
+      };
+      this.workletNode = null;
+      this.scriptNode = null;
+      this.pannerNode = null;
+      this.micSource = null;
+      this.stream = null;
+      this.audioCtx = null;
       this.fallbackCore = null;
+      this.hiddenMuted = false;
+
       if (!opts.silent) {
         this._emitState('idle', { error: '' });
       }
+
+      if (detached.workletNode) {
+        try {
+          detached.workletNode.port.onmessage = null;
+          detached.workletNode.port.postMessage({ type: 'setTx', enabled: false, gain: 0 });
+        } catch (_) {}
+      }
+      if (detached.fallbackCore) {
+        detached.fallbackCore.setTxEnabled(false, 0);
+      }
+
+      if (detached.audioCtx && detached.audioCtx.state === 'running' && !opts.immediate) {
+        await new Promise((r) => setTimeout(r, 24));
+      }
+
+      disposeLocalHandles(detached);
     }
   }
 

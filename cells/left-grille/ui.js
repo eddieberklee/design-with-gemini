@@ -3,7 +3,8 @@
  *
  * Mounts:
  * 1. Main Grid Cell (`#cell-left-grille`): Tactile Swiss/Braun specimen card with inline SVG
- *    MacBook Pro left speaker grille elevation (8–22% CNC mic through-holes + 28–96% blind dimples).
+ *    MacBook Pro left speaker grille elevation (`8%–22%` CNC mic through-holes + blind dimples
+ *    outside `8%–22%`).
  * 2. Secondary Page (`#left-grille-page`): Replaces `<main class="grid">` seamlessly in-page
  *    with a Back button (`← Grid`, `Escape`, and History `#left-grille` sync) and a secondary
  *    `.grid` of 9 `.cell` cards obeying the exact same sizing and layout rules as the main grid.
@@ -71,6 +72,7 @@
   }
 
   function clamp(v, lo, hi) {
+    if (!Number.isFinite(v)) return lo;
     return v < lo ? lo : v > hi ? hi : v;
   }
 
@@ -92,15 +94,14 @@
             cx,
             cy,
             r: isMicPort ? 1.55 : 1.15,
-            fill: isMicPort ? '#1c1c1a' : '#c7c7c1',
-            opacity: isMicPort ? '0.92' : '0.68'
+            fill: isMicPort ? '#1c1c1a' : '#c0c0ba',
+            opacity: isMicPort ? '0.92' : '0.72'
           })
         );
       }
     }
 
     if (opts.withNeedle) {
-      // Subtle mic bracket + animated vernier needle for the main grid portal card
       dots.push(
         svgEl('rect', {
           x: 2,
@@ -159,17 +160,23 @@
 
   function mountLeftGrillePortal(portalCell) {
     const mainGrid = document.querySelector('main.grid');
-    if (!portalCell || !mainGrid) return;
+    if (!portalCell || !mainGrid) return null;
 
     const ControllerCls =
       global.LeftGrilleController && global.LeftGrilleController.LeftGrilleSensorController;
-    if (!ControllerCls) return;
+    if (!ControllerCls) return null;
 
+    // Synchronous navigation intent state (`targetOpen`) + monotonic VT guard (`vtSeq`)
+    let targetOpen = false;
     let isSecondaryOpen = false;
     let enteredFromMainGrid = false;
-    let calWizardActive = false;
+    let vtSeq = 0;
 
-    // Rolling 150-point scope history (`y` in 0..1, `unc` in 0..0.25, `asym` in -1..1)
+    let calWizardActive = false;
+    let overlayReturnFocusEl = null;
+    let wasStrokeActive = false;
+    let lastCommittedSwipe = null;
+
     const SCOPE_LEN = 140;
     const scopeHist = [];
     for (let i = 0; i < SCOPE_LEN; i++) {
@@ -191,13 +198,16 @@
       },
       [
         h('div', { className: 'lg-portal-top' }, [
-          h('span', { className: 'lg-kicker', textContent: '05 · TG-L1' }),
+          h('div', { className: 'lg-portal-head-left' }, [
+            h('span', { className: 'lg-kicker', textContent: '05' }),
+            h('span', { className: 'lg-portal-title', textContent: 'Left Grille Sonar' })
+          ]),
           h('span', { className: 'lg-portal-arrow', 'aria-hidden': 'true', textContent: '↗' })
         ]),
         h('div', { className: 'lg-portal-graphic' }, [
           buildGrilleSvg({
             width: 48,
-            height: 136,
+            height: 132,
             cols: 5,
             rows: 20,
             withNeedle: true,
@@ -205,10 +215,7 @@
           })
         ]),
         h('div', { className: 'lg-portal-bottom' }, [
-          h('div', { className: 'lg-portal-title-group' }, [
-            h('div', { className: 'lg-portal-title', textContent: 'Left Grille Sonar' }),
-            h('div', { className: 'lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' })
-          ]),
+          h('span', { className: 'lg-portal-sub', textContent: 'Speaker + 3-mic swipe array' }),
           h('span', { className: 'lg-portal-spec', textContent: '48 kHz · L' })
         ])
       ]
@@ -269,7 +276,7 @@
 
     const statusPill = h('span', {
       className: 'lg-status-pill',
-      textContent: 'READY · Drag rail or Arm'
+      textContent: 'READY · Arm or drag'
     });
 
     const sonarBtn = h(
@@ -289,8 +296,9 @@
       {
         type: 'button',
         className: 'lg-btn',
+        'aria-expanded': 'false',
         title: 'Calibrate top/bottom left-grille anchors or invert mic polarity',
-        onClick: () => openCalibrationWizard()
+        onClick: () => openCalibrationWizard(calBtn)
       },
       ['CAL']
     );
@@ -300,7 +308,7 @@
       h('div', { className: 'lg-bezel-group' }, [sonarBtn, calBtn])
     ]);
 
-    // Physical 11.0 cm Left-Grille Vernier Rail
+    // Physical 11.0 cm Left-Grille Vernier Rail (`aria-valuenow` = % from bottom so ArrowUp increases!)
     const spanRibbon = h('div', { className: 'lg-span-ribbon' });
     const sigmaBand = h('div', { className: 'lg-sigma-band' });
     const needle = h('div', { className: 'lg-needle' });
@@ -330,11 +338,13 @@
         className: 'lg-rail-wrap',
         tabIndex: 0,
         role: 'slider',
-        'aria-label': 'Left speaker grille position (drag vertically or use Up and Down arrow keys)',
+        'aria-orientation': 'vertical',
+        'aria-label': 'Left speaker grille vertical position',
         'aria-valuemin': '0',
         'aria-valuemax': '100',
         'aria-valuenow': '50',
-        title: 'Swipe physical left speaker grille when armed, or drag here to test'
+        'aria-valuetext': '50% from top, 50% from bottom',
+        title: 'Swipe physical left speaker grille when armed, or drag vertically here'
       },
       [
         h('div', { className: 'lg-rail-cap' }, [
@@ -359,7 +369,10 @@
 
     const topPctStrong = h('strong', { textContent: '50%' });
     const btmPctStrong = h('strong', { textContent: '50%' });
-    const cmSpanText = h('span', { className: 'lg-dist-tag', textContent: '5.5 cm top' });
+    const cmSpanText = h('span', {
+      className: 'lg-dist-tag lg-dist-tag--cm',
+      textContent: '5.5 cm top'
+    });
 
     const simUpBtn = h(
       'button',
@@ -396,18 +409,17 @@
     const scopeLeftNote = h('span', { textContent: 'Position y(t) · 11.0 cm left grille' });
     const scopeRightNote = h('span', { textContent: 'Doppler ±Δf' });
 
-    // Inline Calibration / Error Overlay inside Tier 3 (never stretches 4:3 cell!)
+    const scopeBox = h('div', { className: 'lg-scope-box' }, [
+      scopeCanvas,
+      h('div', { className: 'lg-scope-caption' }, [scopeLeftNote, scopeRightNote])
+    ]);
+
+    // Calibration / Error Overlay mounted directly on `.lg-telemetry` so it stays visible at <= 245px!
     const overlayMsg = h('div', { className: 'lg-overlay-text' });
     const overlayActions = h('div', { className: 'lg-overlay-row' });
     const inlineOverlay = h('div', { className: 'lg-inline-overlay', hidden: true }, [
       overlayMsg,
       overlayActions
-    ]);
-
-    const scopeBox = h('div', { className: 'lg-scope-box' }, [
-      scopeCanvas,
-      h('div', { className: 'lg-scope-caption' }, [scopeLeftNote, scopeRightNote]),
-      inlineOverlay
     ]);
 
     const telemetryCol = h('div', { className: 'lg-telemetry' }, [
@@ -440,7 +452,8 @@
         ]),
         h('div', { className: 'lg-sim-actions' }, [simUpBtn, simDownBtn, flipBtn])
       ]),
-      scopeBox
+      scopeBox,
+      inlineOverlay
     ]);
 
     const secCell1 = h(
@@ -501,6 +514,25 @@
       onCalibrationResult: handleCalibrationResult
     });
 
+    function formatListeningStatus() {
+      const rateKhz = Math.round((controller.sampleRate || 48000) / 100) / 10;
+      const sonarOn = controller.txEnabled && controller.sampleRate >= 40000;
+      const modeTag = sonarOn ? 'SONAR+MIC' : 'MIC ONLY';
+      const polTag = controller.polarity === -1 ? ' · INV' : '';
+      return `${modeTag} · ${rateKhz}k${polTag}`;
+    }
+
+    function restoreIdleDirDisplay() {
+      if (lastCommittedSwipe) {
+        dirText.textContent =
+          lastCommittedSwipe.direction === 'up' ? '↑ SWIPE UP' : '↓ SWIPE DOWN';
+        dirText.dataset.dir = lastCommittedSwipe.direction;
+      } else {
+        dirText.textContent = '— IDLE';
+        dirText.dataset.dir = 'idle';
+      }
+    }
+
     function handleControllerState(st) {
       const armed = st.state === 'listening' || st.state === 'requesting';
       armBtn.dataset.armed = armed ? 'true' : 'false';
@@ -508,35 +540,46 @@
       armLabel.textContent =
         st.state === 'requesting' ? 'ARMING…' : st.state === 'listening' ? 'LIVE' : 'ARM MIC';
 
-      sonarBtn.setAttribute('aria-pressed', st.txEnabled ? 'true' : 'false');
-      sonarBtn.textContent = st.txEnabled ? '19k L-CH' : 'PASSIVE';
+      const sonarActive = Boolean(st.txEnabled && st.canUseSonar !== false);
+      sonarBtn.disabled = st.state === 'listening' && st.canUseSonar === false;
+      sonarBtn.setAttribute('aria-pressed', sonarActive ? 'true' : 'false');
+      sonarBtn.textContent = sonarActive ? '19k L-CH' : 'PASSIVE';
 
       if (st.state === 'error' && st.error) {
+        statusPill.dataset.veto = 'false';
         statusPill.textContent = 'SIM MODE';
-        showErrorOverlay(st.error);
+        showErrorOverlay(st.error, armBtn);
       } else if (st.state === 'listening') {
         if (!calWizardActive) inlineOverlay.hidden = true;
-        const rateKhz = Math.round((st.sampleRate || 48000) / 100) / 10;
-        const modeTag = st.txEnabled ? 'SONAR+MIC' : 'MIC ONLY';
-        const polTag = st.polarity === -1 ? ' · INV' : '';
-        statusPill.textContent = `${modeTag} · ${rateKhz}k${polTag}`;
+        statusPill.dataset.veto = 'false';
+        statusPill.textContent = formatListeningStatus();
       } else if (st.state === 'idle') {
-        if (!calWizardActive) inlineOverlay.hidden = true;
+        if (calWizardActive) {
+          closeCalibrationWizard({ restoreFocus: false });
+        } else {
+          inlineOverlay.hidden = true;
+        }
+        wasStrokeActive = false;
+        restoreIdleDirDisplay();
+        statusPill.dataset.veto = 'false';
         statusPill.textContent = st.calibrated ? 'CAL READY · Arm or drag' : 'READY · Arm or drag';
       }
     }
 
     function updateRailAndReadout(yFrac, uncPct, speedCms, liveDir) {
-      const topPct = Math.round(clamp(yFrac * 100, 0, 100));
+      const clampedY = clamp(yFrac, 0, 1);
+      const topPct = Math.round(clampedY * 100);
       const btmPct = 100 - topPct;
-      const topCm = (Math.round(yFrac * GRILLE_CM * 10) / 10).toFixed(1);
+      const topCm = (Math.round(clampedY * GRILLE_CM * 10) / 10).toFixed(1);
 
-      needle.style.top = `${yFrac * 100}%`;
+      needle.style.top = `${clampedY * 100}%`;
       needle.dataset.dir = liveDir === 'up' || liveDir === 'down' ? liveDir : 'idle';
-      sigmaBand.style.top = `${yFrac * 100}%`;
+      sigmaBand.style.top = `${clampedY * 100}%`;
       sigmaBand.style.height = `${clamp((uncPct || 8) * 2, 7, 34)}%`;
 
-      railWrap.setAttribute('aria-valuenow', String(topPct));
+      // Vertical slider: 0 = Bottom (Fn), 100 = Top (Esc) so ArrowUp increases aria-valuenow!
+      railWrap.setAttribute('aria-valuenow', String(btmPct));
+      railWrap.setAttribute('aria-valuetext', `${topPct}% from top, ${btmPct}% from bottom`);
       topPctStrong.textContent = `${topPct}%`;
       btmPctStrong.textContent = `${btmPct}%`;
       cmSpanText.textContent = `${topCm} cm top`;
@@ -550,18 +593,19 @@
       if (pkt.vetoReason) {
         statusPill.dataset.veto = 'true';
         statusPill.textContent = pkt.vetoReason === 'key' ? 'KEY CLICK IGNORED' : 'VOICE IGNORED';
-      } else if (statusPill.dataset.veto === 'true') {
+      } else {
         statusPill.dataset.veto = 'false';
         if (controller.state === 'listening') {
-          statusPill.textContent = `${controller.txEnabled ? 'SONAR+MIC' : 'MIC'} · +${Math.max(0, Math.round(pkt.fricSnrDb))}dB`;
+          statusPill.textContent = pkt.active
+            ? `TRACKING · +${Math.max(0, Math.round(pkt.fricSnrDb))}dB`
+            : formatListeningStatus();
         }
-      } else if (controller.state === 'listening' && pkt.active) {
-        statusPill.textContent = `TRACKING · +${Math.max(0, Math.round(pkt.fricSnrDb))}dB`;
       }
 
       railTrack.dataset.pinholeLock = pkt.pinholeOcclusion > 0.32 ? 'true' : 'false';
 
       if (pkt.active) {
+        wasStrokeActive = true;
         updateRailAndReadout(pkt.y, pkt.uncertaintyPct, pkt.speedCmPerSec, pkt.liveDirection);
         if (pkt.liveDirection === 'up') {
           dirText.textContent = '↑ UP…';
@@ -569,6 +613,11 @@
         } else if (pkt.liveDirection === 'down') {
           dirText.textContent = '↓ DOWN…';
           dirText.dataset.dir = 'down';
+        }
+      } else if (wasStrokeActive) {
+        wasStrokeActive = false;
+        if (!pkt.swipe) {
+          restoreIdleDirDisplay();
         }
       }
 
@@ -587,6 +636,8 @@
     }
 
     function handleCommittedSwipe(sw) {
+      lastCommittedSwipe = sw;
+      wasStrokeActive = false;
       const isUp = sw.direction === 'up';
       dirText.textContent = isUp ? '↑ SWIPE UP' : '↓ SWIPE DOWN';
       dirText.dataset.dir = sw.direction;
@@ -615,57 +666,72 @@
     }
 
     // -------------------------------------------------------------------------
-    // 4. Calibration & Error Inline Overlays (Zero 4:3 Row Overflow)
+    // 4. Calibration & Error Overlays (Full Right-Column Host + Focus Handoff)
     // -------------------------------------------------------------------------
     function clearChildren(node) {
       while (node.firstChild) node.removeChild(node.firstChild);
     }
 
-    function showErrorOverlay(msg) {
-      calWizardActive = false;
-      overlayMsg.textContent = msg;
-      clearChildren(overlayActions);
-      overlayActions.appendChild(
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'lg-mini-btn',
-            onClick: () => {
-              inlineOverlay.hidden = true;
-            }
-          },
-          ['Dismiss']
-        )
-      );
-      inlineOverlay.hidden = false;
+    function dismissOverlay(opts = {}) {
+      const shouldRestore = opts.restoreFocus !== false;
+      inlineOverlay.hidden = true;
+      calBtn.setAttribute('aria-expanded', 'false');
+      const target = overlayReturnFocusEl;
+      overlayReturnFocusEl = null;
+      if (shouldRestore && target && typeof target.focus === 'function') {
+        target.focus({ preventScroll: true });
+      }
     }
 
-    async function openCalibrationWizard() {
+    function showErrorOverlay(msg, triggerEl) {
       if (calWizardActive) {
-        closeCalibrationWizard();
+        controller.cancelCalibrationStep();
+        calWizardActive = false;
+      }
+      overlayReturnFocusEl = triggerEl || document.activeElement || armBtn;
+      calBtn.setAttribute('aria-expanded', 'false');
+      overlayMsg.textContent = msg;
+      clearChildren(overlayActions);
+      const dismissBtn = h(
+        'button',
+        {
+          type: 'button',
+          className: 'lg-mini-btn',
+          onClick: () => dismissOverlay({ restoreFocus: true })
+        },
+        ['Dismiss']
+      );
+      overlayActions.appendChild(dismissBtn);
+      inlineOverlay.hidden = false;
+      dismissBtn.focus({ preventScroll: true });
+    }
+
+    async function openCalibrationWizard(triggerEl) {
+      if (calWizardActive) {
+        closeCalibrationWizard({ restoreFocus: true });
         return;
       }
+      overlayReturnFocusEl = triggerEl || calBtn;
       if (controller.state !== 'listening') {
         const ok = await controller.start();
-        if (!ok) return;
+        if (!ok || controller.state !== 'listening') return;
       }
       calWizardActive = true;
+      calBtn.setAttribute('aria-expanded', 'true');
       controller.startCalibrationStep('up');
       overlayMsg.textContent =
         'Calibrate: Slide finger steadily UP the left grille (Bottom Fn → Top Esc), then press Lock.';
       clearChildren(overlayActions);
-      overlayActions.appendChild(
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'lg-mini-btn',
-            onClick: () => controller.finishCalibrationStep()
-          },
-          ['Lock Swipe']
-        )
+      const lockBtn = h(
+        'button',
+        {
+          type: 'button',
+          className: 'lg-mini-btn',
+          onClick: () => controller.finishCalibrationStep()
+        },
+        ['Lock Swipe']
       );
+      overlayActions.appendChild(lockBtn);
       overlayActions.appendChild(
         h(
           'button',
@@ -673,8 +739,9 @@
             type: 'button',
             className: 'lg-mini-btn',
             onClick: () => {
+              controller.cancelCalibrationStep();
               controller.resetCalibration();
-              closeCalibrationWizard();
+              closeCalibrationWizard({ restoreFocus: true });
             }
           },
           ['Reset']
@@ -686,27 +753,34 @@
           {
             type: 'button',
             className: 'lg-mini-btn',
-            onClick: () => closeCalibrationWizard()
+            onClick: () => closeCalibrationWizard({ restoreFocus: true })
           },
           ['Cancel']
         )
       );
       inlineOverlay.hidden = false;
+      lockBtn.focus({ preventScroll: true });
     }
 
-    function closeCalibrationWizard() {
-      calWizardActive = false;
-      inlineOverlay.hidden = true;
+    function closeCalibrationWizard(opts = {}) {
+      if (calWizardActive) {
+        controller.cancelCalibrationStep();
+        calWizardActive = false;
+      }
+      dismissOverlay(opts);
     }
 
     function handleCalibrationResult(res) {
       calWizardActive = false;
       if (res && res.ok) {
-        inlineOverlay.hidden = true;
+        dismissOverlay({ restoreFocus: true });
         modeMeta.textContent = `Calibrated (${res.polarity === 1 ? 'Top-Mic' : 'Inverted'})`;
         announce('Left grille calibration locked.');
       } else {
-        showErrorOverlay('Signal too quiet — rub firmly from bottom to top of the left grille.');
+        showErrorOverlay(
+          'Signal too quiet — rub firmly from bottom to top of the left grille.',
+          calBtn
+        );
       }
     }
 
@@ -731,7 +805,7 @@
 
     railWrap.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      railWrap.focus();
+      railWrap.focus({ preventScroll: true });
       if (railWrap.setPointerCapture) {
         try {
           railWrap.setPointerCapture(e.pointerId);
@@ -775,8 +849,8 @@
       scheduleScopeDraw();
     });
 
-    function finishRailDrag(e) {
-      if (!dragState || (e && e.pointerId !== dragState.pointerId)) return;
+    railWrap.addEventListener('pointerup', (e) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
       const st = dragState;
       dragState = null;
       const durMs = Math.max(60, performance.now() - st.startTime);
@@ -802,10 +876,13 @@
         spanPct: Math.round(spanFrac * 1000) / 10,
         spanCm: Math.round(distCm * 10) / 10
       });
-    }
+    });
 
-    railWrap.addEventListener('pointerup', finishRailDrag);
-    railWrap.addEventListener('pointercancel', finishRailDrag);
+    railWrap.addEventListener('pointercancel', (e) => {
+      if (!dragState || e.pointerId !== dragState.pointerId) return;
+      dragState = null;
+      restoreIdleDirDisplay();
+    });
 
     railWrap.addEventListener('keydown', (e) => {
       if (e.key === 'ArrowUp') {
@@ -814,6 +891,12 @@
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         controller.runSimulatedSwipe('down');
+      } else if (e.key === 'Home') {
+        e.preventDefault();
+        updateRailAndReadout(0.05, 5.0, 0, 'up');
+      } else if (e.key === 'End') {
+        e.preventDefault();
+        updateRailAndReadout(0.95, 5.0, 0, 'down');
       }
     });
 
@@ -864,7 +947,6 @@
       const padY = 6;
       const plotH = Math.max(12, hPx - padY * 2 - 10);
 
-      // Subtle 15% top-mic reference line & 50% midline
       const micLineY = padY + 0.15 * plotH;
       ctx.strokeStyle = 'rgba(0, 82, 204, 0.18)';
       ctx.setLineDash([2, 3]);
@@ -875,7 +957,6 @@
       ctx.stroke();
       ctx.setLineDash([]);
 
-      // Uncertainty band polygon
       if (scopeHist.length > 1) {
         ctx.fillStyle = 'rgba(20, 20, 19, 0.06)';
         ctx.beginPath();
@@ -893,7 +974,6 @@
         ctx.closePath();
         ctx.fill();
 
-        // Main position trajectory y(t)
         ctx.lineWidth = 1.75;
         ctx.strokeStyle = '#141413';
         ctx.beginPath();
@@ -905,7 +985,6 @@
         }
         ctx.stroke();
 
-        // Highlight active segments in directional accent
         for (let i = 1; i < scopeHist.length; i++) {
           if (!scopeHist[i].active) continue;
           const x0 = 4 + ((i - 1) / (SCOPE_LEN - 1)) * (traceW - 6);
@@ -921,7 +1000,6 @@
         }
       }
 
-      // Right mini Doppler spectrum column (-f bottom = DOWN, +f top = UP)
       if (dopW >= 18) {
         const xBase = traceW + 4;
         const midY = padY + plotH * 0.5;
@@ -935,7 +1013,6 @@
         const bins = lastDopplerBins;
         const binStep = plotH / 32;
         for (let b = 0; b < 32; b++) {
-          // b = 0..15 negative Doppler (bottom half), b = 16..31 positive Doppler (top half)
           const isPos = b >= 16;
           const rowIdx = isPos ? 31 - b : 15 - b + 16;
           const mag = clamp((bins[b] || 0) / 3.5, 0, 1);
@@ -956,27 +1033,92 @@
     }
 
     // -------------------------------------------------------------------------
-    // 7. Seamless SPA View Swap, Spatial Homothety Transition & History Sync
+    // 7. Race-Free SPA View Swap, Spatial Homothety Transition & History Sync
     // -------------------------------------------------------------------------
-    function swapDomToSecondary() {
-      mainGrid.hidden = true;
-      secondaryPage.hidden = false;
-      isSecondaryOpen = true;
-      syncCanvasSize();
-      backBtn.focus({ preventScroll: true });
+    function clearTransitionNames() {
+      portalCell.style.viewTransitionName = '';
+      secondaryGrid.style.viewTransitionName = '';
     }
 
-    function swapDomToMain() {
-      secondaryPage.hidden = true;
-      mainGrid.hidden = false;
-      isSecondaryOpen = false;
-      calWizardActive = false;
-      inlineOverlay.hidden = true;
-      portalBtn.focus({ preventScroll: true });
+    function applyDomState(openNow, restorePortalFocus) {
+      if (openNow) {
+        mainGrid.hidden = true;
+        secondaryPage.hidden = false;
+        isSecondaryOpen = true;
+        syncCanvasSize();
+        backBtn.focus({ preventScroll: true });
+      } else {
+        secondaryPage.hidden = true;
+        mainGrid.hidden = false;
+        isSecondaryOpen = false;
+        if (calWizardActive) {
+          controller.cancelCalibrationStep();
+          calWizardActive = false;
+        }
+        inlineOverlay.hidden = true;
+        calBtn.setAttribute('aria-expanded', 'false');
+        overlayReturnFocusEl = null;
+        if (restorePortalFocus) {
+          portalBtn.focus({ preventScroll: true });
+        }
+      }
+    }
+
+    function runPortalTransition(nextOpen, opts = {}) {
+      const animate = Boolean(opts.animate);
+      const restoreFocus = opts.restoreFocus !== false;
+      targetOpen = nextOpen;
+      const mySeq = ++vtSeq;
+
+      if (!nextOpen) {
+        enteredFromMainGrid = false;
+        controller.stop();
+      }
+
+      if (
+        animate &&
+        typeof document.startViewTransition === 'function' &&
+        !prefersReducedMotion()
+      ) {
+        clearTransitionNames();
+        if (nextOpen) {
+          portalCell.style.viewTransitionName = 'lg-stage-portal';
+        } else {
+          secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
+        }
+
+        const vt = document.startViewTransition(() => {
+          if (mySeq !== vtSeq) {
+            // Superseded mid-flight: reconcile DOM directly to latest targetOpen
+            clearTransitionNames();
+            applyDomState(targetOpen, restoreFocus);
+            return;
+          }
+          if (targetOpen) {
+            portalCell.style.viewTransitionName = '';
+            secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
+          } else {
+            secondaryGrid.style.viewTransitionName = '';
+            portalCell.style.viewTransitionName = 'lg-stage-portal';
+          }
+          applyDomState(targetOpen, restoreFocus);
+        });
+
+        Promise.resolve(vt && vt.finished)
+          .catch(() => {})
+          .finally(() => {
+            if (mySeq === vtSeq) {
+              clearTransitionNames();
+            }
+          });
+      } else {
+        clearTransitionNames();
+        applyDomState(nextOpen, restoreFocus);
+      }
     }
 
     function openSecondaryView(opts) {
-      if (isSecondaryOpen) return;
+      if (targetOpen) return;
       const fromUserTap = Boolean(opts && opts.fromUserTap);
 
       if (fromUserTap && location.hash !== '#left-grille') {
@@ -988,55 +1130,11 @@
         }
       }
 
-      if (
-        fromUserTap &&
-        typeof document.startViewTransition === 'function' &&
-        !prefersReducedMotion()
-      ) {
-        portalCell.style.viewTransitionName = 'lg-stage-portal';
-        const vt = document.startViewTransition(() => {
-          portalCell.style.viewTransitionName = '';
-          secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
-          swapDomToSecondary();
-        });
-        vt.finished
-          .catch(() => {})
-          .finally(() => {
-            secondaryGrid.style.viewTransitionName = '';
-          });
-      } else {
-        swapDomToSecondary();
-      }
-    }
-
-    function closeSecondaryViewInternal(animate) {
-      if (!isSecondaryOpen) return;
-      // Deterministically extinguish mic & ultrasonic speaker immediately on leaving secondary page
-      controller.stop();
-
-      if (
-        animate &&
-        typeof document.startViewTransition === 'function' &&
-        !prefersReducedMotion()
-      ) {
-        secondaryGrid.style.viewTransitionName = 'lg-stage-portal';
-        const vt = document.startViewTransition(() => {
-          secondaryGrid.style.viewTransitionName = '';
-          portalCell.style.viewTransitionName = 'lg-stage-portal';
-          swapDomToMain();
-        });
-        vt.finished
-          .catch(() => {})
-          .finally(() => {
-            portalCell.style.viewTransitionName = '';
-          });
-      } else {
-        swapDomToMain();
-      }
+      runPortalTransition(true, { animate: fromUserTap, restoreFocus: false });
     }
 
     function requestCloseSecondaryView() {
-      if (!isSecondaryOpen) return;
+      if (!targetOpen) return;
       if (
         enteredFromMainGrid &&
         location.hash === '#left-grille' &&
@@ -1057,22 +1155,29 @@
           global.history.replaceState(null, '', location.pathname + location.search);
         } catch (_) {}
       }
-      closeSecondaryViewInternal(true);
+      runPortalTransition(false, { animate: true, restoreFocus: true });
     }
 
     function syncLocationHash() {
-      if (location.hash === '#left-grille') {
-        if (!isSecondaryOpen) openSecondaryView({ fromUserTap: false });
-      } else if (isSecondaryOpen) {
-        closeSecondaryViewInternal(true);
+      const wantOpen = location.hash === '#left-grille';
+      if (wantOpen === targetOpen) return;
+      if (wantOpen) {
+        runPortalTransition(true, { animate: false, restoreFocus: false });
+      } else {
+        // If another cell's hash (e.g. `#api-matrix`) took over, close instantly without stealing focus
+        const crossCellHash = Boolean(location.hash && location.hash !== '#left-grille');
+        runPortalTransition(false, {
+          animate: !crossCellHash,
+          restoreFocus: !crossCellHash
+        });
       }
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && isSecondaryOpen) {
+      if (e.key === 'Escape' && targetOpen) {
         e.preventDefault();
         if (calWizardActive || !inlineOverlay.hidden) {
-          closeCalibrationWizard();
+          closeCalibrationWizard({ restoreFocus: true });
         } else {
           requestCloseSecondaryView();
         }
@@ -1080,27 +1185,19 @@
     });
 
     document.addEventListener('visibilitychange', () => {
-      if (!isSecondaryOpen || controller.state !== 'listening') return;
-      if (document.hidden && controller.workletNode) {
-        controller.workletNode.port.postMessage({ type: 'setTx', enabled: false, gain: 0 });
-      } else if (!document.hidden && controller.txEnabled && controller.workletNode) {
-        controller.workletNode.port.postMessage({
-          type: 'setTx',
-          enabled: true,
-          gain: controller.txGain
-        });
-      }
+      if (!targetOpen) return;
+      controller.setHiddenMuted(Boolean(document.hidden));
     });
 
     global.addEventListener('popstate', syncLocationHash);
     global.addEventListener('hashchange', syncLocationHash);
     global.addEventListener('pagehide', () => controller.stop({ immediate: true, silent: true }));
 
-    // Initial state render & deep-link support
     handleControllerState({
       state: 'idle',
       error: '',
       txEnabled: controller.txEnabled,
+      canUseSonar: true,
       polarity: controller.polarity,
       calibrated: Boolean(controller.calibration),
       sampleRate: 48000
@@ -1109,6 +1206,8 @@
     if (location.hash === '#left-grille') {
       openSecondaryView({ fromUserTap: false });
     }
+
+    return { controller };
   }
 
   function bootstrap() {
