@@ -1,190 +1,73 @@
 /* ==========================================================================
-   Secondary Grid Cell 06 — MacBook Lid Angle Sensor (`lid-angle.css`)
-   Strictly scoped to `.la-cell` / `.la-stage` with `position: absolute; inset: 0`
-   to guarantee exact 4:3 `.cell` geometry across 150px–2560px container widths.
+   Secondary slot 06 — MacBook lid angle (`lid-angle.css`)
+   The slot is a shared-anatomy tile (left-grille NOTES "Sensor cell frame"): `.la-stage` is
+   the `.lg-cell-stage` column, with `ui-tile-head` / `ui-tile-body` / `ui-tile-foot` and the
+   shared ui- controls. This file keeps only the hero: the hinge drawing and the angle.
+   Scoped to `.la-cell`; size steps use the slot's `ui-tile` container.
    ========================================================================== */
 
 .la-cell {
-  --la-bg: #ffffff;
-  --la-well: #f5f5f3;
-  --la-well-border: #e4e4e0;
-  --la-border: #e5e5e5;
-  --la-ink: #141413;
-  --la-ink-sec: #52524e;
-  --la-ink-muted: #63635f;
-  --la-cobalt: #0052cc;
-  --la-cobalt-soft: rgba(0, 82, 204, 0.12);
-  --la-vermilion: #c93700;
-  --la-vermilion-soft: rgba(201, 55, 0, 0.12);
-  --la-emerald: #047857;
-  --la-emerald-soft: rgba(4, 120, 87, 0.12);
-  --la-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
-  --la-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-
-  position: relative;
-  overflow: hidden;
-  container-type: inline-size;
-  font-family: var(--la-sans);
-  color: var(--la-ink);
-  -webkit-font-smoothing: antialiased;
+  /* Hero palette: one colour per angle source (drawing, angle, meter). */
+  --la-src: var(--ui-ink-2);           /* idle */
+  --la-src-tint: rgba(22, 22, 21, 0.05);
 }
 
 .la-stage {
-  position: absolute;
-  inset: 0;
-  overflow: hidden;
-  padding: clamp(5px, 2.2cqw, 11px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  row-gap: clamp(4px, 1.5cqw, 8px);
-  background: var(--la-bg);
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* --------------------------------------------------------------------------
-   1. Top Micro-Bezel
-   -------------------------------------------------------------------------- */
-
-.la-bezel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
-  min-width: 0;
+.la-stage:is([data-source="sonar"], [data-source="hid"]) .la-angle-num {
+  color: var(--la-src);
 }
 
-.la-bezel-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
+.la-stage[data-source="drag"] {        /* simulated: neutral ink, never a signal colour */
+  --la-src: var(--ui-ink);
+  --la-src-tint: rgba(22, 22, 21, 0.07);
 }
 
-.la-bezel-right {
+.la-stage[data-source="sonar"] {       /* live acoustic estimate */
+  --la-src: var(--ui-accent);
+  --la-src-tint: color-mix(in srgb, var(--ui-accent) 10%, transparent);
+}
+
+.la-stage[data-source="hid"] {         /* exact hardware angle from the bridge */
+  --la-src: var(--ui-positive);
+  --la-src-tint: color-mix(in srgb, var(--ui-positive) 10%, transparent);
+}
+
+.la-btn--sonar {
+  min-width: 64px;                 /* Sonar / Arming… / Chirp without a layout jump */
+}
+
+/* The pill tone is set from code as data-tone; base.css colours it. A long label truncates. */
+.la-pill {
+  min-width: 0;
   flex: 0 1 auto;
 }
 
-.la-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: clamp(18px, 5cqw, 23px);
-  padding: 0 clamp(5px, 1.6cqw, 8px);
-  border-radius: 5px;
-  border: 1px solid var(--la-well-border);
-  background: var(--la-well);
-  color: var(--la-ink);
-  font-family: var(--la-mono);
-  font-size: clamp(8px, 2.1cqw, 10.5px);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.la-btn:hover {
-  background: #ecece8;
-}
-
-.la-btn:focus-visible {
-  outline: 2px solid var(--la-cobalt);
-  outline-offset: 1px;
-}
-
-.la-btn--sonar[data-active="true"] {
-  background: var(--la-ink);
-  border-color: var(--la-ink);
-  color: #ffffff;
-}
-
-.la-btn--hid[data-live="true"] {
-  background: var(--la-emerald-soft);
-  border-color: rgba(4, 120, 87, 0.35);
-  color: var(--la-emerald);
-}
-
-.la-dot {
-  width: 5.5px;
-  height: 5.5px;
-  border-radius: 50%;
-  background: #8e8e88;
-  flex: 0 0 auto;
-}
-
-.la-btn--sonar[data-active="true"] .la-dot {
-  background: #38bdf8;
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.32);
-}
-
-.la-btn--hid[data-live="true"] .la-dot--hid {
-  background: #10b981;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.28);
-}
-
-.la-source-badge {
-  font-family: var(--la-mono);
-  font-size: clamp(7.5px, 2cqw, 10px);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  padding: 2px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--la-well-border);
-  background: var(--la-well);
-  color: var(--la-ink-muted);
-  white-space: nowrap;
+.la-pill .ui-pill-label {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.la-source-badge[data-source="sonar"] {
-  color: var(--la-cobalt);
-  background: var(--la-cobalt-soft);
-  border-color: rgba(0, 82, 204, 0.28);
-}
-
-.la-source-badge[data-source="hid"] {
-  color: var(--la-emerald);
-  background: var(--la-emerald-soft);
-  border-color: rgba(4, 120, 87, 0.32);
-}
-
-.la-source-badge[data-source="drag"] {
-  color: var(--la-vermilion);
-  background: var(--la-vermilion-soft);
-  border-color: rgba(201, 55, 0, 0.28);
-}
-
-.la-kicker {
-  font-family: var(--la-mono);
-  font-size: clamp(8.5px, 2cqw, 10.5px);
-  font-weight: 600;
-  color: var(--la-ink-muted);
-  font-variant-numeric: tabular-nums;
-}
-
 /* --------------------------------------------------------------------------
-   2. Main Body: Side-Elevation Hinge SVG + Swiss Telemetry Column
+   Body: hinge drawing (hero) | angle readout + echo
    -------------------------------------------------------------------------- */
 
 .la-body {
   display: grid;
-  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
-  column-gap: clamp(5px, 2cqw, 10px);
-  min-height: 0;
-  min-width: 0;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--ui-3);
 }
 
 .la-diagram-well {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--la-well);
-  border: 1px solid var(--la-well-border);
-  border-radius: 6px;
-  padding: clamp(3px, 1.2cqw, 6px);
+  padding: var(--ui-2);
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -204,481 +87,294 @@
 }
 
 .la-hinge-svg:focus-visible {
-  outline: 2px solid var(--la-cobalt);
-  outline-offset: 1px;
-  border-radius: 4px;
+  outline: var(--ui-ring);
+  outline-offset: 2px;
+  border-radius: var(--ui-radius-sm);
 }
 
-.la-drag-hint {
-  position: absolute;
-  left: 6px;
-  top: 4px;
-  font-family: var(--la-mono);
-  font-size: clamp(7px, 1.7cqw, 8.5px);
-  color: var(--la-ink-muted);
-  pointer-events: none;
-  letter-spacing: 0.02em;
-}
-
-/* SVG Architectural Styling */
+/* SVG drawing */
 .la-arc-track {
   fill: none;
-  stroke: #d8d8d2;
+  stroke: var(--ui-line);
   stroke-width: 1;
   stroke-dasharray: 2.2 2.4;
 }
 
 .la-arc-sector {
-  fill: rgba(20, 20, 19, 0.055);
-  transition: fill 150ms ease;
-}
-
-.la-stage[data-source="sonar"] .la-arc-sector {
-  fill: rgba(0, 82, 204, 0.09);
-}
-
-.la-stage[data-source="hid"] .la-arc-sector {
-  fill: rgba(4, 120, 87, 0.10);
-}
-
-.la-stage[data-source="drag"] .la-arc-sector {
-  fill: rgba(201, 55, 0, 0.09);
+  fill: var(--la-src-tint);
+  transition: fill var(--ui-dur) var(--ui-ease);
 }
 
 .la-arc-active {
   fill: none;
-  stroke: var(--la-ink-sec);
+  stroke: var(--la-src);
   stroke-width: 1.8;
   stroke-linecap: round;
 }
 
-.la-stage[data-source="sonar"] .la-arc-active {
-  stroke: var(--la-cobalt);
-}
-
-.la-stage[data-source="hid"] .la-arc-active {
-  stroke: var(--la-emerald);
-}
-
-.la-stage[data-source="drag"] .la-arc-active {
-  stroke: var(--la-vermilion);
-}
-
 .la-tick {
-  stroke: #c4c4bc;
+  stroke: var(--ui-line);
   stroke-width: 0.9;
 }
 
 .la-tick--major {
-  stroke: #8c8c84;
+  stroke: var(--ui-ink-3);
   stroke-width: 1.25;
 }
 
 .la-arc-label {
-  font-family: var(--la-mono);
-  font-size: 7.5px;
-  font-weight: 600;
-  fill: var(--la-ink-muted);
+  font: 500 7.5px var(--ui-mono);     /* SVG user units: scales with the drawing */
+  fill: var(--ui-ink-3);
 }
 
 .la-cal-pip {
-  fill: #d4d4cc;
-  stroke: var(--la-well);
+  fill: var(--ui-line);
+  stroke: var(--ui-well);
   stroke-width: 0.8;
 }
 
 .la-cal-pip[data-locked="true"] {
-  fill: var(--la-emerald);
+  fill: var(--ui-ink);
+}
+
+.la-sonar-ray,
+.la-sonar-pulse {
+  fill: none;
+  stroke: var(--la-src);
+  pointer-events: none;
 }
 
 .la-sonar-ray {
-  fill: none;
-  stroke: var(--la-cobalt);
   stroke-width: 1.2;
   stroke-dasharray: 2.5 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  pointer-events: none;
-}
-
-.la-stage[data-source="drag"] .la-sonar-ray {
-  stroke: var(--la-vermilion);
 }
 
 .la-sonar-pulse {
-  fill: none;
-  stroke: var(--la-cobalt);
   stroke-width: 1;
-  pointer-events: none;
-}
-
-.la-stage[data-source="drag"] .la-sonar-pulse {
-  stroke: var(--la-vermilion);
 }
 
 .la-desk-line {
-  stroke: #dcdcd6;
+  stroke: var(--ui-hairline);
   stroke-width: 1;
 }
 
 .la-chassis-foot {
-  fill: #52524e;
+  fill: var(--ui-ink-2);
 }
 
 .la-base-shell {
-  fill: #e3e3de;
-  stroke: #7a7a74;
+  fill: var(--ui-hairline);
+  stroke: var(--ui-ink-3);
   stroke-width: 1.1;
 }
 
 .la-key-deck {
-  stroke: #262624;
+  stroke: var(--ui-ink);
   stroke-width: 1.6;
   stroke-linecap: round;
 }
 
 .la-spk-dot {
-  fill: var(--la-cobalt);
+  fill: var(--ui-ink-3);
 }
 
 .la-lid-shell {
-  fill: #242422;
-  stroke: #141413;
+  fill: var(--ui-ink);
+  stroke: var(--ui-ink);
   stroke-width: 0.7;
 }
 
 .la-lid-glass {
-  stroke: #9ec5ff;
+  stroke: var(--ui-ink-3);
   stroke-width: 1.1;
   stroke-linecap: round;
 }
 
 .la-lid-handle-halo {
-  fill: rgba(201, 55, 0, 0.16);
-  transition: fill 120ms ease;
-}
-
-.la-stage[data-source="sonar"] .la-lid-handle-halo {
-  fill: rgba(0, 82, 204, 0.16);
-}
-
-.la-stage[data-source="hid"] .la-lid-handle-halo {
-  fill: rgba(4, 120, 87, 0.16);
+  fill: var(--la-src-tint);
+  transition: fill var(--ui-dur) var(--ui-ease);
 }
 
 .la-lid-handle-dot {
-  fill: var(--la-vermilion);
-  stroke: #ffffff;
+  fill: var(--la-src);
+  stroke: var(--ui-surface);
   stroke-width: 1;
 }
 
-.la-stage[data-source="sonar"] .la-lid-handle-dot {
-  fill: var(--la-cobalt);
-}
-
-.la-stage[data-source="hid"] .la-lid-handle-dot {
-  fill: var(--la-emerald);
-}
-
 .la-hinge-outer {
-  fill: #1c1c1a;
-  stroke: #ffffff;
+  fill: var(--ui-ink);
+  stroke: var(--ui-surface);
   stroke-width: 1.1;
 }
 
 .la-hinge-pin {
-  fill: #e4e4e0;
+  fill: var(--ui-hairline);
 }
 
-/* Telemetry Readout Column */
+/* Readout column: angle (hero), posture, then quiet echo rows */
 .la-readout {
-  display: grid;
-  grid-template-rows: minmax(0, 1.15fr) minmax(0, 1fr);
-  row-gap: clamp(4px, 1.4cqw, 7px);
-  min-height: 0;
-  min-width: 0;
-}
-
-.la-hero-card,
-.la-metrics {
-  background: var(--la-well);
-  border: 1px solid var(--la-well-border);
-  border-radius: 6px;
-  padding: clamp(4px, 1.5cqw, 8px) clamp(5px, 1.8cqw, 9px);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
+  gap: var(--ui-3);
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
 }
 
-.la-label {
-  font-family: var(--la-mono);
-  font-size: clamp(7px, 1.8cqw, 9px);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--la-ink-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.la-hero-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-1);
+  min-width: 0;
+  padding-top: var(--ui-2);
 }
 
 .la-angle-hero {
   display: flex;
   align-items: baseline;
-  gap: 1px;
-  line-height: 1;
   min-width: 0;
 }
 
 .la-angle-num {
-  font-family: var(--la-mono);
-  font-size: clamp(16px, 7.6cqw, 34px);
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  font-variant-numeric: tabular-nums;
-  color: var(--la-ink);
-}
-
-.la-stage[data-source="hid"] .la-angle-num {
-  color: var(--la-emerald);
-}
-
-.la-stage[data-source="sonar"] .la-angle-num {
-  color: var(--la-cobalt);
-}
-
-.la-stage[data-source="drag"] .la-angle-num {
-  color: var(--la-vermilion);
+  color: var(--ui-ink);
+  transition: color var(--ui-dur) var(--ui-ease);
 }
 
 .la-angle-deg {
-  font-family: var(--la-mono);
-  font-size: clamp(11px, 3.8cqw, 18px);
-  font-weight: 600;
-  color: var(--la-ink-muted);
+  margin-left: 0.05em;
 }
 
 .la-posture {
-  font-family: var(--la-mono);
-  font-size: clamp(7.5px, 1.9cqw, 9.5px);
-  font-weight: 600;
-  color: var(--la-ink-sec);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.la-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-1);
+  min-width: 0;
 }
 
 .la-metric-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 4px;
+  gap: var(--ui-1);
   min-width: 0;
 }
 
-.la-metric-key {
-  font-family: var(--la-mono);
-  font-size: clamp(7px, 1.7cqw, 9px);
-  font-weight: 600;
-  color: var(--la-ink-muted);
-  letter-spacing: 0.03em;
-}
-
 .la-metric-val {
-  font-family: var(--la-mono);
-  font-size: clamp(8px, 2.2cqw, 11px);
-  font-weight: 700;
-  color: var(--la-ink);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .la-meter-track {
-  width: 100%;
-  height: 4px;
-  border-radius: 2px;
-  background: #e2e2dc;
+  height: 2px;
+  margin-top: var(--ui-1);
+  border-radius: 1px;
+  background: var(--ui-hairline);
   overflow: hidden;
-  margin-top: 2px;
 }
 
 .la-meter-fill {
   height: 100%;
   width: 0%;
-  border-radius: 2px;
-  background: var(--la-cobalt);
-  transition: width 80ms linear, background-color 150ms ease;
+  background: var(--la-src);
+  transition: width 80ms linear;
 }
 
-.la-stage[data-source="hid"] .la-meter-fill {
-  background: var(--la-emerald);
-}
-
-.la-stage[data-source="drag"] .la-meter-fill {
-  background: var(--la-vermilion);
+/* Shown only in a narrow mount (240–319 px), where the base step hides the foot. */
+.la-narrow-note {
+  display: none;
 }
 
 /* --------------------------------------------------------------------------
-   3. Bottom 2-Point Calibration Bar
+   Foot: 2-point calibration
    -------------------------------------------------------------------------- */
-
-.la-cal-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
-}
 
 .la-cal-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--ui-1);
   flex: 0 0 auto;
+  margin-left: calc(-1 * var(--ui-2));   /* quiet buttons: align their text with the index */
 }
 
-.la-cal-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: clamp(18px, 4.6cqw, 22px);
-  padding: 0 clamp(5px, 1.5cqw, 8px);
-  border-radius: 4px;
-  border: 1px solid var(--la-border);
-  background: #ffffff;
-  color: var(--la-ink-sec);
-  font-family: var(--la-mono);
-  font-size: clamp(7.5px, 1.9cqw, 9.5px);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-/* `display: inline-flex` above would otherwise override the `hidden` attribute (Reset showed uncalibrated) */
+/* `.ui-btn` sets display: inline-flex, which would override the `hidden` attribute
+   (Reset showed while uncalibrated). Keep this rule. */
 .la-cal-btn[hidden] {
   display: none;
-}
-
-.la-cal-btn:hover {
-  background: var(--la-well);
-  color: var(--la-ink);
-  border-color: #d4d4ce;
-}
-
-.la-cal-btn:focus-visible {
-  outline: 2px solid var(--la-cobalt);
-  outline-offset: 1px;
-}
-
-.la-cal-btn[data-calibrated="true"] {
-  border-color: rgba(4, 120, 87, 0.35);
-  color: var(--la-ink);
 }
 
 .la-cal-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #c8c8c0;
+  border: 1px solid var(--ui-ink-3);
   flex: 0 0 auto;
 }
 
 .la-cal-btn[data-calibrated="true"] .la-cal-dot {
-  background: var(--la-emerald);
+  background: var(--ui-ink);
+  border-color: var(--ui-ink);
 }
 
-.la-cal-short {
-  display: none;
-}
-
-.la-cal-note {
-  font-family: var(--la-mono);
-  font-size: clamp(7.5px, 1.8cqw, 9.5px);
-  color: var(--la-ink-muted);
-  white-space: nowrap;
+.la-cal-note {         /* class name is pinned exactly by a test: truncation lives here */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
+  white-space: nowrap;
   text-align: right;
 }
 
 /* --------------------------------------------------------------------------
-   4. Container-Query Responsiveness (down to 150px) & Reduced Motion
+   Size steps (slot tile width; the page keeps tiles >= 320 px, tests mount narrower)
    -------------------------------------------------------------------------- */
+
+@container ui-tile (max-width: 319px) {
+  .la-body {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: var(--ui-2);
+  }
+
+  .la-narrow-note {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .la-metrics {
+    display: none;
+  }
+}
+
+@container ui-tile (max-width: 239px) {
+  .la-narrow-note,
+  .la-posture,
+  .la-title {
+    display: none;
+  }
+
+  .la-body {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .la-readout {
+    justify-content: center;
+  }
+
+  .la-angle-hero {
+    font-size: var(--ui-fs-4);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .la-meter-fill,
-  .la-btn,
-  .la-cal-btn,
-  .la-arc-sector {
-    transition: none;
-  }
-}
-
-@container (max-width: 340px) {
-  .la-cal-long {
-    display: none;
-  }
-  .la-cal-short {
-    display: inline;
-  }
-  .la-drag-hint {
-    display: none;
-  }
-}
-
-@container (max-width: 265px) {
-  .la-kicker,
-  .la-cal-note,
-  .la-posture {
-    display: none;
-  }
-  .la-body {
-    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-    column-gap: 5px;
-  }
-}
-
-@container (max-width: 210px) {
-  .la-metrics,
-  .la-cal-btn--reset {
-    display: none;
-  }
-  .la-readout {
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .la-hero-card {
-    justify-content: center;
-    align-items: center;
-    text-align: center;
-  }
-  .la-label {
-    display: none;
-  }
-}
-
-@container (max-width: 175px) {
-  .la-btn--hid {
-    display: none;
-  }
-  .la-stage {
-    padding: 4px;
-    row-gap: 3px;
-  }
-  .la-body {
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-    column-gap: 4px;
-  }
+  .la-arc-sector,
+  .la-lid-handle-halo,
   .la-angle-num {
-    font-size: clamp(11px, 7.4cqw, 16px);
-  }
-  .la-angle-deg {
-    font-size: clamp(8.5px, 4.5cqw, 11px);
+    transition: none;
   }
 }

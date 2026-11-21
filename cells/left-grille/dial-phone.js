@@ -105,9 +105,8 @@
     line.setAttribute('y1', (120 + r1 * Math.sin(rad)).toFixed(2));
     line.setAttribute('x2', (120 + r2 * Math.cos(rad)).toFixed(2));
     line.setAttribute('y2', (120 + r2 * Math.sin(rad)).toFixed(2));
-    line.setAttribute('stroke', 'currentColor');
-    line.setAttribute('stroke-opacity', isMajor ? '0.65' : '0.3');
-    line.setAttribute('stroke-width', isMajor ? '2.2' : '1.4');
+    // Colour, opacity and width come from iphone-dial.css (.dp-tick, on --ui- tokens).
+    line.setAttribute('class', isMajor ? 'dp-tick dp-tick--major' : 'dp-tick');
     line.setAttribute('stroke-linecap', 'round');
     refs.ticksGroup.appendChild(line);
     tickLines.push(line);
@@ -171,16 +170,8 @@
     refs.arcActive.setAttribute('d', describeArc(120, 120, 98, arcSpan));
 
     for (let i = 0; i < tickLines.length; i++) {
-      if (i === st.detentSlot) {
-        tickLines[i].setAttribute('stroke', '#e85d2a');
-        tickLines[i].setAttribute('stroke-opacity', '1');
-        tickLines[i].setAttribute('stroke-width', '3');
-      } else {
-        const isMajor = i % 6 === 0;
-        tickLines[i].setAttribute('stroke', 'currentColor');
-        tickLines[i].setAttribute('stroke-opacity', isMajor ? '0.65' : '0.3');
-        tickLines[i].setAttribute('stroke-width', isMajor ? '2.2' : '1.4');
-      }
+      const cls = i % 6 === 0 ? 'dp-tick dp-tick--major' : 'dp-tick';
+      tickLines[i].setAttribute('class', i === st.detentSlot ? cls + ' is-active' : cls);
     }
 
     refs.angleText.textContent = st.angleDeg.toFixed(1) + '°';
@@ -607,10 +598,12 @@
   // Bottom Action Controls & Theme Switcher
   // =========================================================================
 
+  const themeMeta = document.querySelector ? document.querySelector('meta[name="theme-color"]') : null;
   refs.themeBtn.addEventListener('click', function () {
     const next = refs.body.dataset.theme === 'dark' ? 'light' : 'dark';
     refs.body.dataset.theme = next;
     refs.themeBtn.textContent = next === 'dark' ? '☀ Light' : '☾ Dark';
+    if (themeMeta) themeMeta.setAttribute('content', next === 'dark' ? '#111110' : '#f5f5f3');
   });
 
   refs.zeroBtn.addEventListener('click', function () {

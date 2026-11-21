@@ -1,277 +1,143 @@
 /* ==========================================================================
-   Secondary Grid Cell 07 — iPhone Spinning Dial Control (`cells/left-grille/iphone-dial.css`)
-   Strictly scoped to `.id-cell` (desktop Secondary Cell 07) and `.dp-body`
-   (standalone mobile rotary controller `dial-phone.html`).
+   Secondary slot 07 — iPhone dial (`cells/left-grille/iphone-dial.css`)
+   1. `.id-cell`: the slot is a shared-anatomy tile (left-grille NOTES "Sensor cell frame");
+      `.id-stage` is the `.lg-cell-stage` column. This file keeps the hero (the rotary dial),
+      its quiet readouts and the in-tile QR panel.
+   2. `.dp-body`: the standalone phone page `dial-phone.html`, on ../../ui/base.css tokens.
    ========================================================================== */
 
-.id-cell {
-  --id-bg: #ffffff;
-  --id-well: #f5f5f3;
-  --id-well-border: #e4e4e0;
-  --id-border: #dcdcd6;
-  --id-ink: #141413;
-  --id-ink-sec: #52524e;
-  --id-ink-muted: #63635f;
-  --id-cobalt: #0052cc;
-  --id-cobalt-soft: rgba(0, 82, 204, 0.12);
-  --id-vermilion: #c93700;
-  --id-emerald: #047857;
-  --id-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
-  --id-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-
-  position: relative;
-  overflow: hidden;
-  container-type: inline-size;
-  font-family: var(--id-sans);
-  color: var(--id-ink);
-  -webkit-font-smoothing: antialiased;
-}
+/* --------------------------------------------------------------------------
+   1. Desktop tile
+   -------------------------------------------------------------------------- */
 
 .id-stage {
-  position: absolute;
-  inset: 0;
-  padding: clamp(6px, 2.2cqw, 12px);
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  row-gap: clamp(4px, 1.6cqw, 8px);
-  background: var(--id-bg);
   user-select: none;
   -webkit-user-select: none;
 }
 
-/* --------------------------------------------------------------------------
-   1. Top Bezel Bar
-   -------------------------------------------------------------------------- */
-
-.id-bezel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 5px;
+/* Pill: tone from code (data-tone); a long status truncates instead of pushing buttons out. */
+.id-pill {
   min-width: 0;
+  flex: 0 1 auto;
 }
 
-.id-bezel-left {
-  display: flex;
-  align-items: center;
-  gap: 5px;
+.id-pill .ui-pill-label {
   min-width: 0;
-}
-
-.id-kicker {
-  font-family: var(--id-mono);
-  font-size: clamp(8.5px, 2.2cqw, 10.5px);
-  font-weight: 700;
-  color: var(--id-ink-muted);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
-
-.id-title {
-  font-size: clamp(10px, 2.6cqw, 12.5px);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  color: var(--id-ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.id-led {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #9ca3af;
-  flex: 0 0 auto;
-}
-
-.id-led[data-state="ready"] {
-  background: var(--id-cobalt);
-}
-
-.id-led[data-state="live"] {
-  background: #10b981;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
-}
-
-.id-led[data-state="linking"] {
-  background: #d97706;
-}
-
-.id-led[data-state="error"] {
-  background: var(--id-vermilion);
-}
-
-.id-status-text {
-  font-family: var(--id-mono);
-  font-size: clamp(7.5px, 1.9cqw, 9.5px);
-  font-weight: 600;
-  color: var(--id-ink-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .id-bezel-right {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 0 1 auto;
 }
-
-.id-btn {
-  height: clamp(19px, 5cqw, 23px);
-  padding: 0 clamp(5px, 1.6cqw, 8px);
-  border-radius: 5px;
-  border: 1px solid var(--id-well-border);
-  background: var(--id-well);
-  color: var(--id-ink);
-  font-family: var(--id-mono);
-  font-size: clamp(8px, 2cqw, 10px);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-
-.id-btn:hover {
-  background: #eaeae6;
-}
-
-.id-btn:focus-visible {
-  outline: 2px solid var(--id-cobalt);
-  outline-offset: 1px;
-}
-
-.id-btn--qr[aria-expanded="true"] {
-  background: var(--id-ink);
-  border-color: var(--id-ink);
-  color: #ffffff;
-}
-
-.id-btn--ble[aria-pressed="true"] {
-  background: var(--id-cobalt-soft);
-  border-color: rgba(0, 82, 204, 0.4);
-  color: var(--id-cobalt);
-}
-
-/* --------------------------------------------------------------------------
-   2. Main 2-Column Body: Machined Rotary Platter + Telemetry Column
-   -------------------------------------------------------------------------- */
 
 .id-body {
   display: grid;
-  grid-template-columns: minmax(90px, 44%) minmax(0, 1fr);
-  column-gap: clamp(6px, 2.2cqw, 12px);
-  min-height: 0;
-  min-width: 0;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--ui-4);
 }
 
+/* Hero: the dial */
 .id-dial-pad {
   position: relative;
-  background: var(--id-well);
-  border: 1px solid var(--id-well-border);
-  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 0;
   min-width: 0;
-  padding: 4px;
+  padding: var(--ui-2);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-well);
   cursor: grab;
   touch-action: none;
 }
 
 .id-dial-pad.is-dragging {
   cursor: grabbing;
-  border-color: #c5c5be;
 }
 
 .id-dial-pad:focus-visible {
-  outline: 2px solid var(--id-cobalt);
-  outline-offset: 1px;
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .id-dial-svg {
   width: 100%;
   height: 100%;
-  max-width: 100%;
-  max-height: 100%;
   display: block;
 }
 
 .id-stator-well {
-  fill: #ecece8;
-  stroke: #dcdcd6;
-  stroke-width: 1.2;
+  fill: var(--ui-surface);
+  stroke: var(--ui-hairline);
+  stroke-width: 1;
 }
 
 .id-value-track {
   fill: none;
-  stroke: #dfdfd9;
-  stroke-width: 3.2;
+  stroke: var(--ui-hairline);
+  stroke-width: 3;
 }
 
 .id-value-arc {
   fill: none;
-  stroke: var(--id-cobalt);
-  stroke-width: 3.4;
+  stroke: var(--ui-ink);
+  stroke-width: 3;
   stroke-linecap: round;
 }
 
 .id-tick {
-  stroke: #9e9e97;
-  stroke-width: 1.25;
+  stroke: var(--ui-line);
+  stroke-width: 1.2;
   stroke-linecap: round;
 }
 
 .id-tick--major {
-  stroke: #52524e;
-  stroke-width: 1.8;
+  stroke: var(--ui-ink-3);
+  stroke-width: 1.6;
 }
 
 .id-tick.is-active {
-  stroke: var(--id-vermilion);
+  stroke: var(--ui-accent);
   stroke-width: 2.5;
 }
 
 .id-rotor-rim {
-  fill: #d8d8d2;
-  stroke: #b8b8b0;
-  stroke-width: 1.2;
+  fill: var(--ui-well);
+  stroke: var(--ui-line);
+  stroke-width: 1;
 }
 
 .id-rotor-face {
-  fill: #f9f9f7;
-  stroke: #e2e2dc;
+  fill: var(--ui-surface);
+  stroke: var(--ui-hairline);
   stroke-width: 1;
 }
 
 .id-rotor-groove {
   fill: none;
-  stroke: #e6e6e1;
+  stroke: var(--ui-hairline);
   stroke-width: 0.9;
   stroke-dasharray: 2 2;
 }
 
-.id-rotor-notch {
-  stroke: var(--id-vermilion);
-  stroke-width: 3.2;
+.id-rotor-notch {                /* the index mark that turns with the dial */
+  stroke: var(--ui-accent);
+  stroke-width: 3;
   stroke-linecap: round;
 }
 
 .id-rotor-dimple {
-  fill: #eaeae4;
-  stroke: #c6c6be;
-  stroke-width: 1.1;
+  fill: var(--ui-well);
+  stroke: var(--ui-line);
+  stroke-width: 1;
 }
 
 .id-hub-cap {
-  fill: #ffffff;
-  stroke: #dcdcd6;
+  fill: var(--ui-surface);
+  stroke: var(--ui-hairline);
   stroke-width: 1;
 }
 
@@ -282,210 +148,132 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   pointer-events: none;
   text-align: center;
 }
 
 .id-hub-angle {
-  font-family: var(--id-mono);
-  font-size: clamp(9.5px, 3cqw, 14px);
-  font-weight: 700;
+  font: 500 var(--ui-fs-4) / 1 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--id-ink);
-  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--ui-ink);
 }
 
 .id-hub-turns {
-  font-family: var(--id-mono);
-  font-size: clamp(6.5px, 1.7cqw, 8.5px);
+  font: 400 var(--ui-fs-1) / 1 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--id-ink-muted);
-  margin-top: 1px;
+  color: var(--ui-ink-3);
 }
 
-/* --------------------------------------------------------------------------
-   3. Right-Column Telemetry Cards & Action Row
-   -------------------------------------------------------------------------- */
-
+/* Quiet readouts: value and speed */
 .id-telemetry {
-  display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
-  row-gap: clamp(4px, 1.4cqw, 7px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--ui-3);
   min-width: 0;
   min-height: 0;
 }
 
 .id-card {
-  background: var(--id-well);
-  border: 1px solid var(--id-well-border);
-  border-radius: 6px;
-  padding: clamp(4px, 1.5cqw, 8px) clamp(6px, 1.8cqw, 10px);
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  gap: var(--ui-1);
   min-width: 0;
-  min-height: 0;
-  overflow: hidden;
 }
 
 .id-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: var(--ui-1);
   min-width: 0;
 }
 
-.id-label {
-  font-family: var(--id-mono);
-  font-size: clamp(7.5px, 1.8cqw, 9.5px);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: var(--id-ink-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .id-mini-pill {
-  height: 17px;
-  padding: 0 5px;
-  border-radius: 4px;
-  border: 1px solid var(--id-border);
-  background: #ffffff;
-  color: var(--id-ink-sec);
-  font-family: var(--id-mono);
-  font-size: 8px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.id-mini-pill[aria-pressed="true"] {
-  background: var(--id-cobalt-soft);
-  border-color: rgba(0, 82, 204, 0.4);
-  color: var(--id-cobalt);
+  font-variant-numeric: tabular-nums;
 }
 
 .id-metric-row {
   display: flex;
   align-items: baseline;
-  gap: 3px;
   min-width: 0;
 }
 
-.id-metric-num {
-  font-family: var(--id-mono);
-  font-size: clamp(12px, 4.2cqw, 21px);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  color: var(--id-ink);
-  line-height: 1.05;
-  white-space: nowrap;
+.id-metric-num {                 /* secondary: one step below the hero, the dial */
+  font-size: var(--ui-fs-4);
+  line-height: 1.1;
 }
 
-.id-metric-unit {
-  font-family: var(--id-mono);
-  font-size: clamp(8px, 2cqw, 10.5px);
-  color: var(--id-ink-muted);
-  white-space: nowrap;
+.id-metric-row .ui-readout-unit {
+  font-size: var(--ui-fs-1);
 }
 
 .id-bar-track {
-  height: 4px;
-  border-radius: 2px;
-  background: #e2e2dc;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ui-hairline);
   overflow: hidden;
 }
 
 .id-bar-fill {
   height: 100%;
   width: 50%;
-  background: var(--id-cobalt);
-  border-radius: 2px;
+  background: var(--ui-ink);
   transition: width 40ms linear;
 }
 
 .id-sub-meta {
-  font-family: var(--id-mono);
-  font-size: clamp(7.5px, 1.8cqw, 9.5px);
+  font: 400 var(--ui-fs-1) / 1.3 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  color: var(--id-ink-muted);
+  color: var(--ui-ink-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.id-footer-row {
+/* Shown only in a narrow mount (240–319 px), where the base step hides the foot. */
+.id-narrow-note {
+  display: none;
+}
+
+/* Foot: Zero + Sim spins left, link meta right */
+.id-sim-group {               /* "Sim" label, then quiet buttons named for the input */
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
 }
 
-.id-sim-group {
-  display: flex;
-  align-items: center;
-  gap: 3px;
+.id-sim-label {
+  margin-right: var(--ui-1);
 }
 
-.id-mini-btn {
-  height: 19px;
-  padding: 0 6px;
-  border-radius: 4px;
-  border: 1px solid var(--id-border);
-  background: #ffffff;
-  color: var(--id-ink-sec);
-  font-family: var(--id-mono);
-  font-size: 8.5px;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.id-mini-btn:hover {
-  background: #f0f0ec;
-  color: var(--id-ink);
-}
-
-.id-mini-btn:focus-visible {
-  outline: 2px solid var(--id-cobalt);
-  outline-offset: 1px;
-}
-
-.id-mini-btn--close {
-  background: var(--id-ink);
-  border-color: var(--id-ink);
-  color: #ffffff;
+.id-foot-sep {
+  width: 1px;
+  height: 14px;
+  margin: 0 var(--ui-1);
+  background: var(--ui-hairline);
 }
 
 .id-link-meta {
-  font-family: var(--id-mono);
-  font-size: 8px;
-  color: var(--id-ink-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* --------------------------------------------------------------------------
-   4. Toggleable In-Cell QR Pairing Overlay (`.id-qr-overlay`)
-   -------------------------------------------------------------------------- */
-
+/* In-tile QR pairing panel: covers the body only; the header stays usable. */
 .id-qr-overlay {
   position: absolute;
   inset: 0;
-  z-index: 6;
-  background: rgba(255, 255, 255, 0.97);
-  backdrop-filter: blur(4px);
-  padding: clamp(6px, 2.2cqw, 12px);
+  z-index: 2;
   display: grid;
-  grid-template-columns: minmax(76px, 38%) minmax(0, 1fr);
-  column-gap: clamp(6px, 2.4cqw, 12px);
+  grid-template-columns: minmax(0, 40%) minmax(0, 1fr);
+  gap: var(--ui-3);
   align-items: center;
+  padding: var(--ui-3);
+  background: var(--ui-surface);
 }
 
 .id-qr-overlay[hidden] {
@@ -493,40 +281,36 @@
 }
 
 .id-qr-box {
-  width: 100%;
-  height: 100%;
-  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #ffffff;
-  border: 1px solid var(--id-well-border);
-  border-radius: 6px;
-  padding: 4px;
   min-height: 0;
+  max-height: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--ui-hairline);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  padding: var(--ui-1);
 }
 
 .id-qr-box svg {
   width: 100%;
   height: 100%;
-  max-width: 148px;
-  max-height: 148px;
   display: block;
 }
 
 .id-qr-fallback {
-  font-family: var(--id-mono);
-  font-size: 9px;
-  color: var(--id-ink-muted);
+  padding: var(--ui-2);
+  font: 400 var(--ui-fs-1) / 1.4 var(--ui-mono);
+  color: var(--ui-ink-3);
   text-align: center;
-  padding: 6px;
 }
 
 .id-qr-meta {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 5px;
+  gap: var(--ui-2);
   min-width: 0;
 }
 
@@ -534,291 +318,245 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: var(--ui-1);
+  min-width: 0;
 }
 
 .id-qr-sid {
-  font-family: var(--id-mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  color: var(--id-ink);
-  background: var(--id-well);
-  border: 1px solid var(--id-well-border);
-  border-radius: 4px;
-  padding: 1px 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .id-qr-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--ui-1);
+  flex: 0 0 auto;
 }
 
 .id-qr-hint {
-  font-size: clamp(8.5px, 2.1cqw, 10.5px);
-  line-height: 1.28;
-  color: var(--id-ink-sec);
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
+  overflow-wrap: anywhere;
 }
 
 .id-host-input {
   width: 100%;
-  height: 24px;
-  padding: 0 6px;
-  border-radius: 4px;
-  border: 1px solid var(--id-border);
-  background: var(--id-well);
-  color: var(--id-ink);
-  font-family: var(--id-mono);
-  font-size: 9.5px;
+  height: var(--ui-ctl-h);
+  padding: 0 var(--ui-2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 400 var(--ui-fs-2) / 1 var(--ui-mono);
+}
+
+.id-host-input::placeholder {
+  color: var(--ui-ink-3);
 }
 
 .id-host-input:focus-visible {
-  outline: 2px solid var(--id-cobalt);
-  background: #ffffff;
+  outline: var(--ui-ring);
+  outline-offset: 1px;
 }
 
-/* --------------------------------------------------------------------------
-   5. Container Query Breakpoints (Down to 150px)
-   -------------------------------------------------------------------------- */
+/* Size steps (slot tile width; the page keeps tiles >= 320 px, tests mount narrower) */
+@container ui-tile (max-width: 319px) {
+  .id-body {
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: var(--ui-2) var(--ui-3);
+  }
 
-@container (max-width: 310px) {
-  .id-status-text,
-  .id-link-meta,
+  .id-narrow-note {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .id-sub-meta,
+  .id-qr-hint,
   .id-qr-sid {
     display: none;
   }
 }
 
-@container (max-width: 245px) {
-  .id-title,
+@container ui-tile (max-width: 239px) {
+  .id-narrow-note,
+  .id-telemetry,
   .id-hub-turns,
-  .id-sub-meta,
-  .id-footer-row,
-  .id-qr-sid,
-  .id-qr-hint {
+  .id-title {
     display: none;
-  }
-
-  .id-btn {
-    padding: 0 4px;
-    font-size: 7.5px;
   }
 
   .id-body {
-    grid-template-columns: minmax(64px, 46%) minmax(0, 1fr);
-    column-gap: 4px;
-  }
-
-  .id-telemetry {
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
-  }
-
-  .id-mini-pill {
-    display: none;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
   }
 
   .id-qr-overlay {
-    grid-template-columns: minmax(48px, 34%) minmax(0, 1fr);
-    column-gap: 4px;
-    padding: 4px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--ui-1);
   }
 
   .id-qr-meta {
-    gap: 4px;
-  }
-
-  .id-qr-top {
-    justify-content: flex-start;
-  }
-
-  .id-qr-actions {
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 3px;
-  }
-
-  .id-qr-overlay .id-mini-btn {
-    height: 18px;
-    padding: 0 4px;
-    font-size: 7.5px;
-  }
-
-  .id-host-input {
-    height: 20px;
-    padding: 0 4px;
-    font-size: 8px;
+    display: none;
   }
 }
 
-/* ==========================================================================
-   6. Standalone Mobile Controller (`cells/left-grille/dial-phone.html`)
-   Supports both Dark OLED Studio mode (default) and Braun Light Ceramic mode.
-   ========================================================================== */
+/* --------------------------------------------------------------------------
+   2. Phone page (`dial-phone.html`): light paper on the shared tokens, 44 px touch targets,
+      no hover tooltips. The theme button switches to a dark set of the same tokens.
+   -------------------------------------------------------------------------- */
 
 .dp-body {
-  --dp-bg: #111110;
-  --dp-surface: #1b1b19;
-  --dp-surface-2: #252522;
-  --dp-border: #2f2f2b;
-  --dp-ink: #f7f7f5;
-  --dp-ink-sec: #a8a8a0;
-  --dp-ink-muted: #8a8a82;
-  --dp-accent: #e85d2a;
-  --dp-cobalt: #3b82f6;
-  --dp-live: #10b981;
-  --dp-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
-  --dp-mono: ui-monospace, "SF Mono", Menlo, monospace;
-
-  margin: 0;
-  padding: 0;
   min-height: 100dvh;
-  background: var(--dp-bg);
-  color: var(--dp-ink);
-  font-family: var(--dp-sans);
+  padding: 0;                       /* base.css pads the grid page; the phone is edge to edge */
+  background: var(--ui-paper);
+  color: var(--ui-ink);
   overscroll-behavior: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
 
-/* dial-phone.html has no page reset: padded 100dvh boxes must not exceed the viewport */
-.dp-body *,
-.dp-body *::before,
-.dp-body *::after {
-  box-sizing: border-box;
+.dp-body[data-theme="dark"] {
+  --ui-paper: #111110;
+  --ui-surface: #1b1b19;
+  --ui-well: #232321;
+  --ui-ink: #f5f5f3;
+  --ui-ink-2: #c9c9c2;
+  --ui-ink-3: #a3a39b;              /* 6.9:1 on surface */
+  --ui-hairline: #2f2f2b;
+  --ui-line: #46463f;
+  --ui-accent: #ef8a5c;             /* 6.6:1 on surface */
+  --ui-accent-tint: #33221a;
+  --ui-positive: #4cc796;           /* 8.1:1 on surface */
+  --ui-positive-tint: #13281f;
 }
 
-.dp-body[data-theme="light"] {
-  --dp-bg: #f6f6f3;
-  --dp-surface: #ffffff;
-  --dp-surface-2: #ecece7;
-  --dp-border: #dcdcd5;
-  --dp-ink: #141413;
-  --dp-ink-sec: #52524e;
-  --dp-ink-muted: #6e6e68;
-  --dp-accent: #c93700;
-  --dp-cobalt: #0052cc;
+.dp-body :is(button, input):focus-visible {
+  outline: var(--ui-ring);
+  outline-offset: 2px;
 }
 
 .dp-app {
   min-height: 100dvh;
-  max-width: 460px;
+  max-width: 480px;
   margin-inline: auto;
   padding:
-    calc(10px + env(safe-area-inset-top))
-    calc(16px + env(safe-area-inset-right))
-    calc(14px + env(safe-area-inset-bottom))
-    calc(16px + env(safe-area-inset-left));
+    calc(var(--ui-2) + env(safe-area-inset-top))
+    calc(var(--ui-4) + env(safe-area-inset-right))
+    calc(var(--ui-3) + env(safe-area-inset-bottom))
+    calc(var(--ui-4) + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  gap: 10px;
+  gap: var(--ui-3);
 }
 
 .dp-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--ui-2);
+  min-height: 44px;
 }
 
 .dp-brand {
   display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.dp-badge {
-  font-family: var(--dp-mono);
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--dp-surface);
-  border: 1px solid var(--dp-border);
-  color: var(--dp-ink-sec);
+  align-items: baseline;
+  gap: var(--ui-2);
+  min-width: 0;
 }
 
 .dp-title {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.015em;
+  min-width: 0;
+  font: 600 var(--ui-fs-4) / 1.2 var(--ui-sans);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dp-header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
-}
-
-.dp-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: var(--dp-surface);
-  border: 1px solid var(--dp-border);
-  font-family: var(--dp-mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  color: #f59e0b;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.dp-status[data-state="ready"] {
-  color: var(--dp-live);
-  border-color: rgba(16, 185, 129, 0.35);
-}
-
-.dp-status[data-state="warn"] {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.4);
-}
-
-.dp-body[data-theme="light"] .dp-status[data-state="warn"] {
-  color: #b91c1c;
-}
-
-.dp-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+  gap: var(--ui-3);
+  flex: 0 0 auto;
 }
 
 .dp-theme-btn {
-  height: 26px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--dp-border);
-  background: var(--dp-surface);
-  color: var(--dp-ink-sec);
-  font-family: var(--dp-mono);
-  font-size: 10px;
-  font-weight: 600;
+  position: relative;
+  height: 28px;
+  padding: 0 var(--ui-2);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
+  white-space: nowrap;
   cursor: pointer;
 }
 
+.dp-theme-btn::after {              /* 44 px tall tap target */
+  content: "";
+  position: absolute;
+  inset: -9px -4px;
+}
+
+/* Status pill (a button): LIVE green only while the desktop answers; linking and waiting
+   are grey; anything that needs a tap or a rescan is rust. */
+.dp-status {
+  height: 24px;
+  padding: 0 10px 0 9px;
+  cursor: default;
+}
+
+button.dp-status::after {
+  inset: -10px -6px;                /* 44 px tall tap target for OFFLINE · TAP */
+}
+
+.dp-status[data-state="ready"] {
+  color: var(--ui-positive);
+  border-color: color-mix(in srgb, var(--ui-positive) 30%, transparent);
+  background: var(--ui-positive-tint);
+}
+
+.dp-status[data-state="ready"]::before {
+  background: var(--ui-positive);
+}
+
+.dp-status[data-state="warn"] {
+  color: var(--ui-accent);
+  border-color: color-mix(in srgb, var(--ui-accent) 30%, transparent);
+  background: var(--ui-accent-tint);
+  cursor: pointer;
+}
+
+.dp-status[data-state="warn"]::before {
+  background: var(--ui-accent);
+}
+
+/* Stage: the wheel is the hero */
 .dp-stage {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: var(--ui-4);
 }
 
 .dp-wheel-wrap {
   position: relative;
-  width: min(76vw, 36dvh, 284px);
+  width: min(86vw, 46dvh, 340px);
   aspect-ratio: 1 / 1;
+  border: 1px solid var(--ui-hairline);
   border-radius: 50%;
-  background: var(--dp-surface);
-  border: 1px solid var(--dp-border);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  background: var(--ui-surface);
+  color: var(--ui-ink);             /* the SVG draws in currentColor */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -833,167 +571,174 @@
   pointer-events: none;
 }
 
+.dp-arc-active {
+  stroke: var(--ui-ink);
+}
+
+.dp-notch {
+  stroke: var(--ui-accent);
+}
+
+.dp-tick {
+  stroke: currentColor;
+  stroke-opacity: 0.3;
+  stroke-width: 1.4;
+}
+
+.dp-tick--major {
+  stroke-opacity: 0.65;
+  stroke-width: 2.2;
+}
+
+.dp-tick.is-active {
+  stroke: var(--ui-accent);
+  stroke-opacity: 1;
+  stroke-width: 3;
+}
+
 .dp-center-hud {
   position: relative;
   z-index: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: var(--ui-1);
   pointer-events: none;
   text-align: center;
 }
 
 .dp-angle-big {
-  font-family: var(--dp-mono);
-  font-size: 28px;
-  font-weight: 700;
+  font: 500 var(--ui-fs-5) / 1 var(--ui-mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
-  line-height: 1;
+  letter-spacing: -0.02em;
 }
 
 .dp-val-sub {
-  font-family: var(--dp-mono);
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--dp-accent);
+  font: 500 var(--ui-fs-3) / 1.3 var(--ui-mono);
   font-variant-numeric: tabular-nums;
+  color: var(--ui-ink-2);
 }
 
 .dp-pose-meta {
-  font-family: var(--dp-mono);
-  font-size: 10px;
-  color: var(--dp-ink-sec);
+  font: 500 var(--ui-fs-1) / 1.2 var(--ui-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: var(--ui-caps-track);
+  text-transform: uppercase;
+  color: var(--ui-ink-3);
 }
 
+/* Gyroscope permission gate (also the no-gyroscope explanation) */
 .dp-gate {
   position: absolute;
-  inset: -3px;
+  inset: -1px;
   z-index: 5;
   border-radius: 50%;
-  background: rgba(17, 17, 16, 0.94);
-  backdrop-filter: blur(8px);
+  background: var(--ui-surface);    /* opaque: the angle readout must not show through the note */
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 18px;
+  gap: var(--ui-2);
+  padding: var(--ui-6);
   text-align: center;
-  color: #f7f7f5;
+  color: var(--ui-ink);
 }
 
 .dp-gate[hidden] {
   display: none !important;
 }
 
-.dp-enable-btn {
-  width: 172px;
-  height: 62px;
-  border-radius: 999px;
+.dp-enable-btn {                    /* the page's one primary action */
+  min-width: 156px;
+  height: 56px;
+  padding: 0 var(--ui-6);
   border: 0;
-  background: #e85d2a;
-  color: #ffffff;
-  font-family: var(--dp-sans);
-  font-size: 15px;
-  font-weight: 700;
+  border-radius: 999px;
+  background: var(--ui-ink);
+  color: var(--ui-surface);
+  font: 600 var(--ui-fs-4) / 1.1 var(--ui-sans);
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(232, 93, 42, 0.4);
+  transition: transform var(--ui-dur) var(--ui-ease);
+}
+
+.dp-enable-btn:active {
+  transform: scale(0.97);
 }
 
 .dp-gate-note {
-  font-size: 11px;
-  line-height: 1.32;
-  color: #a8a8a0;
-  max-width: 200px;
+  max-width: 210px;
+  font: 400 var(--ui-fs-2) / 1.4 var(--ui-sans);
+  color: var(--ui-ink-2);
 }
 
 .dp-dismiss-btn {
+  min-height: 44px;
+  padding: 0 var(--ui-3);
   border: 0;
   background: transparent;
-  color: #d4d4cc;
-  font-family: var(--dp-mono);
-  font-size: 10.5px;
+  color: var(--ui-ink-2);
+  font: 500 var(--ui-fs-2) / 1 var(--ui-sans);
   text-decoration: underline;
-  padding: 4px 8px;
+  text-underline-offset: 3px;
   cursor: pointer;
 }
 
+/* Secondary readouts: label over value, no boxes */
 .dp-metrics {
   width: 100%;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--ui-4);
 }
 
 .dp-metric-box {
-  background: var(--dp-surface);
-  border: 1px solid var(--dp-border);
-  border-radius: 8px;
-  padding: 6px 8px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-
-.dp-metric-k {
-  font-family: var(--dp-mono);
-  font-size: 9.5px;
-  color: var(--dp-ink-muted);
+  gap: var(--ui-1);
+  min-width: 0;
 }
 
 .dp-metric-v {
-  font-family: var(--dp-mono);
-  font-size: 14px;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
+  font-size: var(--ui-fs-3);
 }
 
+/* Controls (44 px tap targets) */
 .dp-controls {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ui-2);
 }
 
 .dp-btn-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: var(--ui-2);
 }
 
 .dp-btn {
   height: 44px;
-  border-radius: 9px;
-  border: 1px solid var(--dp-border);
-  background: var(--dp-surface);
-  color: var(--dp-ink);
-  font-family: var(--dp-sans);
-  font-size: 13px;
-  font-weight: 600;
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius-sm);
+  background: var(--ui-surface);
+  color: var(--ui-ink);
+  font: 500 var(--ui-fs-3) / 1 var(--ui-sans);
   cursor: pointer;
+  transition: background-color var(--ui-dur) var(--ui-ease), border-color var(--ui-dur) var(--ui-ease);
+}
+
+.dp-btn:active {
+  background: var(--ui-well);
 }
 
 .dp-btn[aria-pressed="true"] {
-  border-color: var(--dp-accent);
-  color: var(--dp-accent);
+  background: var(--ui-well);
+  border-color: var(--ui-ink);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .id-cell *,
-  .id-cell *::before,
-  .id-cell *::after,
-  .dp-body *,
-  .dp-body *::before,
-  .dp-body *::after {
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-  }
-
-  .id-btn,
-  .id-bar-fill {
+  .id-bar-fill,
+  .dp-enable-btn,
+  .dp-btn {
     transition: none !important;
   }
 }

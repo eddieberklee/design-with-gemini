@@ -972,6 +972,25 @@
 
   const SVG_NS = 'http://www.w3.org/2000/svg';
 
+  // Tooltip copy (ui/NOTES.md section 4); the pill and Arm tips follow the bus state.
+  // Arm calls bus.requestArm(): it turns on the one shared microphone for the whole page.
+  const ARM_TIPS = {
+    idle: 'Turn on the shared grille microphone for every sensor on this page.',
+    requesting: 'Waiting for microphone access. Click to cancel.',
+    listening: 'The shared microphone is on. Click to turn it off for every sensor.',
+    retry: 'The microphone could not start. Click to try again.'
+  };
+  const PILL_TIPS = {
+    ready: 'Mic off. Arm to detect breath below 12 kHz, or try a Sim button.',
+    live: 'Listening for breath on the shared microphone.',
+    flow: 'Breath detected now: low-band level above the room, in decibels.',
+    sim: 'Simulated: a recorded breath is playing through the detector, not the mic.',
+    simOnly: 'The microphone is unavailable; only the Sim buttons work.',
+    voiced: 'Ignored: the sound is voice or humming, not breath.',
+    impulse: 'Ignored: the sound is a tap or knock, not breath.',
+    friction: 'Ignored: the sound is a rub or scratch, not breath.'
+  };
+
   function h(tag, attrs, children) {
     const el = document.createElement(tag);
     if (attrs) {
@@ -1024,7 +1043,38 @@
     return node;
   }
 
-  function buildPinwheelSvg() {
+  // Pinwheel palette from the shared tokens, read once per mount (ui/NOTES.md section 1).
+  // Node tests have no getComputedStyle: the fallbacks are the token values.
+  const PINWHEEL_FALLBACK = {
+    ink: '#161615',
+    ink2: '#4f4f4b',
+    ink3: '#66665f',
+    line: '#d3d3ce',
+    hairline: '#e5e5e2',
+    surface: '#ffffff',
+    well: '#f7f7f5',
+    accent: '#b4441a'
+  };
+
+  function readPinwheelPalette() {
+    const out = Object.assign({}, PINWHEEL_FALLBACK);
+    try {
+      if (typeof getComputedStyle !== 'function' || typeof document === 'undefined' || !document.documentElement) {
+        return out;
+      }
+      const cs = getComputedStyle(document.documentElement);
+      const map = { ink: '--ui-ink', ink2: '--ui-ink-2', ink3: '--ui-ink-3', line: '--ui-line',
+        hairline: '--ui-hairline', surface: '--ui-surface', well: '--ui-well', accent: '--ui-accent' };
+      Object.keys(map).forEach((k) => {
+        const v = String(cs.getPropertyValue(map[k]) || '').trim();
+        if (v) out[k] = v;
+      });
+    } catch (_) {}
+    return out;
+  }
+
+  function buildPinwheelSvg(P) {
+    P = P || PINWHEEL_FALLBACK;
     const cx = 60;
     const cy = 60;
     const ticks = [];
@@ -1038,7 +1088,7 @@
           y1: (cy + Math.sin(a) * r0).toFixed(2),
           x2: (cx + Math.cos(a) * r1).toFixed(2),
           y2: (cy + Math.sin(a) * r1).toFixed(2),
-          stroke: i % 3 === 0 ? '#52524e' : '#c8c8c2',
+          stroke: i % 3 === 0 ? P.ink2 : P.line,
           'stroke-width': i % 3 === 0 ? '1.6' : '1'
         })
       );
@@ -1054,19 +1104,19 @@
         [
           svgEl('path', {
             d: 'M 60 55 C 63 39, 73 26, 62 15 C 57 18, 55 34, 57 55 Z',
-            fill: b === 0 ? '#141413' : b === 2 ? '#2c2c29' : '#63635f'
+            fill: b === 0 || b === 2 ? P.ink : P.ink3
           }),
           svgEl('circle', {
             cx: 62,
             cy: 17.5,
             r: 3.6,
-            fill: b === 0 ? '#0052cc' : '#141413'
+            fill: b === 0 ? P.accent : P.ink
           }),
           svgEl('circle', {
             cx: 62,
             cy: 17.5,
             r: 1.5,
-            fill: '#ffffff',
+            fill: P.surface,
             opacity: b === 0 ? '0.92' : '0.45'
           })
         ]
@@ -1083,7 +1133,7 @@
       cy,
       r: flowArcRadius,
       fill: 'none',
-      stroke: '#0052cc',
+      stroke: P.ink,
       'stroke-width': '2.6',
       'stroke-linecap': 'round',
       'stroke-dasharray': flowArcCirc.toFixed(2),
@@ -1104,8 +1154,8 @@
           cx,
           cy,
           r: 56,
-          fill: '#ffffff',
-          stroke: '#e2e2dd',
+          fill: P.surface,
+          stroke: P.hairline,
           'stroke-width': '1.2'
         }),
         svgEl('circle', {
@@ -1113,7 +1163,7 @@
           cy,
           r: flowArcRadius,
           fill: 'none',
-          stroke: '#ecece8',
+          stroke: P.hairline,
           'stroke-width': '2.6'
         }),
         flowArc,
@@ -1123,15 +1173,15 @@
           cx,
           cy,
           r: 7.5,
-          fill: '#f5f5f3',
-          stroke: '#141413',
+          fill: P.well,
+          stroke: P.ink,
           'stroke-width': '1.6'
         }),
         svgEl('circle', {
           cx,
           cy,
           r: 2.3,
-          fill: '#141413'
+          fill: P.ink
         })
       ]
     );
@@ -1154,6 +1204,7 @@
     let lastAnimTs = 0;
     let busState = { state: 'idle', sampleRate: 48000, error: '' };
     let metaShowsError = false;
+    let simPillText = 'SIM · PUFF';
     let unsubAudio = null;
     let unsubState = null;
 
@@ -1163,109 +1214,117 @@
           globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches
       );
 
-    // Build Top Micro-Bezel
-    const armDot = h('span', { className: 'bp-dot', 'aria-hidden': 'true' });
-    const armText = h('span', { textContent: 'ARM' });
+    // Shared tile anatomy (left-grille NOTES "Sensor cell frame"): head = index + title +
+    // status pill + Arm; body = pinwheel + airflow (the hero) with quiet secondary readouts;
+    // foot = Sim buttons + low-band level.
+    const armText = h('span', { textContent: 'Arm' });
     const armBtn = h(
       'button',
       {
         type: 'button',
-        className: 'bp-btn bp-btn--arm',
+        className: 'bp-btn bp-btn--arm ui-btn ui-btn--sm',
         dataset: { armed: 'false' },
         'aria-pressed': 'false',
-        title: 'Arm shared 48 kHz grille microphone array',
+        'data-tip': ARM_TIPS.idle,
         onClick: () => handleArmClick()
       },
-      [armDot, armText]
+      [armText]
     );
 
+    // The label keeps `bp-status-pill` (code and tests write its text); the pill carries the tone.
     const statusPill = h('span', {
-      className: 'bp-status-pill',
-      textContent: 'READY · <12k passive'
+      className: 'bp-status-pill ui-pill-label',
+      textContent: 'READY'
     });
+    const pillEl = h(
+      'span',
+      {
+        className: 'bp-pill ui-pill',
+        role: 'note',
+        tabindex: '0',
+        dataset: { tone: 'idle' },
+        'data-tip': PILL_TIPS.ready
+      },
+      [statusPill]
+    );
 
     const simPuffBtn = h(
       'button',
       {
         type: 'button',
-        className: 'bp-mini-btn',
-        title: 'Run synthesized 48 kHz Sharp Puff waveform through DSP',
+        className: 'bp-mini-btn ui-btn ui-btn--sm ui-btn--quiet',
+        'aria-label': 'Sim puff',
+        'data-tip': 'Simulated: play a recorded short puff through the detector, no mic needed.',
         onClick: () => runSimulation('puff')
       },
-      ['Sim Puff']
+      ['Puff']
     );
 
     const simBlowBtn = h(
       'button',
       {
         type: 'button',
-        className: 'bp-mini-btn bp-mini-btn--blow',
-        title: 'Run synthesized 48 kHz Sustained Blow waveform through DSP',
+        className: 'bp-mini-btn bp-mini-btn--blow ui-btn ui-btn--sm ui-btn--quiet',
+        'aria-label': 'Sim blow',
+        'data-tip': 'Simulated: play a recorded long blow through the detector, no mic needed.',
         onClick: () => runSimulation('blow')
       },
-      ['Sim Blow']
+      ['Blow']
     );
 
-    const slotKicker = h('span', {
-      className: 'bp-kicker',
-      style:
-        'font-family:var(--bp-mono);font-size:clamp(8px,2.1cqw,10.5px);font-weight:700;color:var(--bp-ink-muted);font-variant-numeric:tabular-nums;letter-spacing:0.03em;flex:0 0 auto;',
-      textContent: '05'
-    });
+    const slotKicker = h('span', { className: 'bp-kicker ui-tile-index', textContent: '05' });
 
-    const bezel = h('div', { className: 'bp-bezel' }, [
-      h('div', { className: 'bp-bezel-group' }, [slotKicker, armBtn, statusPill]),
-      h('div', { className: 'bp-bezel-group bp-sim-group' }, [simPuffBtn, simBlowBtn])
+    const bezel = h('header', { className: 'bp-bezel ui-tile-head' }, [
+      slotKicker,
+      h('span', { className: 'bp-title ui-tile-title', textContent: 'Breath puff' }),
+      h('div', { className: 'bp-bezel-group ui-tile-actions' }, [pillEl, armBtn])
     ]);
 
-    // Left Column: Precision Anemometer Pinwheel SVG
-    const pinwheel = buildPinwheelSvg();
-    const snrBadge = h('span', { className: 'bp-snr-chip', textContent: '+0 dB' });
+    // Hero: pinwheel (spins with airflow, its ring fills with the airflow percentage) + airflow.
+    const pinwheel = buildPinwheelSvg(readPinwheelPalette());
+    const snrBadge = h('span', { className: 'bp-snr-chip ui-readout ui-readout--quiet', textContent: '+0 dB' });
 
-    const rotorWell = h('div', { className: 'bp-rotor-well' }, [
-      pinwheel.svg,
-      h('div', { className: 'bp-rotor-foot' }, [
-        h('span', { className: 'bp-rotor-cap', textContent: '20–200 Hz' }),
-        snrBadge
-      ])
-    ]);
+    const rotorWell = h(
+      'div',
+      {
+        className: 'bp-rotor-well ui-well',
+        'data-tip': 'The pinwheel spins with breath noise in the 20–200 Hz band; the ring shows airflow.'
+      },
+      [pinwheel.svg]
+    );
 
-    // Right Column: Hero Badge + 3 Tabular Readouts + 3-Band Roll-off Strip
-    const eventTag = h('span', { className: 'bp-kind-tag', textContent: 'PASSIVE' });
+    const airflowVal = h('span', { className: 'bp-metric-val bp-airflow', textContent: '0%' });
+    const eventTag = h('span', { className: 'bp-kind-tag ui-readout ui-readout--quiet', textContent: '' });
     const heroBadge = h('div', {
       className: 'bp-hero-badge',
       dataset: { kind: 'idle' },
-      textContent: '— READY'
+      textContent: 'No breath yet'
     });
     const heroMeta = h('div', {
       className: 'bp-hero-meta',
       textContent: 'Blow across left grille'
     });
 
-    const heroCard = h('div', { className: 'bp-card bp-hero-card' }, [
-      h('div', { className: 'bp-card-head' }, [
-        h('span', { className: 'bp-label', textContent: 'Aerodynamic' }),
+    const heroCard = h('div', { className: 'bp-hero-card' }, [
+      h('span', { className: 'bp-label ui-label', textContent: 'Airflow' }),
+      h('div', { className: 'bp-airflow-row ui-readout ui-readout--hero' }, [airflowVal]),
+      h('div', { className: 'bp-card-head', 'data-tip': 'Last detected breath and its strength.' }, [
+        heroBadge,
         eventTag
       ]),
-      heroBadge,
       heroMeta
     ]);
 
-    const airflowVal = h('div', { className: 'bp-metric-val', textContent: '0%' });
-    const rpmVal = h('div', { className: 'bp-metric-val', textContent: '0' });
-    const durVal = h('div', { className: 'bp-metric-val', textContent: '0 ms' });
+    const rpmVal = h('span', { className: 'bp-metric-val ui-readout', textContent: '0' });
+    const durVal = h('span', { className: 'bp-metric-val ui-readout', textContent: '0 ms' });
 
     const metricsGrid = h('div', { className: 'bp-metrics' }, [
-      h('div', { className: 'bp-card bp-metric-card' }, [
-        h('span', { className: 'bp-label', textContent: 'Airflow' }),
-        airflowVal
-      ]),
-      h('div', { className: 'bp-card bp-metric-card' }, [
-        h('span', { className: 'bp-label', textContent: 'Rotor RPM' }),
+      h('div', { className: 'bp-metric-card', 'data-tip': 'Pinwheel speed, in revolutions per minute.' }, [
+        h('span', { className: 'bp-label ui-label', textContent: 'RPM' }),
         rpmVal
       ]),
-      h('div', { className: 'bp-card bp-metric-card bp-metric-card--dur' }, [
-        h('span', { className: 'bp-label', textContent: 'Duration' }),
+      h('div', { className: 'bp-metric-card bp-metric-card--dur', 'data-tip': 'How long the current or last breath lasted.' }, [
+        h('span', { className: 'bp-label ui-label', textContent: 'Duration' }),
         durVal
       ])
     ]);
@@ -1274,26 +1333,29 @@
     const barMid = h('div', { className: 'bp-band-fill bp-band-fill--mid' });
     const barHf = h('div', { className: 'bp-band-fill bp-band-fill--hf' });
     const rolloffNote = h('span', {
-      className: 'bp-rolloff-note',
+      className: 'bp-rolloff-note ui-readout ui-readout--quiet',
+      'data-tip': 'Low band minus mid band, in decibels; breath is mostly low rumble.',
       textContent: 'Sub/Mid +0 dB'
     });
 
-    const spectrumStrip = h('div', { className: 'bp-spectrum-strip' }, [
+    const spectrumStrip = h('div', {
+      className: 'bp-spectrum-strip',
+      'data-tip': 'Level in three bands: sub 20–200 Hz, mid 0.5–2.2 kHz, high 3.5–11 kHz.'
+    }, [
       h('div', { className: 'bp-bands' }, [
         h('div', { className: 'bp-band-row' }, [
-          h('span', { className: 'bp-band-lbl', textContent: 'SUB' }),
+          h('span', { className: 'bp-band-lbl ui-label', textContent: 'Sub' }),
           h('div', { className: 'bp-band-track' }, [barSub])
         ]),
         h('div', { className: 'bp-band-row' }, [
-          h('span', { className: 'bp-band-lbl', textContent: 'MID' }),
+          h('span', { className: 'bp-band-lbl ui-label', textContent: 'Mid' }),
           h('div', { className: 'bp-band-track' }, [barMid])
         ]),
         h('div', { className: 'bp-band-row' }, [
-          h('span', { className: 'bp-band-lbl', textContent: 'HF' }),
+          h('span', { className: 'bp-band-lbl ui-label', textContent: 'High' }),
           h('div', { className: 'bp-band-track' }, [barHf])
         ])
-      ]),
-      rolloffNote
+      ])
     ]);
 
     const telemetryCol = h('div', { className: 'bp-telemetry' }, [
@@ -1302,9 +1364,31 @@
       spectrumStrip
     ]);
 
-    const stage = h('div', { className: 'bp-stage' }, [
+    const narrowNote = h('span', {
+      className: 'bp-narrow-note ui-label',
+      'data-tip': 'Sim buttons appear when this tile is at least 320 px wide.',
+      textContent: 'Widen for Sim'
+    });
+
+    const foot = h('footer', { className: 'bp-foot ui-tile-foot' }, [
+      h('div', { className: 'bp-sim-group' }, [
+        h('span', { className: 'bp-sim-label ui-label', textContent: 'Sim' }),
+        simPuffBtn,
+        simBlowBtn
+      ]),
+      h('span', { className: 'bp-foot-readouts' }, [
+        rolloffNote,
+        h('span', {
+          className: 'bp-snr-wrap',
+          'data-tip': 'Low-band (20–200 Hz) noise above the room’s quiet level, in decibels.'
+        }, [snrBadge])
+      ])
+    ]);
+
+    const stage = h('div', { className: 'bp-stage lg-cell-stage' }, [
       bezel,
-      h('div', { className: 'bp-body' }, [rotorWell, telemetryCol])
+      h('div', { className: 'bp-body ui-tile-body' }, [rotorWell, telemetryCol, narrowNote]),
+      foot
     ]);
 
     const srLive = h('div', {
@@ -1316,6 +1400,14 @@
 
     cellEl.appendChild(stage);
     cellEl.appendChild(srLive);
+
+    // Every status write goes through here so the tone and tip never go stale.
+    // Green is never used: this sensor has no hardware link (ui/NOTES.md section 0).
+    function setPill(text, tone, tip) {
+      statusPill.textContent = text;
+      pillEl.dataset.tone = tone;
+      pillEl.setAttribute('data-tip', tip);
+    }
 
     function kindSlug(kind) {
       if (kind === 'SHARP PUFF') return 'sharp';
@@ -1370,21 +1462,23 @@
 
         if (ev.vetoReason) {
           statusPill.dataset.veto = 'true';
-          statusPill.textContent =
+          setPill(
             ev.vetoReason === 'voiced'
               ? 'VOICE VETO'
               : ev.vetoReason === 'impulse'
               ? 'TAP VETO'
-              : 'RUB VETO';
+              : 'RUB VETO',
+            'attention',
+            PILL_TIPS[ev.vetoReason] || PILL_TIPS.friction
+          );
         } else {
           statusPill.dataset.veto = 'false';
           if (simTimer !== null) {
-            statusPill.textContent = 'SIM WAVEFORM';
+            setPill(simPillText, 'idle', PILL_TIPS.sim);
           } else if (busState.state === 'listening') {
             const khz = Math.round(currentRate / 100) / 10;
-            statusPill.textContent = ev.active
-              ? `FLOW +${Math.round(ev.subSnrDb)}dB`
-              : `LIVE · ${khz}k`;
+            if (ev.active) setPill(`FLOW +${Math.round(ev.subSnrDb)}dB`, 'attention', PILL_TIPS.flow);
+            else setPill(`LIVE · ${khz}k`, 'attention', PILL_TIPS.live);
           }
         }
 
@@ -1449,7 +1543,8 @@
       const stepMs = Math.max(10, Math.round(totalPlayMs / playback.length));
       let idx = 0;
       statusPill.dataset.veto = 'false';
-      statusPill.textContent = mode === 'blow' ? 'SIM BLOW' : 'SIM PUFF';
+      simPillText = mode === 'blow' ? 'SIM · BLOW' : 'SIM · PUFF';
+      setPill(simPillText, 'idle', PILL_TIPS.sim);
 
       simTimer = setInterval(() => {
         if (idx >= playback.length) {
@@ -1475,20 +1570,27 @@
       armBtn.dataset.armed = armed ? 'true' : 'false';
       armBtn.setAttribute('aria-pressed', armed ? 'true' : 'false');
       // The status pill and error text are hidden in narrow cells, so the button itself says
-      // when the mic failed (its title carries the bus error).
+      // when the mic failed (its data-tip carries the bus error).
       armText.textContent =
         busState.state === 'requesting'
-          ? 'ARMING…'
+          ? 'Arming…'
           : busState.state === 'listening'
-          ? 'LIVE'
+          ? 'Live'
           : busState.state === 'error'
-          ? 'RETRY'
-          : 'ARM';
+          ? 'Retry'
+          : 'Arm';
+      // Running (mic on or being requested): rust, per the frame's armed-toggle rule.
+      if (armed) armBtn.dataset.tone = 'attention';
+      else delete armBtn.dataset.tone;
       armBtn.setAttribute(
-        'title',
-        busState.state === 'error' && busState.error
-          ? busState.error
-          : 'Arm shared 48 kHz grille microphone array'
+        'data-tip',
+        busState.state === 'error'
+          ? (busState.error ? `${busState.error} Click to try again.` : ARM_TIPS.retry)
+          : busState.state === 'requesting'
+          ? ARM_TIPS.requesting
+          : busState.state === 'listening'
+          ? ARM_TIPS.listening
+          : ARM_TIPS.idle
       );
       if (busState.state !== 'error' && metaShowsError) {
         heroMeta.textContent = lastPuff ? puffMetaText(lastPuff) : 'Blow across left grille';
@@ -1499,17 +1601,23 @@
       statusPill.dataset.veto = 'false';
       if (busState.state === 'listening') {
         const khz = Math.round((busState.sampleRate || 48000) / 100) / 10;
-        statusPill.textContent = `LIVE · ${khz}k`;
+        setPill(`LIVE · ${khz}k`, 'attention', PILL_TIPS.live);
       } else if (busState.state === 'error') {
-        statusPill.textContent = 'SIM ONLY';
+        setPill(
+          'SIM ONLY',
+          'attention',
+          busState.error ? `${busState.error} Sim buttons still work.` : PILL_TIPS.simOnly
+        );
         if (busState.error && !lastPuff) {
           heroMeta.textContent = busState.error;
           metaShowsError = true;
         }
+      } else if (busState.state === 'requesting') {
+        setPill('ARMING…', 'attention', ARM_TIPS.requesting);
       } else {
         targetAirflowPct = 0;
         airflowVal.textContent = '0%';
-        statusPill.textContent = 'READY · <12k passive';
+        setPill('READY', 'idle', PILL_TIPS.ready);
       }
     }
 

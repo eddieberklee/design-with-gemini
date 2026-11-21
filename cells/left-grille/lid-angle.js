@@ -74,6 +74,21 @@
   const BRIDGE_ORIGIN = 'http://127.0.0.1:8793';
   const BRIDGE_PROBE_TIMEOUT_MS = 600;
 
+  // Tooltip copy (ui/NOTES.md section 4). The status pill and both header buttons follow state.
+  const SONAR_TIP_OFF = 'Play inaudible 18–20 kHz pings and time their screen echo to estimate the angle.';
+  const SONAR_TIP_ON = 'Sonar is on. Click to stop the pings, and the mic if Sonar turned it on.';
+  const SONAR_TIP_CHIRP = 'Reading the angle from Chirp sonar’s tones. Click to use this sensor’s own pings.';
+  const SONAR_TIP_ARMING = 'Waiting for microphone access.';
+  const HID_TIP_OFF = 'Read the exact hinge angle from the lid bridge on this Mac (127.0.0.1:8793).';
+  const HID_TIP_ON = 'The hinge angle is streaming from the lid bridge. Click to disconnect.';
+  const PILL_TIPS = {
+    idle: 'No sensor is running. Start Sonar or HID, or drag the lid to simulate.',
+    hid: 'Live: the exact hinge angle comes from the lid bridge on this Mac.',
+    sonar: 'Live: the angle is estimated from inaudible echoes off the screen.',
+    noEcho: 'Sonar is on but hears no screen echo yet, so the angle is not measured.',
+    drag: 'Simulated: the angle follows your drag, not a sensor.'
+  };
+
   // SVG Side-Elevation Geometry (`viewBox="0 0 212 134"`)
   const SVG_HX = 86;
   const SVG_HY = 112;
@@ -1305,73 +1320,88 @@
     // -------------------------------------------------------------------------
     // 1. Build UI DOM Tree
     // -------------------------------------------------------------------------
-    const sonarDot = h('span', { className: 'la-dot', 'aria-hidden': 'true' });
-    const sonarBtnLabel = h('span', { textContent: 'SONAR' });
+    // Shared tile anatomy (ui/NOTES.md section 2, left-grille NOTES "Sensor cell frame"):
+    // head = index + title + status pill + Sonar + HID; body = hinge drawing + angle (the hero);
+    // foot = calibration buttons + note.
+    const sonarBtnLabel = h('span', { textContent: 'Sonar' });
     const sonarBtn = h(
       'button',
       {
         type: 'button',
-        className: 'la-btn la-btn--sonar',
+        className: 'la-btn la-btn--sonar ui-btn ui-btn--sm',
         dataset: { active: 'false' },
         'aria-pressed': 'false',
-        title: 'Toggle 18.2–20.4 kHz acoustic screen-bounce lid sonar',
+        'data-tip': SONAR_TIP_OFF,
         onClick: () => toggleSonar()
       },
-      [sonarDot, sonarBtnLabel]
+      [sonarBtnLabel]
     );
 
-    const hidDot = h('span', { className: 'la-dot la-dot--hid', 'aria-hidden': 'true' });
+    // No ui-hide-* class: HID stays reachable at every width (the bridge is the exact source).
     const hidBtn = h(
       'button',
       {
         type: 'button',
-        className: 'la-btn la-btn--hid',
+        className: 'la-btn la-btn--hid ui-btn ui-btn--sm',
         dataset: { live: 'false' },
         'aria-pressed': 'false',
-        title: 'Probe local macOS IOHIDManager bridge on 127.0.0.1:8793 for exact 0.1° hinge angle',
+        'data-tip': HID_TIP_OFF,
         onClick: () => handleHidButtonClick()
       },
-      [hidDot, h('span', { textContent: 'HID' })]
+      ['HID']
     );
 
+    // The label keeps `la-source-badge` (tests and code write its text); the pill carries the tone.
     const sourceBadge = h('span', {
-      className: 'la-source-badge',
+      className: 'la-source-badge ui-pill-label',
       dataset: { source: 'idle' },
       textContent: 'READY'
     });
+    const statusPill = h(
+      'span',
+      {
+        className: 'la-pill ui-pill',
+        role: 'note',
+        tabindex: '0',
+        dataset: { tone: 'idle' },
+        'data-tip': PILL_TIPS.idle
+      },
+      [sourceBadge]
+    );
 
-    const cellKicker = h('span', { className: 'la-kicker', textContent: '06' });
+    const cellKicker = h('span', { className: 'la-kicker ui-tile-index', textContent: '06' });
 
-    const bezel = h('div', { className: 'la-bezel' }, [
-      h('div', { className: 'la-bezel-group' }, [sonarBtn, hidBtn]),
-      h('div', { className: 'la-bezel-group la-bezel-right' }, [sourceBadge, cellKicker])
+    const bezel = h('header', { className: 'la-bezel ui-tile-head' }, [
+      cellKicker,
+      h('span', { className: 'la-title ui-tile-title', textContent: 'Lid angle' }),
+      h('div', { className: 'la-bezel-group ui-tile-actions' }, [statusPill, sonarBtn, hidBtn])
     ]);
 
     const diagram = buildHingeDiagramSvg();
-    const dragHint = h('span', {
-      className: 'la-drag-hint',
-      textContent: 'Drag lid · 0–135°'
-    });
-    const diagramWell = h('div', { className: 'la-diagram-well' }, [diagram.svg, dragHint]);
+    diagram.svg.setAttribute('data-tip', 'Drag the lid, or use the arrow keys, to simulate an angle.');
+    const diagramWell = h('div', { className: 'la-diagram-well ui-well' }, [diagram.svg]);
 
     const angleValueEl = h('span', { className: 'la-angle-num', textContent: '108' });
-    const angleUnitEl = h('span', { className: 'la-angle-deg', textContent: '°' });
-    const postureEl = h('div', { className: 'la-posture', textContent: 'WORK · 108°' });
+    const angleUnitEl = h('span', { className: 'la-angle-deg ui-readout-unit', textContent: '°' });
+    const postureEl = h('div', {
+      className: 'la-posture ui-readout ui-readout--quiet',
+      textContent: 'WORK · 108°'
+    });
 
-    const echoValEl = h('span', { className: 'la-metric-val', textContent: '— dB' });
-    const lagValEl = h('span', { className: 'la-metric-val', textContent: '— ms' });
+    const echoValEl = h('span', { className: 'la-metric-val ui-readout', textContent: '— dB' });
+    const lagValEl = h('span', { className: 'la-metric-val ui-readout', textContent: '— ms' });
     const echoBarFill = h('div', { className: 'la-meter-fill' });
     const echoBarTrack = h('div', { className: 'la-meter-track', 'aria-hidden': 'true' }, [
       echoBarFill
     ]);
 
     const metricsCard = h('div', { className: 'la-metrics' }, [
-      h('div', { className: 'la-metric-row' }, [
-        h('span', { className: 'la-metric-key', textContent: 'ECHO' }),
+      h('div', { className: 'la-metric-row', 'data-tip': 'Strength of the echo off the screen, in decibels.' }, [
+        h('span', { className: 'la-metric-key ui-label', textContent: 'Echo' }),
         echoValEl
       ]),
-      h('div', { className: 'la-metric-row' }, [
-        h('span', { className: 'la-metric-key', textContent: 'LAG' }),
+      h('div', { className: 'la-metric-row', 'data-tip': 'Delay of the screen echo; a wider lid gives a longer delay.' }, [
+        h('span', { className: 'la-metric-key ui-label', textContent: 'Lag' }),
         lagValEl
       ]),
       echoBarTrack
@@ -1379,28 +1409,32 @@
 
     const readoutCol = h('div', { className: 'la-readout' }, [
       h('div', { className: 'la-hero-card' }, [
-        h('span', { className: 'la-label', textContent: 'Lid Angle' }),
-        h('div', { className: 'la-angle-hero' }, [angleValueEl, angleUnitEl]),
+        h('div', { className: 'la-angle-hero ui-readout ui-readout--hero' }, [angleValueEl, angleUnitEl]),
         postureEl
       ]),
       metricsCard
     ]);
 
-    const mainBody = h('div', { className: 'la-body' }, [diagramWell, readoutCol]);
+    const narrowNote = h('span', {
+      className: 'la-narrow-note ui-label',
+      'data-tip': 'Calibration buttons appear when this tile is at least 320 px wide.',
+      textContent: 'Widen to calibrate'
+    });
+
+    const mainBody = h('div', { className: 'la-body ui-tile-body' }, [diagramWell, readoutCol, narrowNote]);
 
     const setOpenBtn = h(
       'button',
       {
         type: 'button',
-        className: 'la-cal-btn',
+        className: 'la-cal-btn ui-btn ui-btn--sm ui-btn--quiet',
         dataset: { calibrated: calibration.openCalibrated ? 'true' : 'false' },
-        title: 'Capture current acoustic reflection as Open 110° calibration anchor',
+        'data-tip': 'Open the lid to 110°, then click to save this echo as the 110° reference.',
         onClick: () => captureCalibration('open')
       },
       [
         h('span', { className: 'la-cal-dot', 'aria-hidden': 'true' }),
-        h('span', { className: 'la-cal-long', textContent: 'Set Open 110°' }),
-        h('span', { className: 'la-cal-short', textContent: '110°' })
+        h('span', { className: 'la-cal-long', textContent: 'Set 110°' })
       ]
     );
 
@@ -1408,15 +1442,14 @@
       'button',
       {
         type: 'button',
-        className: 'la-cal-btn',
+        className: 'la-cal-btn ui-btn ui-btn--sm ui-btn--quiet',
         dataset: { calibrated: calibration.lowCalibrated ? 'true' : 'false' },
-        title: 'Capture current acoustic reflection as Low 50° calibration anchor',
+        'data-tip': 'Lower the lid to 50°, then click to save this echo as the 50° reference.',
         onClick: () => captureCalibration('low')
       },
       [
         h('span', { className: 'la-cal-dot', 'aria-hidden': 'true' }),
-        h('span', { className: 'la-cal-long', textContent: 'Set Low 50°' }),
-        h('span', { className: 'la-cal-short', textContent: '50°' })
+        h('span', { className: 'la-cal-long', textContent: 'Set 50°' })
       ]
     );
 
@@ -1424,9 +1457,9 @@
       'button',
       {
         type: 'button',
-        className: 'la-cal-btn la-cal-btn--reset',
+        className: 'la-cal-btn la-cal-btn--reset ui-btn ui-btn--sm ui-btn--quiet',
         hidden: !calibration.isCalibrated,
-        title: 'Reset lid calibration anchors to default curve',
+        'data-tip': 'Forget both saved references and use the default angle curve.',
         onClick: () => resetCalibration()
       },
       ['Reset']
@@ -1439,12 +1472,12 @@
       textContent: calibration.isCalibrated ? 'Calibrated · 18.2–20.4k' : '18.2–20.4 kHz screen bounce'
     });
 
-    const calBar = h('div', { className: 'la-cal-bar' }, [
+    const calBar = h('footer', { className: 'la-cal-bar ui-tile-foot' }, [
       h('div', { className: 'la-cal-actions' }, [setOpenBtn, setLowBtn, resetCalBtn]),
       calNote
     ]);
 
-    const stage = h('div', { className: 'la-stage', dataset: { source: 'idle' } }, [
+    const stage = h('div', { className: 'la-stage lg-cell-stage', dataset: { source: 'idle' } }, [
       bezel,
       mainBody,
       calBar
@@ -1512,8 +1545,14 @@
 
       stage.dataset.source = sourceMode;
       sourceBadge.dataset.source = sourceMode;
+      // Pill tone (green rule): ok only while the HID bridge stream delivers angles; sonar
+      // (armed or measuring) is attention; a drag is a simulation and says so; idle is grey.
+      let pillTone = 'idle';
+      let pillTip = PILL_TIPS.idle;
       if (sourceMode === 'hid') {
         sourceBadge.textContent = 'HW HID · LIVE';
+        pillTone = 'ok';
+        pillTip = PILL_TIPS.hid;
       } else if (sourceMode === 'sonar') {
         // Armed is not measuring: until an echo frame arrives the angle is not a sonar reading.
         sourceBadge.textContent = !sonarSignalPresent
@@ -1521,11 +1560,16 @@
           : busState.txMode === 'chirp'
             ? 'SONAR · CHIRP'
             : 'SONAR';
+        pillTone = 'attention';
+        pillTip = sonarSignalPresent ? PILL_TIPS.sonar : PILL_TIPS.noEcho;
       } else if (sourceMode === 'drag') {
-        sourceBadge.textContent = 'DRAG';
+        sourceBadge.textContent = 'SIM · DRAG';
+        pillTip = PILL_TIPS.drag;
       } else {
         sourceBadge.textContent = 'READY';
       }
+      statusPill.dataset.tone = pillTone;
+      statusPill.setAttribute('data-tip', pillTip);
 
       angleValueEl.textContent = displayStr;
       postureEl.textContent = isExact
@@ -1593,17 +1637,20 @@
         (busState.txMode === 'lid-ping' || busState.txMode === 'chirp');
       sonarBtn.dataset.active = sonarActive ? 'true' : 'false';
       sonarBtn.setAttribute('aria-pressed', sonarActive ? 'true' : 'false');
-      sonarBtnLabel.textContent =
-        busState.state === 'requesting'
-          ? 'ARM…'
-          : busState.state === 'listening' && busState.txMode === 'lid-ping'
-            ? 'SONAR'
-            : busState.state === 'listening' && busState.txMode === 'chirp'
-              ? 'CHIRP'
-              : 'SONAR';
+      const requesting = busState.state === 'requesting';
+      const chirpOnly = busState.state === 'listening' && busState.txMode === 'chirp';
+      sonarBtnLabel.textContent = requesting ? 'Arming…' : chirpOnly ? 'Chirp' : 'Sonar';
+      // Running (pinging, or waiting for the mic it asked for): rust, like every armed toggle.
+      if (sonarActive || requesting) sonarBtn.dataset.tone = 'attention';
+      else delete sonarBtn.dataset.tone;
+      sonarBtn.setAttribute(
+        'data-tip',
+        requesting ? SONAR_TIP_ARMING : chirpOnly ? SONAR_TIP_CHIRP : sonarActive ? SONAR_TIP_ON : SONAR_TIP_OFF
+      );
 
       hidBtn.dataset.live = hidLive ? 'true' : 'false';
       hidBtn.setAttribute('aria-pressed', hidLive ? 'true' : 'false');
+      hidBtn.setAttribute('data-tip', hidLive || hidEventSource ? HID_TIP_ON : HID_TIP_OFF);
     }
 
     // -------------------------------------------------------------------------

@@ -793,6 +793,7 @@ test('mountLidAngleCell wires shared bus, updates SVG lid, probes HID SSE, and c
     const okHid = await handle.probeHidBridge({ userInitiated: true });
     assert.equal(okHid, true);
     assert.equal(badge.textContent, 'HW HID · LIVE');
+    assert.equal(findByClass(cellEl, 'la-pill')[0].dataset.tone, 'ok', 'green only while the HID stream delivers');
     assert.equal(angleEl.textContent, '103.5');
     assert.ok(activeEs && !activeEs.closed);
 
@@ -1092,11 +1093,17 @@ test('SONAR: armed-without-echo is labelled, and turning SONAR off releases a mi
     const handle = mountLidAngleCell(cell, bus, { autoProbeHid: false, storage: createMockStorage() });
     const sonarBtn = find(cell, 'la-btn--sonar');
     const badge = find(cell, 'la-source-badge');
+    const pill = find(cell, 'la-pill');
+    assert.equal(pill.dataset.tone, 'idle');
     await sonarBtn.fire('click');
     assert.equal(badge.textContent, 'SONAR · NO ECHO', 'armed with no echo yet is not a sonar reading');
+    assert.equal(pill.dataset.tone, 'attention', 'armed sonar is rust, not green');
+    assert.equal(sonarBtn.dataset.tone, 'attention');
     await sonarBtn.fire('click');
     assert.deepEqual(stopCalls, [{ dispatchClose: false }], 'SONAR armed the mic, so SONAR off releases it');
     assert.equal(badge.textContent, 'READY');
+    assert.equal(pill.dataset.tone, 'idle');
+    assert.equal(sonarBtn.dataset.tone, undefined);
 
     // When something else armed the bus, SONAR off only stops the lid ping
     stateCb({ state: 'listening', sampleRate: 48000, txMode: 'off' });

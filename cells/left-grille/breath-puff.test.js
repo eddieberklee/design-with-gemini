@@ -444,26 +444,31 @@ test('Status text never goes stale: denied error clears once the bus recovers, a
     const meta = find(cellEl, 'bp-hero-meta');
     const pill = find(cellEl, 'bp-status-pill');
     const arm = find(cellEl, 'bp-btn--arm');
+    const pillEl = find(cellEl, 'bp-pill');
 
     const denied = 'Mic permission denied — allow microphone access or use Sim controls.';
     stateCb({ state: 'error', sampleRate: 48000, error: denied });
     assert.equal(meta.textContent, denied);
     assert.equal(pill.textContent, 'SIM ONLY');
-    assert.match(arm.textContent, /RETRY/, 'narrow cells hide the pill; the button must show the failure');
+    assert.equal(arm.textContent, 'Retry', 'narrow cells hide the pill; the button must show the failure');
+    assert.equal(pillEl.dataset.tone, 'attention', 'a mic error is rust');
+    assert.ok(arm.getAttribute('data-tip').startsWith(denied), 'the Retry tip carries the bus error');
 
     // Re-armed successfully: the old denial must not stay on screen next to "LIVE"
     stateCb({ state: 'requesting', sampleRate: 48000, error: '' });
     stateCb({ state: 'listening', sampleRate: 48000, error: '' });
     assert.equal(pill.textContent, 'LIVE · 48k');
     assert.notEqual(meta.textContent, denied);
-    assert.match(arm.textContent, /LIVE/);
+    assert.equal(arm.textContent, 'Live');
+    assert.equal(pillEl.dataset.tone, 'attention', 'listening is rust, never green');
 
     // Sim started, then the secondary page closes before it finishes
     stateCb({ state: 'idle', sampleRate: 48000, error: '' });
     inst.runSimulation('blow');
     assert.match(pill.textContent, /SIM/);
     (winListeners['lg-secondary-close'] || []).forEach((fn) => fn({ type: 'lg-secondary-close' }));
-    assert.equal(pill.textContent, 'READY · <12k passive', 'closing mid-sim must not leave a SIM status');
+    assert.equal(pill.textContent, 'READY', 'closing mid-sim must not leave a SIM status');
+    assert.equal(pillEl.dataset.tone, 'idle');
     inst.destroy();
   } finally {
     globalThis.document = prevDoc;

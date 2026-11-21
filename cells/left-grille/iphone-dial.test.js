@@ -772,6 +772,7 @@ test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed re
     const qrBtn = findByClass(cellEl, 'id-btn--qr');
     const hostInput = findByClass(cellEl, 'id-host-input');
     const status = findByClass(cellEl, 'id-status-text');
+    const pill = findByClass(cellEl, 'id-pill');
     const meta = findByClass(cellEl, 'id-link-meta');
 
     // A single arrow-key step moves one detent and leaves no phantom velocity on screen
@@ -784,9 +785,12 @@ test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed re
     assert.equal(links.length, 0);
     assert.equal(intervals.size + timeouts.size, 0);
     assert.equal(meta.textContent, 'NO LINK');
+    assert.equal(status.textContent, 'READY');
+    assert.equal(pill.dataset.tone, 'idle');
     qrBtn.fire('click');
     assert.equal(links.length, 0, 'file:// QR has no phone-reachable URL; must not touch the broker');
     assert.equal(status.textContent, 'NO LINK · SET HOST');
+    assert.equal(pill.dataset.tone, 'attention', 'needs setup is rust');
 
     // Entering a LAN host makes the QR scannable -> one link for one bounded pairing window
     hostInput.fire('input', { target: { value: '192.168.1.42:8000' } });
@@ -795,6 +799,7 @@ test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed re
     assert.equal(timeouts.size, 1, 'exactly one pairing-window timeout');
     links[0].opts.onStatus('ready', { transport: 'mqtt' });
     assert.equal(status.textContent, 'WAITING · SCAN QR');
+    assert.equal(pill.dataset.tone, 'idle', 'waiting to scan is grey, never green');
 
     // No phone within the window -> relay released, truthful status
     fireTimeoutsOf(90000);
@@ -812,6 +817,7 @@ test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed re
     assert.equal(openLinks().length, 0);
     assert.equal(timeouts.size, 0);
     assert.match(status.textContent, /OFFLINE/);
+    assert.equal(pill.dataset.tone, 'attention');
     setVisibility('hidden');
     setVisibility('visible');
     assert.equal(openLinks().length, 1, 'visible tab retries a failed link');
@@ -830,6 +836,7 @@ test('10b. Relay link lifecycle: PAIR QR gate, bounded pairing window, failed re
     assert.equal(l3.sent[l3.sent.length - 1].dialValue, 60);
     assert.ok(Math.abs(inst.tracker.cumulativeDeg) <= 1e7, 'remote cumulativeDeg is bounded');
     assert.match(status.textContent, /IPHONE/);
+    assert.equal(pill.dataset.tone, 'ok', 'green only while a paired phone answers');
 
     // Hidden tab: link, heartbeat and pairing all stop; visible resumes with a fresh window
     setVisibility('hidden');

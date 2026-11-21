@@ -59,6 +59,41 @@
   const HEARTBEAT_MS = 1500;
   const MAX_REMOTE_DEG = 1e7;
 
+  // Tooltip copy (ui/NOTES.md section 4). Pill tone (green rule): ok only while a paired iPhone
+  // answers; pairing, failures, a BLE knob and setup needs are attention; ready/waiting are idle.
+  const STATUS_TIPS = {
+    standby: 'Nothing linked. Drag the dial, or click Pair QR to use an iPhone.',
+    phone: 'Live: a paired iPhone is answering and turns the dial.',
+    ble: 'A Bluetooth knob is connected and turns the dial. Click BLE to disconnect.',
+    failed: 'The pairing relay could not connect. Click Pair QR to try again.',
+    waiting: 'Relay open: waiting for the iPhone to scan the QR code.',
+    linking: 'Connecting to the pairing relay.',
+    noHost: 'A phone cannot reach this page yet. Enter your Mac’s LAN address below the QR.',
+    timeout: 'No phone paired within 90 seconds. Click Pair QR to try again.',
+    bleNa: 'This browser has no Web Bluetooth. Use Pair QR instead.',
+    blePairing: 'Pick a Bluetooth knob in the browser’s device chooser.',
+    bleRetry: 'Bluetooth pairing failed. Click BLE to retry, or use Pair QR.'
+  };
+  const QR_TIP_OPEN = 'Show a QR code; scan it with an iPhone to use the phone as the dial.';
+  const QR_TIP_CLOSE = 'Hide the QR code.';
+  const BLE_TIP_OFF = 'Pair a Bluetooth rotary knob through the browser’s device chooser.';
+  const BLE_TIP_ON = 'Disconnect the Bluetooth knob.';
+
+  // QR code colours from the shared tokens, read once (Node tests have no getComputedStyle).
+  function readQrColours() {
+    const out = { fg: '#161615', bg: '#ffffff' };
+    try {
+      if (typeof getComputedStyle === 'function' && typeof document !== 'undefined' && document.documentElement) {
+        const cs = getComputedStyle(document.documentElement);
+        const fg = String(cs.getPropertyValue('--ui-ink') || '').trim();
+        const bg = String(cs.getPropertyValue('--ui-surface') || '').trim();
+        if (fg) out.fg = fg;
+        if (bg) out.bg = bg;
+      }
+    } catch (_e) {}
+    return out;
+  }
+
   function clamp(v, lo, hi) {
     if (!Number.isFinite(v)) return lo;
     return v < lo ? lo : v > hi ? hi : v;
@@ -855,6 +890,7 @@
     }
 
     const tracker = new RotaryDialTracker({ initialValue: 50 });
+    const qrColours = readQrColours();
     const clickSynth = createDetentClickSynth();
 
     let customHost = safeStorageGet('localStorage', STORAGE_HOST_KEY);
@@ -883,29 +919,42 @@
     let secondaryActive = false;
     let unmounted = false;
 
-    // 1. Top Bezel Bar
-    const ledDot = h('span', { className: 'id-led', dataset: { state: 'standby' }, 'aria-hidden': 'true' });
-    const statusLabel = h('span', { className: 'id-status-text', textContent: 'DRAG · QR · BLE' });
+    // Shared tile anatomy (left-grille NOTES "Sensor cell frame"): head = index + title +
+    // status pill + Pair QR + BLE; body = the rotary dial with its angle and turns (the hero)
+    // and quiet value / speed readouts; foot = Zero + Sim spins + link meta.
+    // The pill is `ledDot` (code writes its data-state); its label keeps `id-status-text`.
+    const statusLabel = h('span', { className: 'id-status-text ui-pill-label', textContent: 'READY' });
+    const ledDot = h(
+      'span',
+      {
+        className: 'id-led id-pill ui-pill',
+        role: 'note',
+        tabindex: '0',
+        dataset: { state: 'standby', tone: 'idle' },
+        'data-tip': STATUS_TIPS.standby
+      },
+      [statusLabel]
+    );
 
     const qrBtn = h(
       'button',
       {
         type: 'button',
-        className: 'id-btn id-btn--qr',
+        className: 'id-btn id-btn--qr ui-btn ui-btn--sm',
         'aria-expanded': 'false',
-        title: 'Scan QR code with iPhone to spin phone flat on desk as a wireless rotary dial',
+        'data-tip': QR_TIP_OPEN,
         onClick: function () { toggleQrOverlay(); }
       },
-      ['PAIR QR']
+      ['Pair QR']
     );
 
     const bleBtn = h(
       'button',
       {
         type: 'button',
-        className: 'id-btn id-btn--ble',
+        className: 'id-btn id-btn--ble ui-btn ui-btn--sm',
         'aria-pressed': 'false',
-        title: 'Pair BLE Rotary Encoder / Nordic UART via Web Bluetooth',
+        'data-tip': BLE_TIP_OFF,
         onClick: function () { handleBleClick(); }
       },
       ['BLE']
@@ -915,24 +964,20 @@
       'button',
       {
         type: 'button',
-        className: 'id-btn',
-        title: 'Zero rotary angle and turn counter (Z)',
+        className: 'id-btn id-btn--zero ui-btn ui-btn--sm ui-btn--quiet',
+        'data-tip': 'Zero the angle, turn count and tick count; the value is kept.',
         onClick: function () { handleZero(); }
       },
-      ['ZERO']
+      ['Zero']
     );
 
-    const bezel = h('div', { className: 'id-bezel' }, [
-      h('div', { className: 'id-bezel-left' }, [
-        h('span', { className: 'id-kicker', textContent: '07' }),
-        h('span', { className: 'id-title', textContent: 'iPhone Spin Dial' }),
-        ledDot,
-        statusLabel
-      ]),
-      h('div', { className: 'id-bezel-right' }, [qrBtn, bleBtn, zeroBtn])
+    const bezel = h('header', { className: 'id-bezel ui-tile-head' }, [
+      h('span', { className: 'id-kicker ui-tile-index', textContent: '07' }),
+      h('span', { className: 'id-title ui-tile-title', textContent: 'iPhone dial' }),
+      h('div', { className: 'id-bezel-right ui-tile-actions' }, [ledDot, qrBtn, bleBtn])
     ]);
 
-    // 2. Machined Braun / Teenage Engineering Rotary Encoder SVG
+    // 2. Rotary dial SVG (the hero). Colours come from CSS classes on --ui- tokens.
     const tickNodes = [];
     for (let i = 0; i < DETENT_COUNT; i++) {
       const deg = i * DETENT_STEP_DEG;
@@ -955,17 +1000,12 @@
     });
 
     const rotorGroup = svgEl('g', { class: 'id-rotor', transform: 'rotate(0 100 100)' }, [
-      // Outer machined aluminum chamfer
       svgEl('circle', { cx: 100, cy: 100, r: 72, class: 'id-rotor-rim' }),
-      // Brushed metal platter face
       svgEl('circle', { cx: 100, cy: 100, r: 66, class: 'id-rotor-face' }),
-      // Concentric lathe grooves
       svgEl('circle', { cx: 100, cy: 100, r: 54, class: 'id-rotor-groove' }),
-      svgEl('circle', { cx: 100, cy: 100, r: 41, class: 'id-rotor-groove' }),
-      // Braun Vermilion 12-o'clock index notch
-      svgEl('line', { x1: 100, y1: 30, x2: 100, y2: 45, class: 'id-rotor-notch' }),
-      // Teenage Engineering TP-7 finger dimple
-      svgEl('circle', { cx: 100, cy: 52, r: 6.5, class: 'id-rotor-dimple' })
+      // 12 o'clock index notch and finger dimple
+      svgEl('line', { x1: 100, y1: 30, x2: 100, y2: 42, class: 'id-rotor-notch' }),
+      svgEl('circle', { cx: 100, cy: 50, r: 5.5, class: 'id-rotor-dimple' })
     ]);
 
     const dialSvg = svgEl(
@@ -981,7 +1021,7 @@
         valueArcPath,
         svgEl('g', { class: 'id-ticks' }, tickNodes),
         rotorGroup,
-        svgEl('circle', { cx: 100, cy: 100, r: 29, class: 'id-hub-cap' })
+        svgEl('circle', { cx: 100, cy: 100, r: 38, class: 'id-hub-cap' })
       ]
     );
 
@@ -994,12 +1034,13 @@
         className: 'id-dial-pad',
         tabIndex: 0,
         role: 'slider',
-        'aria-label': 'iPhone Rotary Encoder Dial',
+        'aria-label': 'iPhone rotary dial',
         'aria-valuemin': '0',
         'aria-valuemax': '100',
         'aria-valuenow': '50',
         'aria-valuetext': 'Angle 0.0 degrees, Value 50.0',
-        title: 'Drag in a circle to spin dial, scroll wheel, or pair iPhone via QR / BLE'
+        'data-tip': 'Drag in a circle or scroll to turn; arrow keys step one click; Z zeroes.',
+        'data-tip-key': 'Z'
       },
       [
         dialSvg,
@@ -1007,22 +1048,22 @@
       ]
     );
 
-    // 3. Right-Column Telemetry & Controls
+    // 3. Quiet readouts beside the dial
     const valReadout = h('span', { className: 'id-metric-num', textContent: '50.0' });
     const fineBtn = h(
       'button',
       {
         type: 'button',
-        className: 'id-mini-pill',
+        className: 'id-mini-pill ui-btn ui-btn--sm',
         'aria-pressed': 'false',
-        title: 'Toggle Coarse (1x) vs Fine (0.25x) rotary sensitivity',
+        'data-tip': 'Turning speed: coarse moves the value 4× faster than fine. Click to switch.',
         onClick: function () {
           tracker.setFineMode(!tracker.fineMode);
           sendToPhone({ t: 'cmd', cmd: 'fine', val: tracker.fineMode });
           renderTelemetry();
         }
       },
-      ['1× COARSE']
+      ['1× coarse']
     );
     const valFill = h('div', { className: 'id-bar-fill' });
     const poseBadge = h('div', { className: 'id-sub-meta', textContent: 'Flat desk · Z-axis gravity lock' });
@@ -1034,59 +1075,62 @@
       'button',
       {
         type: 'button',
-        className: 'id-mini-btn',
-        title: 'Simulate a 360-degree clockwise desk spin (24 detent ticks)',
+        className: 'id-mini-btn ui-btn ui-btn--sm ui-btn--quiet',
+        'aria-label': 'Sim spin +360°',
+        'data-tip': 'Simulated: spin the dial one full turn clockwise.',
         onClick: function () { runSyntheticSpin(360); }
       },
-      ['Spin +360°']
+      ['+360°']
     );
 
     const spinCcwBtn = h(
       'button',
       {
         type: 'button',
-        className: 'id-mini-btn',
-        title: 'Simulate a counter-clockwise desk spin (-180 deg)',
+        className: 'id-mini-btn ui-btn ui-btn--sm ui-btn--quiet',
+        'aria-label': 'Sim spin −180°',
+        'data-tip': 'Simulated: spin the dial half a turn counter-clockwise.',
         onClick: function () { runSyntheticSpin(-180); }
       },
-      ['Spin −180°']
+      ['−180°']
     );
 
     const linkMetaText = h('span', {
       className: 'id-link-meta',
+      'data-tip': 'Relay path and the session code the phone joins.',
       textContent: 'NO LINK'
     });
 
     const telemetryCol = h('div', { className: 'id-telemetry' }, [
       h('div', { className: 'id-card' }, [
         h('div', { className: 'id-card-head' }, [
-          h('span', { className: 'id-label', textContent: 'DIAL VALUE' }),
+          h('span', { className: 'id-label ui-label', textContent: 'Value' }),
           fineBtn
         ]),
-        h('div', { className: 'id-metric-row' }, [
+        h('div', {
+          className: 'id-metric-row ui-readout',
+          'data-tip': 'Dial output from 0 to 100; clockwise raises it.'
+        }, [
           valReadout,
-          h('span', { className: 'id-metric-unit', textContent: '/ 100' })
+          h('span', { className: 'id-metric-unit ui-readout-unit', textContent: '/ 100' })
         ]),
         h('div', { className: 'id-bar-track' }, [valFill]),
         poseBadge
       ]),
       h('div', { className: 'id-card' }, [
-        h('div', { className: 'id-card-head' }, [
-          h('span', { className: 'id-label', textContent: 'VELOCITY · 24-DETENT' })
-        ]),
-        h('div', { className: 'id-metric-row' }, [
+        h('span', { className: 'id-label ui-label', textContent: 'Speed' }),
+        h('div', {
+          className: 'id-metric-row ui-readout',
+          'data-tip': 'Spin speed in revolutions per minute; below, degrees per second and clicks.'
+        }, [
           rpmReadout,
-          h('span', { className: 'id-metric-unit', textContent: ' RPM' })
+          h('span', { className: 'id-metric-unit ui-readout-unit', textContent: 'RPM' })
         ]),
         degSecMeta
-      ]),
-      h('div', { className: 'id-footer-row' }, [
-        h('div', { className: 'id-sim-group' }, [spinSimBtn, spinCcwBtn]),
-        linkMetaText
       ])
     ]);
 
-    // 4. In-Cell QR Pairing & LAN/HTTPS Host Overlay Popover
+    // 4. In-tile QR pairing panel (inside the body, over the dial; the header stays usable)
     const qrSvgSlot = h('div', { className: 'id-qr-box' });
     const qrHintText = h('div', {
       className: 'id-qr-hint',
@@ -1097,7 +1141,8 @@
       className: 'id-host-input',
       placeholder: 'LAN IP or HTTPS URL (e.g. https://192.168.1.10:8443)',
       value: customHost,
-      'aria-label': 'Mobile controller LAN IP or HTTPS host override',
+      'aria-label': 'Phone-reachable address of this page (LAN IP or HTTPS URL)',
+      'data-tip': 'Your Mac’s LAN address or an HTTPS tunnel, so the phone can reach this page.',
       onInput: function (e) {
         customHost = String(e.target.value || '').trim();
         safeStorageSet('localStorage', STORAGE_HOST_KEY, customHost);
@@ -1109,7 +1154,8 @@
       'button',
       {
         type: 'button',
-        className: 'id-mini-btn',
+        className: 'id-mini-btn ui-btn ui-btn--sm',
+        'data-tip': 'Copy the phone page link, to open it on the iPhone another way.',
         onClick: function () {
           const info = resolveDialPhoneUrl(customHost, bridgeConfig, root.location, sessionId);
           const target = info.qrUrl || info.baseUrl;
@@ -1127,17 +1173,23 @@
       'button',
       {
         type: 'button',
-        className: 'id-mini-btn id-mini-btn--close',
+        className: 'id-mini-btn id-mini-btn--close ui-btn ui-btn--sm',
+        'data-tip': 'Hide the QR code and return to the dial.',
+        'data-tip-key': 'Escape',
         onClick: function () { closeQrOverlay(true); }
       },
-      ['Done']
+      ['Close']
     );
 
     const qrOverlay = h('div', { className: 'id-qr-overlay', hidden: true }, [
       qrSvgSlot,
       h('div', { className: 'id-qr-meta' }, [
         h('div', { className: 'id-qr-top' }, [
-          h('span', { className: 'id-qr-sid', textContent: 'SID ' + sessionId }),
+          h('span', {
+            className: 'id-qr-sid ui-label',
+            'data-tip': 'Session code: the phone joins this session when it opens the QR link.',
+            textContent: 'SID ' + sessionId
+          }),
           h('div', { className: 'id-qr-actions' }, [copyUrlBtn, closeQrBtn])
         ]),
         qrHintText,
@@ -1145,10 +1197,27 @@
       ])
     ]);
 
-    const stage = h('div', { className: 'id-stage' }, [
+    const narrowNote = h('span', {
+      className: 'id-narrow-note ui-label',
+      'data-tip': 'Zero and the Sim spins appear when this tile is at least 320 px wide.',
+      textContent: 'Widen for Sim'
+    });
+
+    const foot = h('footer', { className: 'id-footer-row ui-tile-foot' }, [
+      h('div', { className: 'id-sim-group' }, [
+        h('span', { className: 'id-sim-label ui-label', textContent: 'Sim' }),
+        spinSimBtn,
+        spinCcwBtn,
+        h('span', { className: 'id-foot-sep', 'aria-hidden': 'true' }),
+        zeroBtn
+      ]),
+      linkMetaText
+    ]);
+
+    const stage = h('div', { className: 'id-stage lg-cell-stage' }, [
       bezel,
-      h('div', { className: 'id-body' }, [dialPad, telemetryCol]),
-      qrOverlay
+      h('div', { className: 'id-body ui-tile-body' }, [dialPad, telemetryCol, narrowNote, qrOverlay]),
+      foot
     ]);
 
     cellEl.appendChild(stage);
@@ -1179,7 +1248,7 @@
       valFill.style.width = clamp(st.dialValue, 0, 100).toFixed(1) + '%';
 
       fineBtn.setAttribute('aria-pressed', st.fineMode ? 'true' : 'false');
-      fineBtn.textContent = st.fineMode ? '0.25× FINE' : '1× COARSE';
+      fineBtn.textContent = st.fineMode ? '0.25× fine' : '1× coarse';
 
       const absRpm = Math.abs(st.rpm);
       rpmReadout.textContent = absRpm.toFixed(1);
@@ -1207,31 +1276,52 @@
     }
 
     // Status text names what is actually true: a relay socket alone is "WAITING", never live.
+    function setStatus(text, tone, tip) {
+      statusLabel.textContent = text;
+      ledDot.dataset.tone = tone;
+      ledDot.setAttribute('data-tip', tip);
+    }
+
     function updateStatusPill() {
       let st = 'standby';
-      let text = 'DRAG · QR · BLE';
+      let text = 'READY';
+      let tone = 'idle';
+      let tip = STATUS_TIPS.standby;
       if (phoneConnected) {
         st = 'live';
         text = linkTransport === 'local-ws' ? 'IPHONE · WS' : 'IPHONE · WSS';
+        tone = 'ok';
+        tip = STATUS_TIPS.phone;
       } else if (bleConnected) {
         st = 'live';
         text = 'BLE LIVE';
+        tone = 'attention';
+        tip = STATUS_TIPS.ble;
       } else if (linkState === 'failed') {
         st = 'error';
         text = 'RELAY OFFLINE · PAIR QR';
+        tone = 'attention';
+        tip = STATUS_TIPS.failed;
       } else if (link && linkState === 'ready') {
         st = 'ready';
         text = 'WAITING · SCAN QR';
+        tip = STATUS_TIPS.waiting;
       } else if (link) {
         st = 'linking';
         text = 'LINKING…';
+        tone = 'attention';
+        tip = STATUS_TIPS.linking;
       } else if (qrOpen && !isScannable()) {
         text = 'NO LINK · SET HOST';
+        tone = 'attention';
+        tip = STATUS_TIPS.noHost;
       } else if (pairTimedOut) {
         text = 'PAIR TIMEOUT · QR';
+        tone = 'attention';
+        tip = STATUS_TIPS.timeout;
       }
       ledDot.dataset.state = st;
-      statusLabel.textContent = text;
+      setStatus(text, tone, tip);
       linkMetaText.textContent = link
         ? (linkTransport === 'local-ws' ? 'WS ' : 'WSS ') + sessionId.slice(0, 6)
         : 'NO LINK';
@@ -1256,8 +1346,8 @@
         try {
           const rendered = QR.renderSVGElement(info.qrUrl, {
             quiet: 3,
-            fg: '#141413',
-            bg: '#ffffff',
+            fg: qrColours.fg,
+            bg: qrColours.bg,
             label: 'Scan with iPhone camera to open iPhone Spin Dial controller'
           });
           qrSvgSlot.appendChild(rendered.svg);
@@ -1288,6 +1378,7 @@
         activateSecondarySession();
         qrOpen = true;
         qrBtn.setAttribute('aria-expanded', 'true');
+        qrBtn.setAttribute('data-tip', QR_TIP_CLOSE);
         renderQrPopover();
         qrOverlay.hidden = false;
         hostInput.focus({ preventScroll: true });
@@ -1302,6 +1393,7 @@
       qrOpen = false;
       qrOverlay.hidden = true;
       qrBtn.setAttribute('aria-expanded', 'false');
+      qrBtn.setAttribute('data-tip', QR_TIP_OPEN);
       updateStatusPill();
       if (restoreFocus) {
         qrBtn.focus({ preventScroll: true });
@@ -1805,6 +1897,8 @@
       bleConnected = false;
       bleBtn.setAttribute('aria-pressed', 'false');
       bleBtn.textContent = 'BLE';
+      delete bleBtn.dataset.tone;
+      bleBtn.setAttribute('data-tip', BLE_TIP_OFF);
       updateStatusPill();
     }
 
@@ -1837,7 +1931,7 @@
       const nav = (win && win.navigator) || (root && root.navigator);
       const bt = nav && nav.bluetooth;
       if (!bt || typeof bt.requestDevice !== 'function') {
-        statusLabel.textContent = 'BLE N/A · USE QR';
+        setStatus('BLE N/A · USE QR', 'attention', STATUS_TIPS.bleNa);
         poseBadge.textContent = 'Web Bluetooth requires Chrome/Edge · Use [PAIR QR] on Safari';
         return;
       }
@@ -1860,7 +1954,7 @@
       }
 
       try {
-        statusLabel.textContent = 'BLE PAIRING…';
+        setStatus('BLE PAIRING…', 'attention', STATUS_TIPS.blePairing);
         const device = await bt.requestDevice({
           acceptAllDevices: true,
           optionalServices: [BLE_UART_SERVICE, 0x1816, 0x180d, 'battery_service']
@@ -1926,14 +2020,16 @@
         bleConnecting = false;
         bleConnected = true;
         bleBtn.setAttribute('aria-pressed', 'true');
-        bleBtn.textContent = 'BLE ON';
+        bleBtn.textContent = 'BLE on';
+        bleBtn.dataset.tone = 'attention';
+        bleBtn.setAttribute('data-tip', BLE_TIP_ON);
         renderTelemetry();
       } catch (err) {
         if (unmounted || myBleEpoch !== bleEpoch) return;
         disconnectBle();
         const msg = String((err && err.message) || err || '');
         if (!/cancelled|canceled|user/i.test(msg)) {
-          statusLabel.textContent = 'BLE RETRY / QR';
+          setStatus('BLE RETRY / QR', 'attention', STATUS_TIPS.bleRetry);
         } else {
           updateStatusPill();
         }

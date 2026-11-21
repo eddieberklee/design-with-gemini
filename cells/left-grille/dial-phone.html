@@ -4,23 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#111110">
-  <title>07 · iPhone Spin Dial Controller</title>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f5f5f3">
+  <title>iPhone Dial Controller</title>
+  <!-- Tokens and ui-pill / ui-label / ui-readout only; no tooltip script on the phone. -->
+  <link rel="stylesheet" href="../../ui/base.css">
   <link rel="stylesheet" href="iphone-dial.css">
 </head>
-<body class="dp-body" data-theme="dark">
+<body class="dp-body" data-theme="light">
   <main class="dp-app" id="dp-app">
     <header class="dp-header">
       <div class="dp-brand">
-        <span class="dp-badge">07</span>
-        <span class="dp-title">iPhone Spin Dial</span>
+        <span class="ui-tile-index">07</span>
+        <span class="dp-title">iPhone dial</span>
       </div>
       <div class="dp-header-right">
-        <button type="button" class="dp-theme-btn" id="dp-theme-btn" aria-label="Toggle dark or light theme">☀ Light</button>
-        <button type="button" class="dp-status" id="dp-status" data-state="connecting" title="Link status · tap to reconnect">
-          <span class="dp-dot" aria-hidden="true"></span>
-          <span id="dp-status-text" aria-live="polite">LINKING</span>
+        <button type="button" class="dp-theme-btn" id="dp-theme-btn" aria-label="Switch between light and dark theme">☾ Dark</button>
+        <!-- A button so OFFLINE · TAP and NO DESKTOP · TAP are reachable; dial-phone.js retries
+             only while no link is open. -->
+        <button type="button" class="ui-pill dp-status" id="dp-status" data-state="connecting">
+          <span id="dp-status-text" class="ui-pill-label" aria-live="polite">LINKING</span>
         </button>
       </div>
     </header>
@@ -30,12 +33,12 @@
         <svg class="dp-wheel-svg" viewBox="0 0 240 240" aria-hidden="true">
           <circle cx="120" cy="120" r="112" fill="none" stroke="currentColor" stroke-opacity="0.14" stroke-width="1.5" />
           <circle cx="120" cy="120" r="98" fill="none" stroke="currentColor" stroke-opacity="0.12" stroke-width="5" />
-          <path id="dp-arc-active" d="" fill="none" stroke="#e85d2a" stroke-width="5.5" stroke-linecap="round" />
+          <path id="dp-arc-active" class="dp-arc-active" d="" fill="none" stroke-width="5" stroke-linecap="round" />
           <g id="dp-ticks"></g>
           <g id="dp-rotor" transform="rotate(0 120 120)">
             <circle cx="120" cy="120" r="82" fill="none" stroke="currentColor" stroke-opacity="0.22" stroke-width="1.5" />
             <circle cx="120" cy="120" r="66" fill="none" stroke="currentColor" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="3 3" />
-            <line x1="120" y1="30" x2="120" y2="50" stroke="#e85d2a" stroke-width="4" stroke-linecap="round" />
+            <line class="dp-notch" x1="120" y1="30" x2="120" y2="50" stroke-width="4" stroke-linecap="round" />
             <circle cx="120" cy="60" r="9" fill="none" stroke="currentColor" stroke-opacity="0.35" stroke-width="1.5" />
           </g>
         </svg>
@@ -58,23 +61,23 @@
 
       <div class="dp-metrics">
         <div class="dp-metric-box">
-          <span class="dp-metric-k">VELOCITY</span>
-          <span class="dp-metric-v" id="dp-rpm">0.0 RPM</span>
+          <span class="dp-metric-k ui-label">Speed</span>
+          <span class="dp-metric-v ui-readout" id="dp-rpm">0.0 RPM</span>
         </div>
         <div class="dp-metric-box">
-          <span class="dp-metric-k">DETENT</span>
-          <span class="dp-metric-v" id="dp-detent">#00 · 0</span>
+          <span class="dp-metric-k ui-label">Click · ticks</span>
+          <span class="dp-metric-v ui-readout" id="dp-detent">#00 · 0</span>
         </div>
         <div class="dp-metric-box">
-          <span class="dp-metric-k">TURNS</span>
-          <span class="dp-metric-v" id="dp-turns">+0.00t</span>
+          <span class="dp-metric-k ui-label">Turns</span>
+          <span class="dp-metric-v ui-readout" id="dp-turns">+0.00t</span>
         </div>
       </div>
     </section>
 
     <section class="dp-controls">
       <div class="dp-btn-grid">
-        <button type="button" class="dp-btn" id="dp-zero-btn">Zero Angle (0°)</button>
+        <button type="button" class="dp-btn" id="dp-zero-btn">Zero angle</button>
         <button type="button" class="dp-btn" id="dp-fine-btn" aria-pressed="false">1× Coarse</button>
         <button type="button" class="dp-btn" id="dp-ticks-btn" aria-pressed="true">Click Ticks: On</button>
         <button type="button" class="dp-btn" id="dp-reset-btn">Reset 50%</button>
