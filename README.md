@@ -1,6 +1,6 @@
 # design-with-gemini
 
-Interactive 3×3 grid of focused Gemini capability prototypes. Open [`index.html`](index.html) directly in a browser or serve it locally (`python3 -m http.server 8000`).
+Interactive grid of focused Gemini capability prototypes (three columns on a laptop, two on a phone). Open [`index.html`](index.html) directly in a browser or serve it locally (`python3 -m http.server 8000`).
 
 ## Cells
 
@@ -18,6 +18,15 @@ Interactive 3×3 grid of focused Gemini capability prototypes. Open [`index.html
 | **10** | **Gemini Image Gen** (`gemini-3-pro-image-preview` / `gemini-3.1-flash-image-preview`) — native Gemini `generateContent` image generation playground with dynamic model discovery, aspect-ratio control, one-click presets, shared local key store, abortable requests, download, and full-resolution lightbox | [`cells/image-gen/`](cells/image-gen/) · [`NOTES.md`](cells/image-gen/NOTES.md) |
 | **11** | **Image → 3D (4× Arena)** — drop any image to race 4 Gemini models in parallel reconstructing it as a 3D primitive mesh, rendered side by side in 4 interactive 3D viewers with synced orbit, model labels, full-width 4-Up studio, and `.OBJ` export | [`cells/image-to-3d/`](cells/image-to-3d/) · [`NOTES.md`](cells/image-to-3d/NOTES.md) |
 
+## Shared UI
+
+Every tile uses one visual system in [`ui/`](ui/): tokens, the tile header / body / footer anatomy, one set of controls, and one tooltip for the whole page. [`ui/NOTES.md`](ui/NOTES.md) is the contract; a new cell adopts it rather than styling its own chrome.
+
+- **Tooltips**: put `data-tip="One plain sentence."` on any control, abbreviation, status pill or readout that is not obvious (`data-tip-key="R"` adds a keycap). They show on hover and on keyboard focus, in tiles, dialogs and secondary pages. Do not use `title`.
+- **Status pills**: grey for idle states (including "No key" and "Key set"), rust for running, attention and errors, green only for a live connection or a returned live result.
+- **One black primary button per tile**, and every secondary page or dialog closes with "Close" at the top right (Esc).
+- **Paid requests** (Gemini API calls) are sent only from an explicit click on a run control, never on load, on key sync, on a file drop or from an example chip.
+
 ## Verify
 
 ```sh
@@ -27,6 +36,12 @@ bash scripts/check.sh
 One command, no dependencies beyond Node 22 and `timeout`. It checks that every script and stylesheet a page references exists (and that no cell script or stylesheet is left unwired), that every `.js` / `.mjs` file parses, that the `index.html` scripts parse as **one** program (they are classic `<script defer>` files sharing one global scope, so a duplicate top-level `const` / `let` / `class` across cells is a load-time error no per-file check can see), and that every Node suite under `cells/*/` passes. Exit `0` means all four hold.
 
 It does not open a browser. Interaction, layout, and hardware paths (microphone, camera, phone sensors, Web Serial / BLE, a Gemini API key) need a manual pass in the page; each cell's `NOTES.md` lists what to exercise.
+
+## Journal
+
+### 2026-11-21 16:50 — Line-by-line bug pass on every cell, one shared UI system, and tooltips everywhere
+
+<img src="docs/journal/2026-11-21-shared-ui-rework.png" width="480">
 
 ## License
 
