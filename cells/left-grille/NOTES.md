@@ -6,10 +6,10 @@
 
 | Secondary Slot | Instrument | Core Physics & Transport | Slice Notes & Tests |
 | :--- | :--- | :--- | :--- |
-| **Slot 01 (`#lg-sec-cell-1`)** | **Left Grille Swipe Sonar** | 4-carrier left-speaker ultrasonic comb (`18.375–21.375 kHz`), `2.93 Hz/bin` baseband Doppler, pinhole shadow & velocity-compensated tribological tilt (`UP`/`DOWN`, `cm/s`, `% TOP`/`% BTM`) | `acoustic-engine.js` · `acoustic-engine.test.js` (`12` tests) |
-| **Slot 02 (`#lg-sec-cell-2`)** | **Chassis Tap Zones** | `< 16 kHz` Lamb plate-wave dispersion, forward-scan `riseTimeMs`, cavity boom & HF air attenuation + 4-zone Mahalanobis learner (`top-left`, `left-palm`, `trackpad-rim`, `right-palm`) | [`tap-zones.NOTES.md`](tap-zones.NOTES.md) · `tap-zones.test.js` (`9` tests) |
-| **Slot 03 (`#lg-sec-cell-3`)** | **Nail vs Soft Pad** | *TapSense* + *ScratchInput* `< 16 kHz` spectral centroid, `-18 dB` core duration, Wiener flatness, fan-step recovery & harmonic voice veto (`soft-pad`, `nail-tap`, `nail-scratch`) | [`nail-pad.NOTES.md`](nail-pad.NOTES.md) · `nail-pad.test.js` (`11` tests) |
-| **Slot 04 (`#lg-sec-cell-4`)** | **18–20.5 kHz Chirp Sonar** | Stereo FDMA Hann-tapered FMCW chirps (`18.00–19.15 kHz` L, `19.35–20.50 kHz` R), analytic matched filter + motion-gated clutter subtraction (`push`, `pull`, `wave-left`, `wave-right`, `4–55 cm`) | [`chirp-sonar.NOTES.md`](chirp-sonar.NOTES.md) · `chirp-sonar.test.js` (`11` tests) |
+| **Slot 01 (`#lg-sec-cell-1`)** | **Left Grille Swipe Sonar** | 4-carrier left-speaker ultrasonic comb (`18.375–21.375 kHz`), `2.93 Hz/bin` baseband Doppler, pinhole shadow, 5-zone non-monotonic RBF position estimator + shrinkage Fisher LDA direction classifier (`UP`/`DOWN`, `cm/s`, `% TOP`/`% BTM`) & 14-step empirical calibration suite (`cal-collector.mjs`) | `acoustic-engine.js` · `cal-collector.mjs` · `acoustic-engine.test.js` (`16` tests) |
+| **Slot 02 (`#lg-sec-cell-2`)** | **Chassis Tap Zones** | `< 16 kHz` Lamb plate-wave dispersion, forward-scan `riseTimeMs`, cavity boom & HF air attenuation + 4-zone Mahalanobis learner (`top-left`, `left-palm`, `trackpad-rim`, `right-palm`) | [`tap-zones.NOTES.md`](tap-zones.NOTES.md) · `tap-zones.test.js` (`11` tests) |
+| **Slot 03 (`#lg-sec-cell-3`)** | **Nail vs Soft Pad** | *TapSense* + *ScratchInput* `< 16 kHz` spectral centroid, `-18 dB` core duration, Wiener flatness, fan-step recovery & harmonic voice veto (`soft-pad`, `nail-tap`, `nail-scratch`) | [`nail-pad.NOTES.md`](nail-pad.NOTES.md) · `nail-pad.test.js` (`13` tests) |
+| **Slot 04 (`#lg-sec-cell-4`)** | **18–20.5 kHz Chirp Sonar** | Stereo FDMA Hann-tapered FMCW chirps (`18.00–19.15 kHz` L, `19.35–20.50 kHz` R), analytic matched filter + motion-gated clutter subtraction (`push`, `pull`, `wave-left`, `wave-right`, `4–55 cm`) | [`chirp-sonar.NOTES.md`](chirp-sonar.NOTES.md) · `chirp-sonar.test.js` (`14` tests) |
 | **Slot 05 (`#lg-sec-cell-5`)** | **Grille Breath Puff** | Dual-rate `20–200 Hz` Karman vortex stagnation-pressure roar + `-12 dB/oct` roll-off + NACF harmonic voice/hum veto driving an inertial anemometer pinwheel (`breeze`, `puff`, `blow`) | [`breath-puff.NOTES.md`](breath-puff.NOTES.md) · `breath-puff.test.js` (`10` tests) |
 | **Slot 06 (`#lg-sec-cell-6`)** | **Lid Angle (`0°–135°`)** | Dual-mode: (A) `18.2–20.4 kHz` + bit-exact `'chirp'`-piggyback Wiener-deconvolved display reflection sonar + (B) `lid-bridge.mjs` local SSE helper reading Apple `IOHIDManager` `LidAngleSensor` (`0x05AC:0x8104`) | [`lid-angle.NOTES.md`](lid-angle.NOTES.md) · `lid-angle.test.js` (`11` tests) |
 | **Slot 07 (`#lg-sec-cell-7`)** | **iPhone Spin Dial** | 3D gravity-projected `DeviceMotionEvent.rotationRate` (`dot(ω, g_hat)`, face-up/down gimbal-free, `0°/min` rest drift, 24 detents) via scannable QR (`dial-phone.html`) over WSS MQTT / Wi-Fi WS / Web Bluetooth (`navigator.bluetooth`) | [`iphone-dial.NOTES.md`](iphone-dial.NOTES.md) · `iphone-dial.test.js` (`11` tests) |
@@ -29,22 +29,25 @@
    - Every secondary slot (`#lg-sec-cell-1` .. `#lg-sec-cell-9`) retains `.cell` (`aspect-ratio: 4 / 3; position: relative; overflow: hidden; container-type: inline-size;`) with `position: absolute; inset: 0;` inner stages so internal controls never stretch grid row heights from `320px` to `2560px`.
    - At `<= 245px` container width (2-column grid at a 390 px viewport) `.lg-tier-dist` wraps so `Sim ↑/↓` sit under the `TOP/BTM` pair instead of overlapping it.
 5. **Secondary Page Navigation (`ui.js:runPortalTransition`, `requestCloseSecondaryView`, `syncLocationHash`)**:
-   - Opens from the tile (pushes `#left-grille` with `history.state.lgSecondary`), from `#left-grille` on load, and by Back/Forward; closes by `← Grid`, `Escape`, Back, or another cell's hash. Every `ViewTransition` promise is handled (a skipped transition rejects `ready`, `updateCallbackDone` and `finished`), and a hidden tab swaps the DOM without a transition.
-   - Open saves the main-grid `scrollY` (only while the grid is the visible page) and scrolls to top; close restores it and focuses the tile. Opened from another cell's page, close focuses the tile without a saved offset.
-   - Close never unhides `main.grid` while another `*-secondary-page` (for example `#hand-gesture`) is visible. A pending `history.back()` blocks a second close for up to `1 s`, so a double Back never steps back twice.
+   - Opens from the tile (pushes `#left-grille` with `history.state.lgSecondary`), from `#left-grille` on load, and by Back/Forward; closes by `← Grid`, `Escape`, Back, or another cell's hash. Every `ViewTransition` promise is handled, and a hidden tab swaps the DOM without a transition.
+   - Open saves the main-grid `scrollY` (only while the grid is the visible page) and scrolls to top; close restores it and focuses the tile. Close never unhides `main.grid` while another `*-secondary-page` is visible, and a pending `history.back()` blocks a second close for up to `1 s`.
 6. **CSS Reach Outside the Cell (`left-grille.css`)**:
-   - `main.grid[hidden]` is hidden only while `.lg-secondary-page` is shown (`index.html`/`ui/base.css` give `.grid` an author `display: grid` that beats the UA `[hidden]` rule).
-   - `body:has(main.grid[hidden]) .mg-hud` hides Cell 03's fixed scale HUD whenever the main grid is hidden by any page; it is kept global because the HUD has no meaning without the grid.
-   - `::view-transition-*(lg-stage-portal)` match only this cell's transition name.
+   - `main.grid[hidden]` is hidden only while `.lg-secondary-page` is shown; `body:has(main.grid[hidden]) .mg-hud` hides Cell 03's fixed scale HUD whenever the main grid is hidden; `::view-transition-*(lg-stage-portal)` match only this cell's transition name.
+7. **14-Step Empirical Calibration Suite & Local Disk Telemetry Collector (`ui.js:openCalibrationWizard`, `acoustic-engine.js:fitEmpiricalCalibration`, `cal-collector.mjs`)**:
+   - Excludes `< 1.1 kHz` finger-pad pneumatic thud from `spectralFlatness`/`tonalCrest` so near-port rubs never self-veto as speech.
+   - Clicking `CAL` in Slot `01` opens an in-cell guided 14-step calibration suite inside `.lg-inline-overlay` (5 spatial zone rubs at `0%, 18%, 50%, 75%, 100%`, 8 slow/fast/half `UP` & `DOWN` swipes, and 1 negative key-click baseline) fitting a 5-zone non-monotonic Gaussian RBF position curve + shrinkage Fisher LDA (`LOO %` & `d'`) + speed scale.
+   - When `cal-collector.mjs` is running on `127.0.0.1:8792`, the UI displays `● DISK REC` and streams every recorded step (`POST /record` `{ type: 'event' }`) plus the fitted model bundle (`POST /record` `{ type: 'fit' }`) into gitignored `.worktrees/cal-data/events.jsonl`, `.worktrees/cal-data/session-<sid>.json`, and `.worktrees/cal-data/latest-session.json` (in addition to `localStorage` `dwg.leftGrilleCalibration.v2` persistence and 1-click `left-grille-calibration.json` download).
 
 ---
 
 ## 3. How to Run & Verify
 
-- **All 95 unit, physics & lifecycle tests across all 8 suites**:
+- **All unit, physics & lifecycle tests across all 8 suites**:
   `timeout 60 node --test cells/left-grille/*.test.js`
 - **JavaScript syntax gate**:
   `for f in cells/left-grille/*.js cells/left-grille/*.mjs; do node --check "$f"; done`
+- **Local Disk Calibration Telemetry Collector (`127.0.0.1:8792` → `.worktrees/cal-data/latest-session.json`)**:
+  `node cells/left-grille/cal-collector.mjs`
 - **Optional native MacBook Lid Angle HID bridge (`127.0.0.1:8791`)**:
   `node cells/left-grille/lid-bridge.mjs`
 - **Live browser server**:

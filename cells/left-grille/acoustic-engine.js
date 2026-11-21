@@ -44,6 +44,153 @@
   const DEFAULT_GRILLE_CM = 11.0;
   const SPEED_OF_SOUND_CMS = 34300;
   const OBLIQUE_GEOMETRY_FACTOR = 1.65;
+  const NUM_BANDS = 8;
+  const MAX_REC_FRAMES = 1500;
+  const CANONICAL_ANCHORS = [0.02, 0.18, 0.5, 0.75, 0.96];
+  const POS_MIN_SCALES = [1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 1.6, 4.5, 1.2];
+  const LDA_MIN_STDS = [0.05, 0.45, 0.75, 0.05, 0.04, 0.05, 0.75, 0.75];
+
+  const CALIBRATION_PROTOCOL = Object.freeze([
+    Object.freeze({
+      id: 'zone-0',
+      kind: 'zone',
+      targetY: 0.02,
+      label: '1/14 · Rub VERY TOP (beside Esc)',
+      short: 'Top 0%'
+    }),
+    Object.freeze({
+      id: 'zone-20',
+      kind: 'zone',
+      targetY: 0.18,
+      label: '2/14 · Rub UPPER-LEFT (beside ~ / Tab mics)',
+      short: 'Mics 18%'
+    }),
+    Object.freeze({
+      id: 'zone-50',
+      kind: 'zone',
+      targetY: 0.50,
+      label: '3/14 · Rub MIDDLE (beside Caps Lock)',
+      short: 'Mid 50%'
+    }),
+    Object.freeze({
+      id: 'zone-75',
+      kind: 'zone',
+      targetY: 0.75,
+      label: '4/14 · Rub LOWER-MID (beside Shift)',
+      short: 'Low 75%'
+    }),
+    Object.freeze({
+      id: 'zone-100',
+      kind: 'zone',
+      targetY: 0.96,
+      label: '5/14 · Rub BOTTOM (beside Fn / Ctrl)',
+      short: 'Btm 100%'
+    }),
+    Object.freeze({
+      id: 'down-slow',
+      kind: 'swipe',
+      direction: 'down',
+      startY: 0.04,
+      endY: 0.96,
+      label: '6/14 · Swipe DOWN Slowly (Esc → Fn, ~0.8s)',
+      short: 'Slow ↓'
+    }),
+    Object.freeze({
+      id: 'down-fast',
+      kind: 'swipe',
+      direction: 'down',
+      startY: 0.04,
+      endY: 0.96,
+      label: '7/14 · Swipe DOWN Fast (Esc → Fn flick)',
+      short: 'Fast ↓'
+    }),
+    Object.freeze({
+      id: 'up-slow',
+      kind: 'swipe',
+      direction: 'up',
+      startY: 0.96,
+      endY: 0.04,
+      label: '8/14 · Swipe UP Slowly (Fn → Esc, ~0.8s)',
+      short: 'Slow ↑'
+    }),
+    Object.freeze({
+      id: 'up-fast',
+      kind: 'swipe',
+      direction: 'up',
+      startY: 0.96,
+      endY: 0.04,
+      label: '9/14 · Swipe UP Fast (Fn → Esc flick)',
+      short: 'Fast ↑'
+    }),
+    Object.freeze({
+      id: 'top-down',
+      kind: 'swipe',
+      direction: 'down',
+      startY: 0.04,
+      endY: 0.50,
+      label: '10/14 · Top-Half Swipe DOWN (Esc → Caps)',
+      short: 'Top ↓'
+    }),
+    Object.freeze({
+      id: 'top-up',
+      kind: 'swipe',
+      direction: 'up',
+      startY: 0.50,
+      endY: 0.04,
+      label: '11/14 · Top-Half Swipe UP (Caps → Esc)',
+      short: 'Top ↑'
+    }),
+    Object.freeze({
+      id: 'btm-down',
+      kind: 'swipe',
+      direction: 'down',
+      startY: 0.50,
+      endY: 0.96,
+      label: '12/14 · Bottom-Half Swipe DOWN (Caps → Fn)',
+      short: 'Btm ↓'
+    }),
+    Object.freeze({
+      id: 'btm-up',
+      kind: 'swipe',
+      direction: 'up',
+      startY: 0.96,
+      endY: 0.50,
+      label: '13/14 · Bottom-Half Swipe UP (Fn → Caps)',
+      short: 'Btm ↑'
+    }),
+    Object.freeze({
+      id: 'veto-keys',
+      kind: 'negative',
+      label: '14/14 · Tap Esc, Tab & Shift keys once (Veto check)',
+      short: 'Keys Veto'
+    })
+  ]);
+
+  function round2(v) {
+    return Number.isFinite(v) ? Math.round(v * 100) / 100 : 0;
+  }
+
+  function round3(v) {
+    return Number.isFinite(v) ? Math.round(v * 1000) / 1000 : 0;
+  }
+
+  function meanOf(arr) {
+    if (!arr.length) return 0;
+    let s = 0;
+    for (let i = 0; i < arr.length; i++) s += arr[i];
+    return s / arr.length;
+  }
+
+  function varianceOf(arr, mu) {
+    if (arr.length < 2) return 0;
+    const m = mu !== undefined ? mu : meanOf(arr);
+    let s = 0;
+    for (let i = 0; i < arr.length; i++) {
+      const d = arr[i] - m;
+      s += d * d;
+    }
+    return s / (arr.length - 1);
+  }
 
   function clamp(v, lo, hi) {
     if (!Number.isFinite(v)) return lo;
@@ -162,6 +309,774 @@
     return median(slopes);
   }
 
+  function extractPosFeature(frame) {
+    const out = new Array(11);
+    const bands =
+      frame && (Array.isArray(frame.bandsDb) || ArrayBuffer.isView(frame.bandsDb))
+        ? frame.bandsDb
+        : null;
+    let bandMean = 0;
+    for (let i = 0; i < NUM_BANDS; i++) {
+      const v = bands && bands.length > i && Number.isFinite(bands[i]) ? bands[i] : 0;
+      out[i] = v;
+      bandMean += v;
+    }
+    bandMean /= NUM_BANDS;
+    // Mean-center bandsDb[0..7] into a pressure-invariant 8-band spectral shape signature
+    // (overall loudness is preserved explicitly in out[9] = fricSnrDb)
+    for (let i = 0; i < NUM_BANDS; i++) {
+      out[i] -= bandMean;
+    }
+    out[8] = frame && Number.isFinite(frame.specRatioDb) ? frame.specRatioDb : 0;
+    out[9] = frame && Number.isFinite(frame.fricSnrDb) ? frame.fricSnrDb : 0;
+    out[10] = frame && Number.isFinite(frame.occDb) ? frame.occDb : 0;
+    return out;
+  }
+
+  function isFrameRecActive(f) {
+    if (!f) return false;
+    if (f.active === true) return true;
+    const snr = Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0;
+    const occ = Number.isFinite(f.pinholeOcclusion) ? f.pinholeOcclusion : 0;
+    const dop = Number.isFinite(f.dopplerSnrDb) ? f.dopplerSnrDb : 0;
+    return snr > 2.5 || occ > 0.12 || dop > 6.5;
+  }
+
+  function getDominantActiveFrames(frames) {
+    if (!Array.isArray(frames) || !frames.length) return [];
+    const activeIndices = [];
+    for (let i = 0; i < frames.length; i++) {
+      if (isFrameRecActive(frames[i])) activeIndices.push(i);
+    }
+    if (!activeIndices.length) {
+      if (frames.length < 4) return [];
+      const snrs = frames
+        .map((f) => (f && Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : -99))
+        .sort((a, b) => a - b);
+      const thr = snrs[Math.floor(snrs.length * 0.65)];
+      if (thr <= 1.0) return [];
+      return frames.filter((f) => f && Number.isFinite(f.fricSnrDb) && f.fricSnrDb >= thr);
+    }
+
+    const segments = [];
+    let segStart = activeIndices[0];
+    let segPrev = activeIndices[0];
+    for (let k = 1; k < activeIndices.length; k++) {
+      const idx = activeIndices[k];
+      const dtGap =
+        Number.isFinite(frames[idx].t) && Number.isFinite(frames[segPrev].t)
+          ? frames[idx].t - frames[segPrev].t
+          : (idx - segPrev) / 187.5;
+      if (dtGap > 0.085 && idx - segPrev > 16) {
+        segments.push([segStart, segPrev]);
+        segStart = idx;
+      }
+      segPrev = idx;
+    }
+    segments.push([segStart, segPrev]);
+
+    let bestSeg = segments[0];
+    let bestScore = -1;
+    for (let s = 0; s < segments.length; s++) {
+      const [lo, hi] = segments[s];
+      let energySum = 0;
+      let count = 0;
+      for (let i = lo; i <= hi; i++) {
+        if (isFrameRecActive(frames[i])) {
+          energySum += Math.max(1, frames[i].fricSnrDb || 0);
+          count++;
+        }
+      }
+      const score = count * (1 + energySum / Math.max(1, count) * 0.15);
+      if (score > bestScore) {
+        bestScore = score;
+        bestSeg = segments[s];
+      }
+    }
+
+    const out = [];
+    for (let i = bestSeg[0]; i <= bestSeg[1]; i++) {
+      if (isFrameRecActive(frames[i])) out.push(frames[i]);
+    }
+    return out;
+  }
+
+  function extractPercussiveBurstDurations(frames) {
+    if (!Array.isArray(frames) || !frames.length) return [];
+    const activeIndices = [];
+    for (let i = 0; i < frames.length; i++) {
+      const f = frames[i];
+      if (!f) continue;
+      if (f.active === true || (Number.isFinite(f.fricSnrDb) && f.fricSnrDb > 4.5)) {
+        activeIndices.push(i);
+      }
+    }
+    if (!activeIndices.length) return [];
+    const durations = [];
+    let segStart = activeIndices[0];
+    let segPrev = activeIndices[0];
+    const pushSeg = (lo, hi) => {
+      const t0 = frames[lo] && Number.isFinite(frames[lo].t) ? frames[lo].t : lo / 187.5;
+      const t1 = frames[hi] && Number.isFinite(frames[hi].t) ? frames[hi].t : hi / 187.5;
+      const dur = Math.max(0.005, t1 - t0 + 1 / 187.5);
+      if (dur < 0.14) durations.push(dur);
+    };
+    for (let k = 1; k < activeIndices.length; k++) {
+      const idx = activeIndices[k];
+      const dtGap =
+        Number.isFinite(frames[idx].t) && Number.isFinite(frames[segPrev].t)
+          ? frames[idx].t - frames[segPrev].t
+          : (idx - segPrev) / 187.5;
+      if (dtGap > 0.032) {
+        pushSeg(segStart, segPrev);
+        segStart = idx;
+      }
+      segPrev = idx;
+    }
+    pushSeg(segStart, segPrev);
+    return durations;
+  }
+
+  function fitRbfPositionModel(zoneEvents, swipeEvents) {
+    const D = 11;
+    const buckets = CANONICAL_ANCHORS.map((a) => ({
+      anchorY: a,
+      zoneVecs: [],
+      swipeVecs: [],
+      swipeYs: []
+    }));
+
+    function findOrAddBucket(targetY, maxDist, allowCreate) {
+      let bestIdx = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < buckets.length; i++) {
+        const d = Math.abs(buckets[i].anchorY - targetY);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx >= 0 && bestDist <= maxDist) {
+        return buckets[bestIdx];
+      }
+      if (allowCreate) {
+        const b = { anchorY: clamp(targetY, 0, 1), zoneVecs: [], swipeVecs: [], swipeYs: [] };
+        buckets.push(b);
+        return b;
+      }
+      return null;
+    }
+
+    for (let i = 0; i < zoneEvents.length; i++) {
+      const ev = zoneEvents[i];
+      if (!ev || !Number.isFinite(ev.targetY)) continue;
+      const active = getDominantActiveFrames(ev.frames);
+      if (!active.length) continue;
+      // Keep steady high-SNR core of stationary zone rub so fade-in/out & Doppler tails don't inflate scale
+      let peakSnr = -Infinity;
+      for (let k = 0; k < active.length; k++) {
+        if (Number.isFinite(active[k].fricSnrDb) && active[k].fricSnrDb > peakSnr) {
+          peakSnr = active[k].fricSnrDb;
+        }
+      }
+      const coreThr = Number.isFinite(peakSnr) ? Math.max(4.0, peakSnr - 7.5) : 2.5;
+      const coreFrames = active.filter((f) => Number.isFinite(f.fricSnrDb) && f.fricSnrDb >= coreThr);
+      const useFrames = coreFrames.length >= 4 ? coreFrames : active;
+
+      const b = findOrAddBucket(ev.targetY, 0.06, true);
+      if (b && b.zoneVecs.length === 0) {
+        b.anchorY = clamp(ev.targetY, 0, 1);
+      }
+      for (let k = 0; k < useFrames.length; k++) {
+        b.zoneVecs.push(extractPosFeature(useFrames[k]));
+      }
+    }
+
+    for (let i = 0; i < swipeEvents.length; i++) {
+      const ev = swipeEvents[i];
+      if (!ev || !Number.isFinite(ev.startY) || !Number.isFinite(ev.endY)) continue;
+      const active = getDominantActiveFrames(ev.frames);
+      const M = active.length;
+      if (M < 4) continue;
+
+      const sliceCount = Math.max(2, Math.floor(M * 0.2));
+      const midLo = Math.floor(M * 0.4);
+      const midHi = Math.max(midLo + 1, Math.ceil(M * 0.6));
+      const slices = [
+        { frames: active.slice(0, sliceCount), y: lerp(ev.startY, ev.endY, 0.1) },
+        { frames: active.slice(midLo, midHi), y: lerp(ev.startY, ev.endY, 0.5) },
+        { frames: active.slice(M - sliceCount), y: lerp(ev.startY, ev.endY, 0.9) }
+      ];
+
+      for (let s = 0; s < slices.length; s++) {
+        const sl = slices[s];
+        const b = findOrAddBucket(sl.y, 0.18, false);
+        if (!b) continue;
+        for (let k = 0; k < sl.frames.length; k++) {
+          b.swipeVecs.push(extractPosFeature(sl.frames[k]));
+          b.swipeYs.push(sl.y);
+        }
+      }
+    }
+
+    const prototypes = [];
+    const absDevsByDim = Array.from({ length: D }, () => []);
+
+    for (let i = 0; i < buckets.length; i++) {
+      const b = buckets[i];
+      const hasZone = b.zoneVecs.length >= 2;
+      const hasSwipe = b.swipeVecs.length >= 2;
+      if (!hasZone && !hasSwipe) continue;
+
+      const vec = new Array(D).fill(0);
+      let anchorY = b.anchorY;
+      const samplesForProto = hasZone ? b.zoneVecs : b.swipeVecs;
+      if (!hasZone) {
+        anchorY = clamp(meanOf(b.swipeYs), 0.02, 0.96);
+      }
+
+      for (let d = 0; d < D; d++) {
+        const col = samplesForProto.map((v) => v[d]);
+        const med = median(col);
+        vec[d] = med;
+        if (samplesForProto.length >= 3) {
+          for (let k = 0; k < col.length; k++) {
+            absDevsByDim[d].push(Math.abs(col[k] - med));
+          }
+        }
+      }
+
+      prototypes.push({
+        anchorY: round3(anchorY),
+        vector: vec.map(round3)
+      });
+    }
+
+    if (prototypes.length < 2) return null;
+    prototypes.sort((a, b) => a.anchorY - b.anchorY);
+
+    const scale = new Array(D);
+    for (let d = 0; d < D; d++) {
+      const madStd = absDevsByDim[d].length >= 4 ? 1.4826 * median(absDevsByDim[d]) : 0;
+      scale[d] = round3(Math.max(POS_MIN_SCALES[d], madStd));
+    }
+
+    const adjDist2 = [];
+    for (let i = 1; i < prototypes.length; i++) {
+      const a = prototypes[i - 1].vector;
+      const b = prototypes[i].vector;
+      let d2 = 0;
+      for (let d = 0; d < D; d++) {
+        const z = (a[d] - b[d]) / scale[d];
+        d2 += z * z;
+      }
+      adjDist2.push(d2 / D);
+    }
+    const medAdj = adjDist2.length ? median(adjDist2) : 2.0;
+    const temp = round3(clamp(medAdj * 0.18, 0.18, 2.0));
+
+    return {
+      prototypes,
+      scale,
+      temp
+    };
+  }
+
+  function predictRbfY(frameOrVec, rbfModel) {
+    if (!rbfModel || !Array.isArray(rbfModel.prototypes) || rbfModel.prototypes.length < 2) {
+      return { y: 0.5, maxWeight: 0, weights: [] };
+    }
+    const x = Array.isArray(frameOrVec) ? frameOrVec : extractPosFeature(frameOrVec);
+    const protos = rbfModel.prototypes;
+    const scale = rbfModel.scale;
+    const D = scale.length;
+    const denom = 2 * Math.max(0.05, rbfModel.temp || 0.45);
+
+    const logits = new Array(protos.length);
+    let maxLogit = -Infinity;
+    for (let i = 0; i < protos.length; i++) {
+      const pv = protos[i].vector;
+      let d2 = 0;
+      for (let d = 0; d < D; d++) {
+        const s = scale[d] > 1e-4 ? scale[d] : 1;
+        const z = ((Number.isFinite(x[d]) ? x[d] : 0) - pv[d]) / s;
+        d2 += z * z;
+      }
+      const l = -(d2 / D) / denom;
+      logits[i] = l;
+      if (l > maxLogit) maxLogit = l;
+    }
+
+    const weights = new Array(protos.length);
+    let wSum = 0;
+    for (let i = 0; i < protos.length; i++) {
+      const w = Math.exp(Math.max(-60, logits[i] - maxLogit));
+      weights[i] = w;
+      wSum += w;
+    }
+
+    let yHat = 0;
+    let maxWeight = 0;
+    for (let i = 0; i < protos.length; i++) {
+      const wn = wSum > 0 ? weights[i] / wSum : 1 / protos.length;
+      weights[i] = wn;
+      yHat += wn * protos[i].anchorY;
+      if (wn > maxWeight) maxWeight = wn;
+    }
+    return { y: clamp(yHat, 0, 1), maxWeight, weights };
+  }
+
+  function extractStrokeFeatures(frames, rbfModel) {
+    const M = Array.isArray(frames) ? frames.length : 0;
+    if (M < 2) return [0, 0, 0, 0, 0, 0, 0, 0];
+
+    const k1 = Math.max(1, Math.floor(M / 3));
+    const k2 = Math.min(M - 1, Math.max(k1, Math.floor((2 * M) / 3)));
+    const early = frames.slice(0, k1);
+    const late = frames.slice(k2);
+
+    // 1. deltaY_rbf (late - early; positive = DOWN, negative = UP)
+    let deltaYRbf = 0;
+    if (rbfModel && Array.isArray(rbfModel.prototypes) && rbfModel.prototypes.length >= 2) {
+      const earlyY = median(early.map((f) => predictRbfY(f, rbfModel).y));
+      const lateY = median(late.map((f) => predictRbfY(f, rbfModel).y));
+      deltaYRbf = lateY - earlyY;
+    }
+
+    // 2. thirdDiffSpec
+    const thirdDiffSpec =
+      median(late.map((f) => (Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0))) -
+      median(early.map((f) => (Number.isFinite(f.specRatioDb) ? f.specRatioDb : 0)));
+
+    // 3. thirdDiffSnr
+    const thirdDiffSnr =
+      median(late.map((f) => (Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0))) -
+      median(early.map((f) => (Number.isFinite(f.fricSnrDb) ? f.fricSnrDb : 0)));
+
+    // 4. peakPosNorm - 0.5 (smoothed 3-frame peak timing of fricSnrDb)
+    let peakIdx = 0;
+    let peakVal = -Infinity;
+    for (let i = 0; i < M; i++) {
+      let s = 0;
+      let c = 0;
+      for (let o = -1; o <= 1; o++) {
+        const idx = i + o;
+        if (idx >= 0 && idx < M && Number.isFinite(frames[idx].fricSnrDb)) {
+          s += frames[idx].fricSnrDb;
+          c++;
+        }
+      }
+      const v = c > 0 ? s / c : -99;
+      if (v > peakVal) {
+        peakVal = v;
+        peakIdx = i;
+      }
+    }
+    const peakPosCentered = peakIdx / Math.max(1, M - 1) - 0.5;
+
+    // 5. occTimingSkew (occlusion-weighted temporal center - 0.5)
+    let occTimeSum = 0;
+    let occWeightSum = 0;
+    for (let i = 0; i < M; i++) {
+      const f = frames[i];
+      const po = Number.isFinite(f.pinholeOcclusion) ? Math.max(0, f.pinholeOcclusion) : 0;
+      const od = Number.isFinite(f.occDb) ? Math.max(0, -f.occDb - 0.5) * 0.12 : 0;
+      const w = po + od;
+      if (w > 0) {
+        occTimeSum += w * (i / Math.max(1, M - 1));
+        occWeightSum += w;
+      }
+    }
+    const occTimingSkew = occWeightSum > 1e-4 ? occTimeSum / occWeightSum - 0.5 : 0;
+
+    // 6. meanRawDopplerAsym (SNR-weighted raw Doppler asymmetry)
+    let dopSum = 0;
+    let dopW = 0;
+    for (let i = 0; i < M; i++) {
+      const f = frames[i];
+      const asym = Number.isFinite(f.rawDopplerAsym) ? f.rawDopplerAsym : 0;
+      const dSnr = Number.isFinite(f.dopplerSnrDb) ? f.dopplerSnrDb : 0;
+      const w = 0.25 + clamp((dSnr - 3.0) / 10.0, 0, 1.5);
+      dopSum += w * asym;
+      dopW += w;
+    }
+    const meanRawDopplerAsym = dopW > 0 ? dopSum / dopW : 0;
+
+    // 7. earlyVsLateHf (bands 5..7: 5.6 - 15.2 kHz, late minus early)
+    const hfMean = (f) => {
+      const b = f && Array.isArray(f.bandsDb) ? f.bandsDb : null;
+      if (!b || b.length < 8) return Number.isFinite(f.hfSnrDb) ? f.hfSnrDb : 0;
+      return (b[5] + b[6] + b[7]) / 3;
+    };
+    const earlyVsLateHf = median(late.map(hfMean)) - median(early.map(hfMean));
+
+    // 8. earlyVsLateSub (bands 0..1: <180 Hz & 375-750 Hz, late minus early)
+    const subMean = (f) => {
+      const b = f && Array.isArray(f.bandsDb) ? f.bandsDb : null;
+      if (!b || b.length < 2) return 0;
+      return 0.65 * b[0] + 0.35 * b[1];
+    };
+    const earlyVsLateSub = median(late.map(subMean)) - median(early.map(subMean));
+
+    return [
+      deltaYRbf,
+      thirdDiffSpec,
+      thirdDiffSnr,
+      peakPosCentered,
+      occTimingSkew,
+      meanRawDopplerAsym,
+      earlyVsLateHf,
+      earlyVsLateSub
+    ];
+  }
+
+  function solveLinearSystem(A, b) {
+    const n = b.length;
+    const M = new Array(n);
+    const rhs = b.slice();
+    for (let i = 0; i < n; i++) M[i] = A[i].slice();
+
+    for (let col = 0; col < n; col++) {
+      let piv = col;
+      let maxAbs = Math.abs(M[col][col]);
+      for (let r = col + 1; r < n; r++) {
+        const a = Math.abs(M[r][col]);
+        if (a > maxAbs) {
+          maxAbs = a;
+          piv = r;
+        }
+      }
+      if (maxAbs < 1e-12) continue;
+      if (piv !== col) {
+        const tmp = M[col];
+        M[col] = M[piv];
+        M[piv] = tmp;
+        const tr = rhs[col];
+        rhs[col] = rhs[piv];
+        rhs[piv] = tr;
+      }
+      const diag = M[col][col];
+      for (let r = col + 1; r < n; r++) {
+        const factor = M[r][col] / diag;
+        if (factor === 0) continue;
+        M[r][col] = 0;
+        for (let c = col + 1; c < n; c++) {
+          M[r][c] -= factor * M[col][c];
+        }
+        rhs[r] -= factor * rhs[col];
+      }
+    }
+
+    const x = new Array(n).fill(0);
+    for (let r = n - 1; r >= 0; r--) {
+      let s = rhs[r];
+      for (let c = r + 1; c < n; c++) s -= M[r][c] * x[c];
+      x[r] = Math.abs(M[r][r]) > 1e-12 ? s / M[r][r] : 0;
+      if (!Number.isFinite(x[r])) return b.slice();
+    }
+    return x;
+  }
+
+  function fitShrinkageLda(upVecs, downVecs, lambda = 0.35) {
+    const D = 8;
+    const nUp = upVecs.length;
+    const nDown = downVecs.length;
+    if (nUp < 1 || nDown < 1) return null;
+    const all = upVecs.concat(downVecs);
+    const featMean = new Array(D).fill(0);
+    const featStd = new Array(D).fill(1);
+
+    for (let d = 0; d < D; d++) {
+      const col = all.map((v) => v[d]);
+      const mu = meanOf(col);
+      featMean[d] = mu;
+      const sd = Math.sqrt(varianceOf(col, mu));
+      featStd[d] = Math.max(LDA_MIN_STDS[d], sd);
+    }
+
+    const stdUp = upVecs.map((v) => v.map((val, d) => (val - featMean[d]) / featStd[d]));
+    const stdDown = downVecs.map((v) => v.map((val, d) => (val - featMean[d]) / featStd[d]));
+
+    const muUp = new Array(D).fill(0);
+    const muDown = new Array(D).fill(0);
+    for (let i = 0; i < nUp; i++) {
+      for (let d = 0; d < D; d++) muUp[d] += stdUp[i][d] / nUp;
+    }
+    for (let i = 0; i < nDown; i++) {
+      for (let d = 0; d < D; d++) muDown[d] += stdDown[i][d] / nDown;
+    }
+
+    const diff = new Array(D);
+    const mid = new Array(D);
+    for (let d = 0; d < D; d++) {
+      diff[d] = muUp[d] - muDown[d];
+      mid[d] = 0.5 * (muUp[d] + muDown[d]);
+    }
+
+    const Sw = Array.from({ length: D }, () => new Array(D).fill(0));
+    const dof = Math.max(1, nUp + nDown - 2);
+    for (let k = 0; k < nUp; k++) {
+      for (let i = 0; i < D; i++) {
+        const di = stdUp[k][i] - muUp[i];
+        for (let j = 0; j < D; j++) {
+          Sw[i][j] += (di * (stdUp[k][j] - muUp[j])) / dof;
+        }
+      }
+    }
+    for (let k = 0; k < nDown; k++) {
+      for (let i = 0; i < D; i++) {
+        const di = stdDown[k][i] - muDown[i];
+        for (let j = 0; j < D; j++) {
+          Sw[i][j] += (di * (stdDown[k][j] - muDown[j])) / dof;
+        }
+      }
+    }
+
+    let trace = 0;
+    for (let d = 0; d < D; d++) trace += Sw[d][d];
+    const avgVar = Math.max(0.25, trace / D);
+
+    const Sreg = Array.from({ length: D }, (_, i) =>
+      Array.from({ length: D }, (__, j) => {
+        const base = (1 - lambda) * Sw[i][j];
+        return i === j ? base + lambda * avgVar + 1e-4 : base;
+      })
+    );
+
+    const rawW = solveLinearSystem(Sreg, diff);
+    let sep = 0;
+    for (let d = 0; d < D; d++) sep += rawW[d] * diff[d];
+    const halfSep = Math.max(1e-5, 0.5 * Math.abs(sep));
+    const sign = sep >= 0 ? 1 : -1;
+    const weights = new Array(D);
+    let bias = 0;
+    for (let d = 0; d < D; d++) {
+      weights[d] = (sign * rawW[d]) / halfSep;
+      bias -= weights[d] * mid[d];
+    }
+
+    return {
+      weights: weights.map(round3),
+      bias: round3(bias),
+      featMean: featMean.map(round3),
+      featStd: featStd.map(round3),
+      lambda
+    };
+  }
+
+  function scoreShrinkageLda(vec8, ldaModel) {
+    if (!ldaModel || !Array.isArray(ldaModel.weights) || ldaModel.weights.length !== 8) return 0;
+    let score = Number.isFinite(ldaModel.bias) ? ldaModel.bias : 0;
+    for (let d = 0; d < 8; d++) {
+      const s = ldaModel.featStd[d] > 1e-4 ? ldaModel.featStd[d] : 1;
+      const z = ((Number.isFinite(vec8[d]) ? vec8[d] : 0) - ldaModel.featMean[d]) / s;
+      score += ldaModel.weights[d] * z;
+    }
+    return Number.isFinite(score) ? score : 0;
+  }
+
+  function fitEmpiricalCalibration(events) {
+    const list = Array.isArray(events) ? events.filter(Boolean) : [];
+    const zoneEvents = [];
+    const swipeEvents = [];
+    const negativeEvents = [];
+
+    for (let i = 0; i < list.length; i++) {
+      const ev = list[i];
+      if (ev.kind === 'zone') {
+        if (getDominantActiveFrames(ev.frames).length >= 2) {
+          zoneEvents.push(ev);
+        }
+      } else if (ev.kind === 'negative') {
+        negativeEvents.push(ev);
+      } else if (ev.kind === 'swipe' && (ev.direction === 'up' || ev.direction === 'down')) {
+        const act = getDominantActiveFrames(ev.frames);
+        if (act.length >= 3) {
+          swipeEvents.push(Object.assign({}, ev, { _activeFrames: act }));
+        }
+      }
+    }
+
+    const upSwipes = swipeEvents.filter((e) => e.direction === 'up');
+    const downSwipes = swipeEvents.filter((e) => e.direction === 'down');
+
+    if (swipeEvents.length < 2 || upSwipes.length < 1 || downSwipes.length < 1) {
+      return {
+        ok: false,
+        reason: 'insufficient_swipes',
+        eventCount: list.length,
+        swipeCount: swipeEvents.length,
+        zoneCount: zoneEvents.length,
+        negativeCount: negativeEvents.length,
+        looAccuracyPct: 0,
+        dPrime: 0,
+        model: null
+      };
+    }
+
+    // 1. Fit 5-Zone Non-Monotonic Gaussian RBF Position Model
+    const rbf = fitRbfPositionModel(zoneEvents, swipeEvents);
+
+    // 2. Fit Full Regularized Shrinkage Fisher LDA (lambda = 0.35)
+    const upVecs = upSwipes.map((ev) => extractStrokeFeatures(ev._activeFrames, rbf));
+    const downVecs = downSwipes.map((ev) => extractStrokeFeatures(ev._activeFrames, rbf));
+    const lda = fitShrinkageLda(upVecs, downVecs, 0.35);
+
+    // 3. Honest Leave-One-Out Cross-Validation (leakage-free fold RBF + fold LDA)
+    let looCorrect = 0;
+    let looTotal = 0;
+    const looUpScores = [];
+    const looDownScores = [];
+
+    for (let i = 0; i < swipeEvents.length; i++) {
+      const held = swipeEvents[i];
+      const trainSwipes = swipeEvents.filter((_, idx) => idx !== i);
+      const trainUp = trainSwipes.filter((e) => e.direction === 'up');
+      const trainDown = trainSwipes.filter((e) => e.direction === 'down');
+      if (trainUp.length < 1 || trainDown.length < 1) continue;
+
+      const foldRbf = fitRbfPositionModel(zoneEvents, trainSwipes);
+      const foldUpVecs = trainUp.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
+      const foldDownVecs = trainDown.map((ev) => extractStrokeFeatures(ev._activeFrames, foldRbf));
+      const foldLda = fitShrinkageLda(foldUpVecs, foldDownVecs, 0.35);
+      if (!foldLda) continue;
+
+      const testVec = extractStrokeFeatures(held._activeFrames, foldRbf);
+      const sc = scoreShrinkageLda(testVec, foldLda);
+      const predDir = sc >= 0 ? 'up' : 'down';
+      looTotal++;
+      if (predDir === held.direction) looCorrect++;
+      if (held.direction === 'up') looUpScores.push(sc);
+      else looDownScores.push(sc);
+    }
+
+    // Fallback in-sample scores if 1 UP + 1 DOWN edge case yielded 0 LOO folds
+    const evalUpScores =
+      looUpScores.length >= 2 && looDownScores.length >= 2
+        ? looUpScores
+        : upVecs.map((v) => scoreShrinkageLda(v, lda));
+    const evalDownScores =
+      looUpScores.length >= 2 && looDownScores.length >= 2
+        ? looDownScores
+        : downVecs.map((v) => scoreShrinkageLda(v, lda));
+
+    let looAccuracyPct = 0;
+    if (looTotal > 0) {
+      looAccuracyPct = Math.round((looCorrect / looTotal) * 1000) / 10;
+    } else {
+      const inSampleCorrect =
+        evalUpScores.filter((s) => s >= 0).length + evalDownScores.filter((s) => s < 0).length;
+      looAccuracyPct = Math.round((inSampleCorrect / Math.max(1, swipeEvents.length)) * 1000) / 10;
+    }
+
+    const muUpSc = meanOf(evalUpScores);
+    const muDownSc = meanOf(evalDownScores);
+    const varUpSc = varianceOf(evalUpScores, muUpSc);
+    const varDownSc = varianceOf(evalDownScores, muDownSc);
+    const pooledSd = Math.sqrt(Math.max(0.04, 0.5 * (varUpSc + varDownSc)));
+    const dPrime = round2((muUpSc - muDownSc) / pooledSd);
+
+    // 4. Empirical Speed Scale & Shortest Real Swipe Duration
+    const speedRatios = [];
+    let minSwipeDurSec = 0.25;
+    for (let i = 0; i < swipeEvents.length; i++) {
+      const ev = swipeEvents[i];
+      const act = ev._activeFrames;
+      const t0 = Number.isFinite(act[0].t) ? act[0].t : 0;
+      const t1 = Number.isFinite(act[act.length - 1].t) ? act[act.length - 1].t : (act.length - 1) / 187.5;
+      const activeDur = Math.max(0.04, t1 - t0);
+      if (activeDur < minSwipeDurSec) minSwipeDurSec = activeDur;
+
+      if (Number.isFinite(ev.startY) && Number.isFinite(ev.endY) && Math.abs(ev.endY - ev.startY) >= 0.15) {
+        const trueSpanCm = Math.abs(ev.endY - ev.startY) * DEFAULT_GRILLE_CM;
+        const trueSpeed = trueSpanCm / activeDur;
+        let estSpanCm = trueSpanCm;
+        if (rbf) {
+          const headN = Math.max(2, Math.floor(act.length * 0.22));
+          const y0 = median(act.slice(0, headN).map((f) => predictRbfY(f, rbf).y));
+          const y1 = median(act.slice(act.length - headN).map((f) => predictRbfY(f, rbf).y));
+          estSpanCm = Math.max(1.5, Math.abs(y1 - y0) * DEFAULT_GRILLE_CM);
+        }
+        const estSpeed = estSpanCm / activeDur;
+        if (estSpeed > 0.5) {
+          speedRatios.push(trueSpeed / estSpeed);
+        }
+      }
+    }
+    const speedScale = speedRatios.length ? round3(clamp(median(speedRatios), 0.55, 1.85)) : 1.0;
+
+    // 5. Key-Click Veto Margin (`minStrokeDurationSec`) from negative events (`veto-keys`)
+    let minStrokeDurationSec = 0.068;
+    const keyBursts = [];
+    for (let i = 0; i < negativeEvents.length; i++) {
+      const durs = extractPercussiveBurstDurations(negativeEvents[i].frames);
+      for (let k = 0; k < durs.length; k++) keyBursts.push(durs[k]);
+    }
+    if (keyBursts.length > 0) {
+      const maxKeyDur = Math.max(...keyBursts);
+      const upperSafe = Math.max(0.068, Math.min(0.14, minSwipeDurSec * 0.72));
+      minStrokeDurationSec = round3(clamp(maxKeyDur + 0.014, 0.068, upperSafe));
+    }
+
+    // 6. Derive legacy polarity & anchor summary for UI/fallback display compatibility
+    let polarity = 1;
+    const upSpecDiff = meanOf(upVecs.map((v) => v[1] + v[2]));
+    const downSpecDiff = meanOf(downVecs.map((v) => v[1] + v[2]));
+    const upDoppler = meanOf(upVecs.map((v) => v[5]));
+    const downDoppler = meanOf(downVecs.map((v) => v[5]));
+    if (Math.abs(upSpecDiff - downSpecDiff) > 1.5) {
+      polarity = upSpecDiff >= downSpecDiff ? 1 : -1;
+    } else if (Math.abs(upDoppler - downDoppler) > 0.1) {
+      polarity = upDoppler >= downDoppler ? 1 : -1;
+    }
+
+    let legacyCalibration = null;
+    if (rbf && rbf.prototypes.length >= 2) {
+      const topProto = rbf.prototypes[0].vector;
+      const btmProto = rbf.prototypes[rbf.prototypes.length - 1].vector;
+      if (topProto[8] > btmProto[8] + 1.0 || topProto[9] > btmProto[9] + 2.0) {
+        legacyCalibration = {
+          specTopDb: round2(Math.max(topProto[8], btmProto[8] + 2.5)),
+          specBottomDb: round2(btmProto[8]),
+          snrTopDb: round2(Math.max(topProto[9], btmProto[9] + 5.0)),
+          snrBottomDb: round2(Math.max(4, btmProto[9]))
+        };
+      }
+    }
+
+    const model = {
+      version: 2,
+      fittedAt: typeof Date !== 'undefined' ? Date.now() : 0,
+      polarity,
+      rbf,
+      lda,
+      speedScale,
+      minStrokeDurationSec,
+      legacyCalibration,
+      stats: {
+        eventCount: list.length,
+        swipeCount: swipeEvents.length,
+        zoneCount: zoneEvents.length,
+        negativeCount: negativeEvents.length,
+        looAccuracyPct,
+        dPrime,
+        looFolds: looTotal
+      }
+    };
+
+    return {
+      ok: true,
+      eventCount: list.length,
+      swipeCount: swipeEvents.length,
+      zoneCount: zoneEvents.length,
+      negativeCount: negativeEvents.length,
+      looAccuracyPct,
+      dPrime,
+      looFolds: looTotal,
+      model
+    };
+  }
+
   class AcousticDspCore {
     constructor(options = {}) {
       const rawSr = Number(options.sampleRate);
@@ -190,8 +1105,12 @@
         snrBottomDb: 7.5,
         snrTopDb: 29.0
       };
+      this.empiricalModel = null;
       if (options.calibration) {
         this.setCalibration(options.calibration);
+      }
+      if (options.empiricalModel) {
+        this.setEmpiricalModel(options.empiricalModel);
       }
 
       // Periodic Hann window (exact analytical spectral zeros at |Δbin| >= 2)
@@ -224,7 +1143,7 @@
         this.numCarriers > 0
           ? Math.min(nyquistBin, this.carrierMultiples[0] - 4, Math.round(15200 / binHz))
           : Math.min(nyquistBin, Math.max(6, Math.floor((this.effectiveRate * 0.44) / binHz)));
-      this.midStartBin = Math.max(1, Math.min(maxPassiveBin - 3, Math.round(375 / binHz)));
+      this.midStartBin = Math.max(1, Math.min(maxPassiveBin - 3, Math.round(950 / binHz)));
       this.midEndBin = Math.max(
         this.midStartBin + 1,
         Math.min(maxPassiveBin - 2, Math.round(Math.min(2700, this.effectiveRate * 0.14) / binHz))
@@ -234,6 +1153,28 @@
         Math.min(maxPassiveBin - 1, Math.round(Math.min(5600, this.effectiveRate * 0.26) / binHz))
       );
       this.hf2EndBin = Math.max(this.hf1EndBin + 1, maxPassiveBin);
+
+      // Compute spectralFlatness & tonalCrest strictly across upper bins (~1.5 kHz .. 15.2 kHz)
+      // so < 1.1 kHz finger-pad pneumatic thud never self-vetoes as tonal voice!
+      this.flatStartBin = Math.min(this.hf2EndBin - 1, Math.max(3, this.midEndBin - 2));
+
+      // Partition passive bins 1..hf2EndBin into 7 log-spaced upper bands (Band 0 is <180 Hz pneuEnergy)
+      const maxBandHz = this.hf2EndBin * binHz;
+      const bandScale = Math.min(1, maxBandHz / 15200);
+      const bandTargetEdgesHz = [900, 2000, 3500, 5400, 8000, 11400, 15400];
+      this.bandRanges = [];
+      let prevHi = 0;
+      for (let j = 0; j < 7; j++) {
+        const remaining = 6 - j;
+        const lo = Math.min(this.hf2EndBin - remaining, prevHi + 1);
+        const rawHi =
+          j === 6
+            ? this.hf2EndBin
+            : Math.round((bandTargetEdgesHz[j] * bandScale) / binHz);
+        const hi = Math.max(lo, Math.min(this.hf2EndBin - remaining, rawHi));
+        this.bandRanges.push([lo, hi]);
+        prevHi = hi;
+      }
 
       // Compute exact 2nd-order tweeter IMD difference bins |m_i - m_j| so passive E_mid notches them out
       this.imdBins = new Set();
@@ -297,6 +1238,11 @@
 
       this.fftRe = new Float64Array(QUANTUM);
       this.fftIm = new Float64Array(QUANTUM);
+      this.binPow = new Float64Array(QUANTUM >> 1);
+      this.currBandsDb = new Float64Array(NUM_BANDS);
+      this.ambientBandsDb = new Float64Array(NUM_BANDS);
+      this.ambientBandsDb.fill(-82);
+      this.relBandsDb = new Float64Array(NUM_BANDS);
       this.dopplerRe = new Float64Array(DOPPLER_FFT_SIZE);
       this.dopplerIm = new Float64Array(DOPPLER_FFT_SIZE);
       this.dopplerPower = new Float64Array(DOPPLER_FFT_SIZE);
@@ -344,6 +1290,7 @@
       this.lastVeto = null;
       this.swipeCount = 0;
       this.calibrationCapture = null;
+      this.recCapture = null;
     }
 
     setTxEnabled(enabled, gain) {
@@ -364,12 +1311,179 @@
       if (Number.isFinite(partial.snrTopDb)) this.calibration.snrTopDb = partial.snrTopDb;
     }
 
+    setEmpiricalModel(model) {
+      if (!model || typeof model !== 'object') {
+        this.empiricalModel = null;
+        return;
+      }
+      let cleanRbf = null;
+      if (
+        model.rbf &&
+        Array.isArray(model.rbf.prototypes) &&
+        model.rbf.prototypes.length >= 2 &&
+        Array.isArray(model.rbf.scale) &&
+        model.rbf.scale.length === 11
+      ) {
+        const protos = [];
+        for (let i = 0; i < model.rbf.prototypes.length; i++) {
+          const p = model.rbf.prototypes[i];
+          if (
+            p &&
+            Number.isFinite(p.anchorY) &&
+            Array.isArray(p.vector) &&
+            p.vector.length === 11 &&
+            p.vector.every((v) => Number.isFinite(v))
+          ) {
+            protos.push({ anchorY: clamp(p.anchorY, 0, 1), vector: p.vector.slice() });
+          }
+        }
+        if (protos.length >= 2 && model.rbf.scale.every((s) => Number.isFinite(s) && s > 0)) {
+          cleanRbf = {
+            prototypes: protos,
+            scale: model.rbf.scale.slice(),
+            temp: Number.isFinite(model.rbf.temp) ? clamp(model.rbf.temp, 0.08, 4.0) : 0.45
+          };
+        }
+      }
+
+      let cleanLda = null;
+      if (
+        model.lda &&
+        Array.isArray(model.lda.weights) &&
+        model.lda.weights.length === 8 &&
+        Array.isArray(model.lda.featMean) &&
+        model.lda.featMean.length === 8 &&
+        Array.isArray(model.lda.featStd) &&
+        model.lda.featStd.length === 8 &&
+        Number.isFinite(model.lda.bias) &&
+        model.lda.weights.every((v) => Number.isFinite(v)) &&
+        model.lda.featMean.every((v) => Number.isFinite(v)) &&
+        model.lda.featStd.every((v) => Number.isFinite(v) && v > 0)
+      ) {
+        cleanLda = {
+          weights: model.lda.weights.slice(),
+          bias: model.lda.bias,
+          featMean: model.lda.featMean.slice(),
+          featStd: model.lda.featStd.slice(),
+          lambda: Number.isFinite(model.lda.lambda) ? model.lda.lambda : 0.35
+        };
+      }
+
+      if (!cleanRbf && !cleanLda) {
+        this.empiricalModel = null;
+        return;
+      }
+
+      const pol = model.polarity === -1 ? -1 : 1;
+      this.polarity = pol;
+      if (model.legacyCalibration && typeof model.legacyCalibration === 'object') {
+        this.setCalibration(model.legacyCalibration);
+      }
+
+      this.empiricalModel = {
+        version: model.version || 2,
+        polarity: pol,
+        rbf: cleanRbf,
+        lda: cleanLda,
+        speedScale: Number.isFinite(model.speedScale) ? clamp(model.speedScale, 0.55, 1.85) : 1.0,
+        minStrokeDurationSec: Number.isFinite(model.minStrokeDurationSec)
+          ? clamp(model.minStrokeDurationSec, 0.055, 0.16)
+          : 0.068
+      };
+    }
+
+    resetCalibration() {
+      this.polarity = 1;
+      this.calibration = {
+        specBottomDb: -8.2,
+        specTopDb: 3.8,
+        snrBottomDb: 7.5,
+        snrTopDb: 29.0
+      };
+      this.empiricalModel = null;
+      this.calibrationCapture = null;
+      this.recCapture = null;
+    }
+
+    beginRecordEvent(stepMeta) {
+      this.recCapture = {
+        stepMeta: stepMeta && typeof stepMeta === 'object' ? Object.assign({}, stepMeta) : {},
+        startTimeSec: this.framesProcessed * this.dt,
+        frameCounter: 0,
+        frames: []
+      };
+    }
+
+    cancelRecordEvent() {
+      this.recCapture = null;
+    }
+
+    endRecordEvent() {
+      const rec = this.recCapture;
+      this.recCapture = null;
+      if (!rec) {
+        return {
+          ok: false,
+          reason: 'no_active_recording',
+          frameCount: 0,
+          activeFrameCount: 0,
+          peakSnrDb: 0,
+          eventRecord: null
+        };
+      }
+      const frames = rec.frames;
+      const frameCount = frames.length;
+      let activeFrameCount = 0;
+      let peakSnrDb = -Infinity;
+      for (let i = 0; i < frameCount; i++) {
+        const f = frames[i];
+        if (f.active) activeFrameCount++;
+        if (Number.isFinite(f.fricSnrDb) && f.fricSnrDb > peakSnrDb) {
+          peakSnrDb = f.fricSnrDb;
+        }
+      }
+      const safePeakSnrDb = Number.isFinite(peakSnrDb) ? Math.round(peakSnrDb * 10) / 10 : 0;
+      const meta = rec.stepMeta || {};
+      const stepId = meta.id || meta.stepId || 'custom';
+      const kind = meta.kind || 'swipe';
+      const ok = frameCount > 0 && (kind === 'negative' || activeFrameCount >= 4);
+
+      const eventRecord = {
+        stepId,
+        id: stepId,
+        kind,
+        label: meta.label || stepId,
+        short: meta.short || stepId,
+        targetY: Number.isFinite(meta.targetY) ? meta.targetY : undefined,
+        direction: meta.direction || undefined,
+        startY: Number.isFinite(meta.startY) ? meta.startY : undefined,
+        endY: Number.isFinite(meta.endY) ? meta.endY : undefined,
+        recordedAt: typeof Date !== 'undefined' ? Date.now() : 0,
+        sampleRate: this.sampleRate,
+        frameRateHz: Math.round((this.frameRate / 2) * 10) / 10,
+        frameCount,
+        activeFrameCount,
+        peakSnrDb: safePeakSnrDb,
+        frames
+      };
+
+      return {
+        ok,
+        reason: ok ? undefined : frameCount === 0 ? 'empty_recording' : 'insufficient_signal',
+        frameCount,
+        activeFrameCount,
+        peakSnrDb: safePeakSnrDb,
+        eventRecord
+      };
+    }
+
     startCalibrationStep(stepName) {
       this.calibrationCapture = { step: stepName || 'up', samples: [] };
     }
 
     cancelCalibrationStep() {
       this.calibrationCapture = null;
+      this.recCapture = null;
     }
 
     finishCalibrationStep() {
@@ -535,10 +1649,10 @@
           this.bgI[k] = I;
           this.bgQ[k] = Q;
         } else {
-          const bgAlpha = this.activeStroke ? 0.002 : 0.04;
+          const bgAlpha = this.activeStroke || this.recCapture ? 0.002 : 0.04;
           this.bgI[k] += bgAlpha * (I - this.bgI[k]);
           this.bgQ[k] += bgAlpha * (Q - this.bgQ[k]);
-          if (!this.activeStroke && mag > 1e-7) {
+          if (!this.activeStroke && !this.recCapture && mag > 1e-7) {
             this.carrierBaseline[k] += 0.015 * (mag - this.carrierBaseline[k]);
           }
         }
@@ -587,6 +1701,7 @@
 
       for (let b = 1; b <= this.hf2EndBin; b++) {
         const p = (this.fftRe[b] * this.fftRe[b] + this.fftIm[b] * this.fftIm[b]) / (QUANTUM * QUANTUM);
+        this.binPow[b] = p;
         if (b >= this.midStartBin && b <= this.midEndBin) {
           if (!this.txEnabled || !this.imdBins.has(b)) {
             eMid += p;
@@ -600,16 +1715,41 @@
           nHf2++;
         }
 
-        const ps = p + 1e-16;
-        logSum += Math.log(ps);
-        linSum += ps;
-        if (ps > maxBinPow) maxBinPow = ps;
-        flatCount++;
+        // Compute spectralFlatness & tonalCrest strictly across upper bins (>= flatStartBin)
+        // so < 1.1 kHz fleshy fingertip pneumatic energy never triggers tonal voice rejection
+        if (b >= this.flatStartBin) {
+          const ps = p + 1e-16;
+          logSum += Math.log(ps);
+          linSum += ps;
+          if (ps > maxBinPow) maxBinPow = ps;
+          flatCount++;
+        }
       }
 
       const psdMid = eMid / Math.max(1, nMid);
       const psdHf1 = eHf1 / Math.max(1, nHf1);
       const psdHf2 = eHf2 / Math.max(1, nHf2);
+
+      // 8-band log-PSD vector: Band 0 (<180 Hz pneuEnergy) + 7 log-spaced passive FFT bands up to 15.2 kHz
+      this.currBandsDb[0] = Math.max(-96, 10 * Math.log10(pneuEnergy + 1e-15));
+      for (let j = 0; j < 7; j++) {
+        const range = this.bandRanges[j];
+        let bSum = 0;
+        let bCnt = 0;
+        let rawSum = 0;
+        let rawCnt = 0;
+        for (let b = range[0]; b <= range[1]; b++) {
+          const p = this.binPow[b];
+          rawSum += p;
+          rawCnt++;
+          if (!this.txEnabled || !this.imdBins.has(b)) {
+            bSum += p;
+            bCnt++;
+          }
+        }
+        const bandPsd = bCnt > 0 ? bSum / bCnt : rawSum / Math.max(1, rawCnt);
+        this.currBandsDb[j + 1] = Math.max(-96, 10 * Math.log10(bandPsd + 1e-15));
+      }
 
       // Ultrasonic quiet guard-bin click detector (all bins >= 2 away from every carrier)
       if (this.guardBins.length > 0) {
@@ -655,18 +1795,33 @@
         if (this.nonSilentWarmupFrames === 1) {
           this.ambientFricDb = fricDb;
           this.ambientHfDb = hfDb;
+          for (let j = 0; j < NUM_BANDS; j++) {
+            this.ambientBandsDb[j] = this.currBandsDb[j];
+          }
         } else {
           this.ambientFricDb = 0.7 * this.ambientFricDb + 0.3 * fricDb;
           this.ambientHfDb = 0.7 * this.ambientHfDb + 0.3 * hfDb;
+          for (let j = 0; j < NUM_BANDS; j++) {
+            this.ambientBandsDb[j] = 0.7 * this.ambientBandsDb[j] + 0.3 * this.currBandsDb[j];
+          }
         }
         if (this.nonSilentWarmupFrames >= 6) {
           this.floorsInitialized = true;
         }
       } else if (this.floorsInitialized && !isDigitalSilence && !this.activeStroke) {
-        const alphaFloor = fricDb < this.ambientFricDb ? 0.12 : 0.006;
+        const upAlpha = this.recCapture ? 0 : 0.006;
+        const alphaFloor = fricDb < this.ambientFricDb ? 0.12 : upAlpha;
         this.ambientFricDb += alphaFloor * (fricDb - this.ambientFricDb);
-        const alphaHf = hfDb < this.ambientHfDb ? 0.12 : 0.006;
+        const alphaHf = hfDb < this.ambientHfDb ? 0.12 : upAlpha;
         this.ambientHfDb += alphaHf * (hfDb - this.ambientHfDb);
+        for (let j = 0; j < NUM_BANDS; j++) {
+          const bAlpha = this.currBandsDb[j] < this.ambientBandsDb[j] ? 0.12 : upAlpha;
+          this.ambientBandsDb[j] += bAlpha * (this.currBandsDb[j] - this.ambientBandsDb[j]);
+        }
+      }
+
+      for (let j = 0; j < NUM_BANDS; j++) {
+        this.relBandsDb[j] = this.floorsInitialized ? this.currBandsDb[j] - this.ambientBandsDb[j] : 0;
       }
 
       const fricSnrDb = this.floorsInitialized
@@ -785,18 +1940,30 @@
         phaseWeightAccum > 1e-10 ? (phaseVelAccum / phaseWeightAccum) * this.polarity : 0;
 
       // 5. Contact & Ultrasonic Gesture Gate + Veto Diagnostics
+      const isNarrowbandHarmonicSpeech =
+        (tonalCrest >= 16.5 && spectralFlatness < 0.14) ||
+        (tonalCrest >= 13.5 && spectralFlatness < 0.09);
+
       const isVoiceLike =
         fricDb - this.ambientFricDb > 9.0 &&
-        (hfSnrDb < 3.5 || tonalCrest >= 14.0 || spectralFlatness < 0.14);
+        (hfSnrDb < 3.5 ||
+          isNarrowbandHarmonicSpeech ||
+          (pinholeOcclusion <= 0.18 && hfSnrDb <= 5.5 && (tonalCrest >= 14.0 || spectralFlatness < 0.14)));
       if (isVoiceLike && !this.activeStroke) {
         this.lastVeto = { reason: 'voice', untilSec: timeSec + 0.18 };
       }
 
       const isBroadbandFriction =
-        fricSnrDb > 5.2 && hfSnrDb > 4.2 && spectralFlatness > 0.16 && tonalCrest < 13.5;
+        fricSnrDb > 5.2 &&
+        hfSnrDb > 4.2 &&
+        !isNarrowbandHarmonicSpeech &&
+        ((spectralFlatness > 0.16 && tonalCrest < 13.5) ||
+          pinholeOcclusion > 0.18 ||
+          hfSnrDb > 5.5);
       const isStrongPinholeRub =
         fricSnrDb > 12.0 &&
         hfSnrDb > 6.5 &&
+        !isNarrowbandHarmonicSpeech &&
         (pinholeOcclusion > 0.25 || (spectralFlatness > 0.12 && tonalCrest < 16.0));
       const isPureSonarWave =
         carrierMagMean > 8e-5 &&
@@ -807,26 +1974,70 @@
       const isActiveSignal =
         timeSec >= this.cooldownUntilSec && (isBroadbandFriction || isStrongPinholeRub || isPureSonarWave);
 
-      // 6. Instantaneous Position Estimate yObs in [0=Top, 1=Bottom] & Heteroscedastic Uncertainty
-      const cal = this.calibration;
-      const cueSpec = clamp(
-        (specRatioDb - cal.specBottomDb) / Math.max(2.5, cal.specTopDb - cal.specBottomDb),
-        0,
-        1
-      );
-      const cueAmp = clamp(
-        (fricSnrDb - cal.snrBottomDb) / Math.max(5.0, cal.snrTopDb - cal.snrBottomDb),
-        0,
-        1
-      );
-
-      let proxTop = clamp(0.54 * cueSpec + 0.32 * cueAmp + 0.14 * pinholeOcclusion, 0, 1);
-      if (pinholeOcclusion > 0.45 && fricSnrDb > 10) {
-        proxTop = Math.max(proxTop, 0.78 + 0.18 * pinholeOcclusion);
+      // Un-vetoed 2x downsampled (~187.5 Hz, max 1500 frames) raw feature capture during guided calibration
+      if (this.recCapture) {
+        const shouldCaptureFrame = (this.recCapture.frameCounter++ & 1) === 0;
+        if (shouldCaptureFrame) {
+          const bandsArr = new Array(NUM_BANDS);
+          for (let j = 0; j < NUM_BANDS; j++) {
+            bandsArr[j] = round2(this.relBandsDb[j]);
+          }
+          const recActive = fricSnrDb > 2.5 || pinholeOcclusion > 0.12 || dopplerSnrDb > 6.5;
+          this.recCapture.frames.push({
+            t: round3(timeSec - this.recCapture.startTimeSec),
+            bandsDb: bandsArr,
+            fricSnrDb: round2(fricSnrDb),
+            hfSnrDb: round2(hfSnrDb),
+            specRatioDb: round2(specRatioDb),
+            occDb: round2(occDb),
+            pinholeOcclusion: round3(pinholeOcclusion),
+            rawDopplerAsym: round3(rawDopplerAsym),
+            dopplerVelCms: round2(dopplerVelCms),
+            dopplerSnrDb: round2(dopplerSnrDb),
+            spectralFlatness: round3(spectralFlatness),
+            tonalCrest: round2(tonalCrest),
+            active: recActive
+          });
+          if (this.recCapture.frames.length > MAX_REC_FRAMES) {
+            this.recCapture.frames.shift();
+          }
+        }
       }
-      const rawYObs = this.polarity === 1 ? 1.0 - proxTop : proxTop;
 
-      const targetUncPct = pinholeOcclusion > 0.35 ? 4.5 : isActiveSignal ? lerp(11.5, 5.5, proxTop) : 12.0;
+      // 6. Instantaneous Position Estimate yObs in [0=Top, 1=Bottom] & Heteroscedastic Uncertainty
+      let rawYObs;
+      let targetUncPct;
+      const empRbf = this.empiricalModel && this.empiricalModel.rbf;
+      if (empRbf && empRbf.prototypes && empRbf.prototypes.length >= 2) {
+        const posVec = extractPosFeature({
+          bandsDb: this.relBandsDb,
+          specRatioDb,
+          fricSnrDb,
+          occDb
+        });
+        const rbfRes = predictRbfY(posVec, empRbf);
+        rawYObs = rbfRes.y;
+        targetUncPct = isActiveSignal ? lerp(10.5, 4.2, rbfRes.maxWeight) : 12.0;
+      } else {
+        const cal = this.calibration;
+        const cueSpec = clamp(
+          (specRatioDb - cal.specBottomDb) / Math.max(2.5, cal.specTopDb - cal.specBottomDb),
+          0,
+          1
+        );
+        const cueAmp = clamp(
+          (fricSnrDb - cal.snrBottomDb) / Math.max(5.0, cal.snrTopDb - cal.snrBottomDb),
+          0,
+          1
+        );
+
+        let proxTop = clamp(0.54 * cueSpec + 0.32 * cueAmp + 0.14 * pinholeOcclusion, 0, 1);
+        if (pinholeOcclusion > 0.45 && fricSnrDb > 10) {
+          proxTop = Math.max(proxTop, 0.78 + 0.18 * pinholeOcclusion);
+        }
+        rawYObs = this.polarity === 1 ? 1.0 - proxTop : proxTop;
+        targetUncPct = pinholeOcclusion > 0.35 ? 4.5 : isActiveSignal ? lerp(11.5, 5.5, proxTop) : 12.0;
+      }
       this.uncertaintyPct = 0.8 * this.uncertaintyPct + 0.2 * targetUncPct;
 
       if (this.calibrationCapture && (isBroadbandFriction || isStrongPinholeRub || isPureSonarWave)) {
@@ -842,12 +2053,29 @@
         }
       }
 
+      const makeStrokeFeatureSnap = () => ({
+        t: timeSec,
+        bandsDb: Array.from(this.relBandsDb),
+        fricSnrDb,
+        hfSnrDb,
+        specRatioDb,
+        occDb,
+        pinholeOcclusion,
+        rawDopplerAsym,
+        dopplerSnrDb
+      });
+
       // Prune stale pre-roll (> 85 ms age TTL) so sustained low noise never skews stroke startTime
       while (this.preRoll.length && timeSec - this.preRoll[0].t > 0.085) {
         this.preRoll.shift();
       }
       if (!this.activeStroke && fricSnrDb > 2.8 && hfSnrDb > 2.2) {
-        this.preRoll.push({ t: timeSec, rawY: rawYObs, w: 0.4 });
+        this.preRoll.push({
+          t: timeSec,
+          rawY: rawYObs,
+          w: 0.4,
+          feat: this.empiricalModel ? makeStrokeFeatureSnap() : null
+        });
         if (this.preRoll.length > this.preRollMax) this.preRoll.shift();
       } else if (!this.activeStroke && fricSnrDb <= 2.0) {
         this.preRoll.length = 0;
@@ -866,6 +2094,9 @@
         this.activeStroke = null;
         this.ambientFricDb = fricDb;
         this.ambientHfDb = hfDb;
+        for (let j = 0; j < NUM_BANDS; j++) {
+          this.ambientBandsDb[j] = this.currBandsDb[j];
+        }
         this.cooldownUntilSec = timeSec + 0.12;
       } else if (isActiveSignal) {
         if (!this.activeStroke) {
@@ -878,6 +2109,12 @@
             : clamp(0.5 + (dopplerAsym > 0 ? 0.22 : -0.22), 0.08, 0.92);
           this.y = initY;
           this.vy = sonarWeight > 0.3 ? sonarVy : 0;
+          const seedFeats = [];
+          if (this.empiricalModel) {
+            for (let i = 0; i < seedPoints.length; i += 2) {
+              if (seedPoints[i].feat) seedFeats.push(seedPoints[i].feat);
+            }
+          }
           this.activeStroke = {
             startTime: seedPoints.length ? seedPoints[0].t : timeSec,
             lastActiveTime: timeSec,
@@ -888,10 +2125,13 @@
               speedCms: 0,
               w: p.w
             })),
+            featureFrames: seedFeats,
             dopplerImpulse: 0,
             dopplerWeightSum: 0,
             flatnessSum: 0,
             tonalCrestSum: 0,
+            hfSnrSum: 0,
+            maxPinholeOcclusion: pinholeOcclusion,
             maxFricSnrDb: fricSnrDb,
             maxDopplerSnrDb: dopplerSnrDb,
             peakSpeedCms: 0,
@@ -908,8 +2148,14 @@
         if (isPureSonarWave) st.sonarFrames++;
         if (fricSnrDb > st.maxFricSnrDb) st.maxFricSnrDb = fricSnrDb;
         if (dopplerSnrDb > st.maxDopplerSnrDb) st.maxDopplerSnrDb = dopplerSnrDb;
+        if (pinholeOcclusion > st.maxPinholeOcclusion) st.maxPinholeOcclusion = pinholeOcclusion;
         st.flatnessSum += spectralFlatness;
         st.tonalCrestSum += tonalCrest;
+        st.hfSnrSum += hfSnrDb;
+
+        if (this.empiricalModel && (st.activeFrames & 1) === 1 && st.featureFrames.length < MAX_REC_FRAMES) {
+          st.featureFrames.push(makeStrokeFeatureSnap());
+        }
 
         const prevY = this.y;
         const predictedY = clamp(this.y + (sonarWeight * sonarVy + (1 - sonarWeight) * this.vy) * this.dt, 0, 1);
@@ -960,8 +2206,12 @@
               ? this.activeStroke.points[this.activeStroke.points.length - 1].t -
                 this.activeStroke.points[0].t
               : 0;
+          const minStrokeDur =
+            this.empiricalModel && Number.isFinite(this.empiricalModel.minStrokeDurationSec)
+              ? this.empiricalModel.minStrokeDurationSec
+              : 0.068;
           committedSwipe = this._finalizeStroke(this.activeStroke);
-          if (!committedSwipe && strokeDur > 0 && strokeDur < 0.062) {
+          if (!committedSwipe && strokeDur > 0 && strokeDur < minStrokeDur) {
             this.lastVeto = { reason: 'key', untilSec: timeSec + 0.18 };
           }
           this.activeStroke = null;
@@ -1028,19 +2278,31 @@
 
     _finalizeStroke(st) {
       const n = st.points.length;
-      const minFrames = Math.max(6, Math.round(0.064 * this.frameRate));
+      const minStrokeDur =
+        this.empiricalModel && Number.isFinite(this.empiricalModel.minStrokeDurationSec)
+          ? this.empiricalModel.minStrokeDurationSec
+          : 0.068;
+      const minFrames = Math.max(6, Math.round(Math.max(0.064, minStrokeDur - 0.004) * this.frameRate));
       if (n < minFrames) return null;
       const durationSec = st.points[n - 1].t - st.points[0].t;
-      if (durationSec < 0.068 || durationSec > 3.5) return null;
+      if (durationSec < minStrokeDur || durationSec > 3.5) return null;
 
       const minModeFrames = Math.max(4, Math.round(0.026 * this.frameRate));
       const minSonarFrames = Math.max(4, Math.round(0.021 * this.frameRate));
 
       const meanFlatness = st.flatnessSum / Math.max(1, st.activeFrames);
       const meanCrest = st.tonalCrestSum / Math.max(1, st.activeFrames);
+      const meanHfSnrDb = st.hfSnrSum / Math.max(1, st.activeFrames);
       const hasStrongSonar = st.sonarFrames >= minSonarFrames && st.maxDopplerSnrDb > 9.0;
+      const isMeanNarrowbandSpeech =
+        (meanCrest >= 16.5 && meanFlatness < 0.14) ||
+        (meanCrest >= 13.5 && meanFlatness < 0.09);
+      const hasPinholeOrStrongHf = st.maxPinholeOcclusion > 0.18 || meanHfSnrDb > 5.5;
 
-      if (!hasStrongSonar && (meanFlatness < 0.16 || meanCrest > 15.5)) {
+      if (
+        !hasStrongSonar &&
+        (isMeanNarrowbandSpeech || (!hasPinholeOrStrongHf && (meanFlatness < 0.16 || meanCrest > 15.5)))
+      ) {
         return null;
       }
 
@@ -1066,7 +2328,20 @@
 
       let upScore = 0;
       let sensingMode = 'hybrid';
-      if (st.contactFrames >= minModeFrames && st.dopplerWeightSum > 1.2) {
+      const hasEmpLda =
+        this.empiricalModel &&
+        this.empiricalModel.lda &&
+        st.contactFrames >= minModeFrames &&
+        st.featureFrames &&
+        st.featureFrames.length >= 4;
+
+      if (hasEmpLda) {
+        const strokeVec = extractStrokeFeatures(st.featureFrames, this.empiricalModel.rbf);
+        const ldaScore = clamp(scoreShrinkageLda(strokeVec, this.empiricalModel.lda), -2.0, 2.0);
+        const rbfVote = clamp(-(endY - startY) * 2.2 - halfDiffY * 2.2, -1.5, 1.5);
+        upScore = 0.72 * ldaScore + 0.28 * rbfVote;
+        sensingMode = 'calibrated';
+      } else if (st.contactFrames >= minModeFrames && st.dopplerWeightSum > 1.2) {
         upScore = 0.62 * tribVote + 0.38 * sonarVote;
         sensingMode = 'hybrid';
       } else if (st.contactFrames >= minModeFrames) {
@@ -1124,11 +2399,15 @@
       const medianPointSpeed = activeSpeedPts.length
         ? median(activeSpeedPts.map((p) => p.speedCms))
         : avgSpeedFromSpan;
-      const speedCmPerSec =
-        Math.round(
-          clamp(0.55 * avgSpeedFromSpan + 0.45 * Math.max(avgSpeedFromSpan, medianPointSpeed), 2.5, 130) * 10
-        ) / 10;
-      const peakSpeedCmPerSec = Math.round(Math.max(speedCmPerSec, st.peakSpeedCms) * 10) / 10;
+      const speedScale =
+        this.empiricalModel && Number.isFinite(this.empiricalModel.speedScale)
+          ? this.empiricalModel.speedScale
+          : 1.0;
+      const rawSpeed =
+        (0.55 * avgSpeedFromSpan + 0.45 * Math.max(avgSpeedFromSpan, medianPointSpeed)) * speedScale;
+      const speedCmPerSec = Math.round(clamp(rawSpeed, 2.5, 130) * 10) / 10;
+      const peakSpeedCmPerSec =
+        Math.round(clamp(Math.max(speedCmPerSec, st.peakSpeedCms * speedScale), 2.5, 140) * 10) / 10;
 
       this.y = finalEndTopPct / 100;
       this.swipeCount++;
@@ -1165,7 +2444,8 @@
             txEnabled: opts.txEnabled !== false,
             txGain: opts.txGain !== undefined ? opts.txGain : 0.036,
             polarity: opts.polarity || 1,
-            calibration: opts.calibration || undefined
+            calibration: opts.calibration || undefined,
+            empiricalModel: opts.empiricalModel || undefined
           });
           this.port.onmessage = (ev) => {
             const msg = ev.data || {};
@@ -1173,6 +2453,17 @@
               this.core.setTxEnabled(msg.enabled, msg.gain);
             } else if (msg.type === 'setCalibration') {
               this.core.setCalibration(msg.calibration);
+            } else if (msg.type === 'setEmpiricalModel') {
+              this.core.setEmpiricalModel(msg.model);
+            } else if (msg.type === 'resetCalibration') {
+              this.core.resetCalibration();
+            } else if (msg.type === 'beginRec') {
+              this.core.beginRecordEvent(msg.stepMeta);
+            } else if (msg.type === 'cancelRec') {
+              this.core.cancelRecordEvent();
+            } else if (msg.type === 'endRec') {
+              const res = this.core.endRecordEvent();
+              this.port.postMessage({ type: 'recEventResult', reqId: msg.reqId, result: res });
             } else if (msg.type === 'startCalStep') {
               this.core.startCalibrationStep(msg.step);
             } else if (msg.type === 'cancelCalStep') {
@@ -1207,10 +2498,15 @@
     DEFAULT_GRILLE_CM,
     SPEED_OF_SOUND_CMS,
     OBLIQUE_GEOMETRY_FACTOR,
+    CALIBRATION_PROTOCOL,
     fftRadix2,
     computeDecimationFactor,
     buildCarrierMultiples,
     theilSenSlope,
+    predictRbfY,
+    extractStrokeFeatures,
+    scoreShrinkageLda,
+    fitEmpiricalCalibration,
     AcousticDspCore,
     createWorkletSource
   };

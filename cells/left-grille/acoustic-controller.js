@@ -21,9 +21,17 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (Engine) {
   'use strict';
 
-  const STORAGE_KEY = 'dwg.leftGrilleCalibration.v1';
+  const STORAGE_KEY_V2 = 'dwg.leftGrilleCalibration.v2';
+  const STORAGE_KEY_V1 = 'dwg.leftGrilleCalibration.v1';
+  const DEFAULT_COLLECTOR_URL = 'http://127.0.0.1:8792';
   const BUILTIN_RE = /(macbook|built-in|internal)/i;
   const EXTERNAL_HEADSET_RE = /(airpods|bluetooth|headphone|headset|earbuds|iphone|continuity|usb|display)/i;
+
+  function makeCalSessionId() {
+    const ts = Date.now().toString(36);
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `lg-${ts}-${rand}`;
+  }
 
   function sanitizeCalibrationObj(cal) {
     if (!cal || typeof cal !== 'object') return null;
@@ -38,10 +46,78 @@
     return count > 0 ? out : null;
   }
 
+  function sanitizeEmpiricalModel(model) {
+    if (!model || typeof model !== 'object') return null;
+    let rbf = null;
+    if (
+      model.rbf &&
+      Array.isArray(model.rbf.prototypes) &&
+      model.rbf.prototypes.length >= 2 &&
+      Array.isArray(model.rbf.scale) &&
+      model.rbf.scale.length === 11 &&
+      model.rbf.scale.every((s) => Number.isFinite(s) && s > 0)
+    ) {
+      const protos = model.rbf.prototypes.filter(
+        (p) =>
+          p &&
+          Number.isFinite(p.anchorY) &&
+          Array.isArray(p.vector) &&
+          p.vector.length === 11 &&
+          p.vector.every((v) => Number.isFinite(v))
+      );
+      if (protos.length >= 2) {
+        rbf = {
+          prototypes: protos.map((p) => ({ anchorY: p.anchorY, vector: p.vector.slice() })),
+          scale: model.rbf.scale.slice(),
+          temp: Number.isFinite(model.rbf.temp) ? model.rbf.temp : 0.45
+        };
+      }
+    }
+
+    let lda = null;
+    if (
+      model.lda &&
+      Array.isArray(model.lda.weights) &&
+      model.lda.weights.length === 8 &&
+      Array.isArray(model.lda.featMean) &&
+      model.lda.featMean.length === 8 &&
+      Array.isArray(model.lda.featStd) &&
+      model.lda.featStd.length === 8 &&
+      Number.isFinite(model.lda.bias) &&
+      model.lda.weights.every((v) => Number.isFinite(v)) &&
+      model.lda.featMean.every((v) => Number.isFinite(v)) &&
+      model.lda.featStd.every((v) => Number.isFinite(v) && v > 0)
+    ) {
+      lda = {
+        weights: model.lda.weights.slice(),
+        bias: model.lda.bias,
+        featMean: model.lda.featMean.slice(),
+        featStd: model.lda.featStd.slice(),
+        lambda: Number.isFinite(model.lda.lambda) ? model.lda.lambda : 0.35
+      };
+    }
+
+    if (!rbf && !lda) return null;
+    return {
+      version: model.version || 2,
+      fittedAt: Number.isFinite(model.fittedAt) ? model.fittedAt : 0,
+      polarity: model.polarity === -1 ? -1 : 1,
+      rbf,
+      lda,
+      speedScale: Number.isFinite(model.speedScale) ? model.speedScale : 1.0,
+      minStrokeDurationSec: Number.isFinite(model.minStrokeDurationSec)
+        ? model.minStrokeDurationSec
+        : 0.068,
+      legacyCalibration: sanitizeCalibrationObj(model.legacyCalibration),
+      stats: model.stats && typeof model.stats === 'object' ? Object.assign({}, model.stats) : null
+    };
+  }
+
   function loadStoredCalibration() {
     try {
       if (typeof localStorage === 'undefined') return null;
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const rawV2 = localStorage.getItem(STORAGE_KEY_V2);
+      const raw = rawV2 || localStorage.getItem(STORAGE_KEY_V1);
       if (!raw) return null;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') return null;
@@ -52,7 +128,12 @@
             : 1
           : 1;
       const calibration = sanitizeCalibrationObj(parsed.calibration);
-      return { polarity, calibration };
+      const empiricalModel = sanitizeEmpiricalModel(parsed.empiricalModel);
+      const calSummary =
+        parsed.calSummary && typeof parsed.calSummary === 'object'
+          ? Object.assign({}, parsed.calSummary)
+          : null;
+      return { polarity, calibration, empiricalModel, calSummary };
     } catch (_) {
       return null;
     }
@@ -61,9 +142,36 @@
   function saveStoredCalibration(data) {
     try {
       if (typeof localStorage === 'undefined') return;
-      if (!data) localStorage.removeItem(STORAGE_KEY);
-      else localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      if (!data) {
+        localStorage.removeItem(STORAGE_KEY_V2);
+        localStorage.removeItem(STORAGE_KEY_V1);
+      } else {
+        localStorage.setItem(STORAGE_KEY_V2, JSON.stringify(data));
+      }
     } catch (_) {}
+  }
+
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    if (typeof fetch !== 'function') return null;
+    let ctrl = null;
+    let timer = null;
+    const opts = Object.assign({}, options || {});
+    if (typeof AbortController === 'function' && timeoutMs > 0) {
+      ctrl = new AbortController();
+      opts.signal = ctrl.signal;
+      timer = setTimeout(() => {
+        try {
+          ctrl.abort();
+        } catch (_) {}
+      }, timeoutMs);
+    }
+    try {
+      return await fetch(url, opts);
+    } catch (_) {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   function disposeLocalHandles(handles) {
@@ -128,10 +236,21 @@
       this.activeMicLabel = '';
       this.activeSpeakerLabel = 'Left Speaker';
       this.sampleRate = 48000;
+      this.trackSettings = {};
 
       const saved = loadStoredCalibration();
       this.polarity = saved ? saved.polarity : 1;
       this.calibration = saved ? saved.calibration : null;
+      this.empiricalModel = saved ? saved.empiricalModel : null;
+      this.calSummary = saved ? saved.calSummary : null;
+
+      this.collectorUrl = callbacks.collectorUrl || DEFAULT_COLLECTOR_URL;
+      this.collectorOnline = false;
+      this.calSessionId = makeCalSessionId();
+      this.recordedEvents = [];
+      this._recReqId = 0;
+      this._pendingRecResolvers = new Map();
+      this._activeRecStepMeta = null;
     }
 
     _emitState(nextState, extra = {}) {
@@ -143,7 +262,9 @@
         txEnabled: this.txEnabled && this.sampleRate >= 40000,
         canUseSonar: this.sampleRate >= 40000,
         polarity: this.polarity,
-        calibrated: Boolean(this.calibration),
+        calibrated: Boolean(this.calibration || this.empiricalModel),
+        empiricalCalibrated: Boolean(this.empiricalModel),
+        calSummary: this.calSummary,
         micLabel: this.activeMicLabel,
         speakerLabel: this.activeSpeakerLabel,
         sampleRate: this.sampleRate
@@ -221,6 +342,8 @@
 
         const activeTrack = local.stream.getAudioTracks()[0];
         const micLabel = (activeTrack && activeTrack.label) || 'Built-in Mic Array';
+        const trackSettings =
+          activeTrack && typeof activeTrack.getSettings === 'function' ? activeTrack.getSettings() : {};
 
         const AudioCtx =
           (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) ||
@@ -312,7 +435,8 @@
                 txEnabled: effectiveTx,
                 txGain: this.txGain,
                 polarity: this.polarity,
-                calibration: this.calibration
+                calibration: this.calibration,
+                empiricalModel: this.empiricalModel
               }
             });
             node.port.onmessage = (ev) => this._handleDspEvent(ev.data, false);
@@ -333,7 +457,8 @@
             txEnabled: effectiveTx,
             txGain: this.txGain,
             polarity: this.polarity,
-            calibration: this.calibration || undefined
+            calibration: this.calibration || undefined,
+            empiricalModel: this.empiricalModel || undefined
           });
           fallbackCore = core;
           const sp = ctx.createScriptProcessor(512, 1, 2);
@@ -364,6 +489,7 @@
         this.activeMicLabel = micLabel;
         this.activeSpeakerLabel = speakerLabel;
         this.sampleRate = sr;
+        this.trackSettings = trackSettings || {};
         if (sr < 40000) {
           this.txEnabled = false;
         }
@@ -432,13 +558,53 @@
       }
     }
 
+    _persistCalibration() {
+      if (!this.calibration && !this.empiricalModel && this.polarity === 1) {
+        saveStoredCalibration(null);
+        return;
+      }
+      saveStoredCalibration({
+        version: 2,
+        polarity: this.polarity,
+        calibration: this.calibration,
+        empiricalModel: this.empiricalModel,
+        calSummary: this.calSummary
+      });
+    }
+
+    _settlePendingRecResolvers(reason) {
+      if (!this._pendingRecResolvers.size) return;
+      const entries = Array.from(this._pendingRecResolvers.values());
+      this._pendingRecResolvers.clear();
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].timer) clearTimeout(entries[i].timer);
+        entries[i].resolve({
+          ok: false,
+          reason: reason || 'cancelled',
+          frameCount: 0,
+          activeFrameCount: 0,
+          peakSnrDb: 0,
+          eventRecord: null
+        });
+      }
+    }
+
     _handleDspEvent(msg, fromSim) {
       if (!msg) return;
+      if (msg.type === 'recEventResult') {
+        const entry = this._pendingRecResolvers.get(msg.reqId);
+        if (entry) {
+          this._pendingRecResolvers.delete(msg.reqId);
+          if (entry.timer) clearTimeout(entry.timer);
+          entry.resolve(msg.result || null);
+        }
+        return;
+      }
       if (msg.type === 'calibrationResult') {
         if (msg.result && msg.result.ok) {
           this.polarity = msg.result.polarity;
           this.calibration = msg.result.calibration;
-          saveStoredCalibration({ polarity: this.polarity, calibration: this.calibration });
+          this._persistCalibration();
           this._emitState(this.state);
         }
         this.onCalibrationResult(msg.result);
@@ -514,8 +680,237 @@
       if (this.fallbackCore) {
         this.fallbackCore.setCalibration(payload);
       }
-      saveStoredCalibration({ polarity: this.polarity, calibration: this.calibration });
+      this._persistCalibration();
       this._emitState(this.state);
+    }
+
+    getCalibrationProtocol() {
+      return Engine.CALIBRATION_PROTOCOL;
+    }
+
+    async probeCollector() {
+      const res = await fetchWithTimeout(
+        `${this.collectorUrl}/health`,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        1200
+      );
+      if (!res || !res.ok) {
+        this.collectorOnline = false;
+        return false;
+      }
+      try {
+        const data = await res.json();
+        this.collectorOnline = Boolean(data && data.ok !== false);
+      } catch (_) {
+        this.collectorOnline = true;
+      }
+      return this.collectorOnline;
+    }
+
+    async _postToCollector(payload) {
+      const res = await fetchWithTimeout(
+        `${this.collectorUrl}/record`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        },
+        3000
+      );
+      const ok = Boolean(res && res.ok);
+      if (ok) this.collectorOnline = true;
+      return ok;
+    }
+
+    beginCalibrationRecord(stepMeta) {
+      this._activeRecStepMeta =
+        stepMeta && typeof stepMeta === 'object' ? Object.assign({}, stepMeta) : null;
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'beginRec', stepMeta: this._activeRecStepMeta });
+      } else if (this.fallbackCore) {
+        this.fallbackCore.beginRecordEvent(this._activeRecStepMeta);
+      }
+    }
+
+    async completeCalibrationRecord() {
+      let res = null;
+      if (this.workletNode) {
+        const reqId = ++this._recReqId;
+        res = await new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            if (this._pendingRecResolvers.has(reqId)) {
+              this._pendingRecResolvers.delete(reqId);
+              resolve({
+                ok: false,
+                reason: 'timeout',
+                frameCount: 0,
+                activeFrameCount: 0,
+                peakSnrDb: 0,
+                eventRecord: null
+              });
+            }
+          }, 2500);
+          this._pendingRecResolvers.set(reqId, { resolve, timer });
+          try {
+            this.workletNode.port.postMessage({ type: 'endRec', reqId });
+          } catch (_) {
+            this._pendingRecResolvers.delete(reqId);
+            clearTimeout(timer);
+            resolve({
+              ok: false,
+              reason: 'post_failed',
+              frameCount: 0,
+              activeFrameCount: 0,
+              peakSnrDb: 0,
+              eventRecord: null
+            });
+          }
+        });
+      } else if (this.fallbackCore) {
+        res = this.fallbackCore.endRecordEvent();
+      } else {
+        return {
+          ok: false,
+          reason: 'not_listening',
+          frameCount: 0,
+          activeFrameCount: 0,
+          peakSnrDb: 0,
+          eventRecord: null,
+          collectorSaved: false
+        };
+      }
+
+      this._activeRecStepMeta = null;
+      const ok = Boolean(res && res.ok);
+      const eventRecord = res && res.eventRecord ? res.eventRecord : null;
+      let collectorSaved = false;
+
+      if (ok && eventRecord) {
+        const existingIdx = this.recordedEvents.findIndex(
+          (e) => e && e.stepId === eventRecord.stepId
+        );
+        if (existingIdx >= 0) {
+          this.recordedEvents[existingIdx] = eventRecord;
+        } else {
+          this.recordedEvents.push(eventRecord);
+        }
+
+        collectorSaved = await this._postToCollector({
+          type: 'event',
+          sessionId: this.calSessionId,
+          trackSettings: this.trackSettings,
+          sampleRate: this.sampleRate,
+          event: eventRecord
+        });
+      }
+
+      return {
+        ok,
+        reason: res ? res.reason : 'empty_recording',
+        frameCount: (res && res.frameCount) || 0,
+        activeFrameCount: (res && res.activeFrameCount) || 0,
+        peakSnrDb: (res && res.peakSnrDb) || 0,
+        eventRecord,
+        collectorSaved
+      };
+    }
+
+    async fitRecordedCalibration() {
+      const fitResult = Engine.fitEmpiricalCalibration(this.recordedEvents);
+      if (!fitResult || !fitResult.ok || !fitResult.model) {
+        return {
+          ok: false,
+          reason: (fitResult && fitResult.reason) || 'fit_failed',
+          eventCount: this.recordedEvents.length,
+          swipeCount: (fitResult && fitResult.swipeCount) || 0,
+          zoneCount: (fitResult && fitResult.zoneCount) || 0,
+          looAccuracyPct: 0,
+          dPrime: 0,
+          model: null,
+          collectorSaved: false
+        };
+      }
+
+      this.empiricalModel = fitResult.model;
+      if (fitResult.model.polarity === 1 || fitResult.model.polarity === -1) {
+        this.polarity = fitResult.model.polarity;
+      }
+      if (fitResult.model.legacyCalibration) {
+        this.calibration = sanitizeCalibrationObj(fitResult.model.legacyCalibration);
+      }
+      this.calSummary = {
+        eventCount: fitResult.eventCount,
+        swipeCount: fitResult.swipeCount,
+        zoneCount: fitResult.zoneCount,
+        looAccuracyPct: fitResult.looAccuracyPct,
+        dPrime: fitResult.dPrime
+      };
+
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({
+          type: 'setEmpiricalModel',
+          model: this.empiricalModel
+        });
+      }
+      if (this.fallbackCore) {
+        this.fallbackCore.setEmpiricalModel(this.empiricalModel);
+      }
+
+      this._persistCalibration();
+      this._emitState(this.state);
+
+      const collectorSaved = await this._postToCollector({
+        type: 'fit',
+        sessionId: this.calSessionId,
+        trackSettings: this.trackSettings,
+        sampleRate: this.sampleRate,
+        events: this.recordedEvents,
+        fitResult
+      });
+
+      return {
+        ok: true,
+        eventCount: fitResult.eventCount,
+        swipeCount: fitResult.swipeCount,
+        zoneCount: fitResult.zoneCount,
+        looAccuracyPct: fitResult.looAccuracyPct,
+        dPrime: fitResult.dPrime,
+        model: fitResult.model,
+        collectorSaved
+      };
+    }
+
+    clearRecordedCalibration() {
+      this.recordedEvents = [];
+      this.calSessionId = makeCalSessionId();
+      this._activeRecStepMeta = null;
+      this._settlePendingRecResolvers('cleared');
+      if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'cancelRec' });
+      } else if (this.fallbackCore) {
+        this.fallbackCore.cancelRecordEvent();
+      }
+    }
+
+    exportCalibrationBundle() {
+      return JSON.stringify(
+        {
+          version: 2,
+          exportedAt: new Date().toISOString(),
+          sessionId: this.calSessionId,
+          sampleRate: this.sampleRate,
+          micLabel: this.activeMicLabel,
+          speakerLabel: this.activeSpeakerLabel,
+          trackSettings: this.trackSettings,
+          polarity: this.polarity,
+          calibration: this.calibration,
+          empiricalModel: this.empiricalModel,
+          calSummary: this.calSummary,
+          events: this.recordedEvents
+        },
+        null,
+        2
+      );
     }
 
     startCalibrationStep(step) {
@@ -527,6 +922,8 @@
     }
 
     cancelCalibrationStep() {
+      this._activeRecStepMeta = null;
+      this._settlePendingRecResolvers('cancelled');
       if (this.workletNode) {
         this.workletNode.port.postMessage({ type: 'cancelCalStep' });
       } else if (this.fallbackCore) {
@@ -546,6 +943,12 @@
     resetCalibration() {
       this.polarity = 1;
       this.calibration = null;
+      this.empiricalModel = null;
+      this.calSummary = null;
+      this.recordedEvents = [];
+      this.calSessionId = makeCalSessionId();
+      this._activeRecStepMeta = null;
+      this._settlePendingRecResolvers('reset');
       saveStoredCalibration(null);
       const defaults = {
         polarity: 1,
@@ -555,10 +958,12 @@
         snrTopDb: 29.0
       };
       if (this.workletNode) {
+        this.workletNode.port.postMessage({ type: 'resetCalibration' });
         this.workletNode.port.postMessage({ type: 'setCalibration', calibration: defaults });
+        this.workletNode.port.postMessage({ type: 'setEmpiricalModel', model: null });
       }
       if (this.fallbackCore) {
-        this.fallbackCore.setCalibration(defaults);
+        this.fallbackCore.resetCalibration();
       }
       this._emitState(this.state);
     }
@@ -643,6 +1048,8 @@
     async stop(opts = {}) {
       this.sessionEpoch++;
       this._startPromise = null;
+      this._activeRecStepMeta = null;
+      this._settlePendingRecResolvers('stopped');
       if (this.simTimer) {
         clearInterval(this.simTimer);
         this.simTimer = null;
