@@ -86,6 +86,7 @@ body {
   min-height: 100dvh;
   background: var(--ui-paper);
   padding: clamp(16px, 3vw, 40px);
+  font-family: var(--ui-sans);   /* text a cell leaves unstyled no longer falls back to Times */
 }
 
 .grid {
@@ -211,6 +212,27 @@ body {
   margin-left: auto;
 }
 
+/* Overlay head (full-bleed tiles such as Draw): same index/title/actions, no bar.
+   Laid over the body, takes no height, lets strokes start underneath it. */
+.ui-tile-head--overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  border-bottom: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.ui-tile-head--overlay .ui-tile-actions > * {
+  pointer-events: auto;
+}
+
+.ui-tile-head--overlay .ui-btn {
+  background: var(--ui-surface);
+}
+
 .ui-truncate {
   min-width: 0;
   white-space: nowrap;
@@ -279,6 +301,18 @@ body {
   background: var(--ui-well);
   border-color: var(--ui-ink);
   color: var(--ui-ink);
+}
+
+/* Running / recording state for a quiet button (mic on, array armed): rust, not black. */
+.ui-btn[data-tone="attention"] {
+  background: var(--ui-accent-tint);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+}
+
+.ui-btn[data-tone="attention"]:hover {
+  background: var(--ui-accent-tint);
+  border-color: var(--ui-accent);
 }
 
 .ui-btn--sm {

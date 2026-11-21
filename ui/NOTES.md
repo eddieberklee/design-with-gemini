@@ -20,6 +20,26 @@ driving the grid. Differences: the two intended colours (`--ui-paper`, `--ui-hai
 `.ag-grid-placeholder` (grille-swipe, while expanded), whose own dashed `#f5f5f3` style now
 applies because the inline `.cell` rule no longer comes after it. No page layout rule changed.
 
+`body` also sets `font-family: var(--ui-sans)`, so text a cell leaves unstyled is no longer Times.
+Measured with and without it on the grid and in all 7 secondary surfaces: 2,116 visible text
+elements, 0 changed font (every visible text today has its own font-family).
+
+## 0. Page-wide rules (decided by the coordinator, binding for every cell)
+
+- **Numbering**: 01 Decisions (three tiles, steps 1–3), 02 Prosody, 03 Motion, 04 API Matrix,
+  05 Left Grille, 06 Right Grille, 07 StickS3, 08 Hand Cursor, 09 Draw.
+- **Green rule**: `data-tone="ok"` (green) only for a live connection or a call/probe that really
+  passed. A saved API key is idle grey "Key set". Demo, ready, waiting: idle. Live, recording,
+  armed, failing, needs setup: `attention` (rust).
+- **One primary per tile**: at most one black `.ui-btn--primary`, and only for the tile's main
+  action. Opening a studio is a quiet `.ui-btn--sm`. A secondary toggle that is running (mic
+  recording, array armed) is a quiet button with `data-tone="attention"` (rust).
+- **Close rule**: every secondary page or dialog has a `.ui-studio-bar`; its last item, top right,
+  is `<button class="ui-btn" data-tip="Back to the grid." data-tip-key="Esc">Close</button>`, and
+  Esc does the same. No "← Grid", "Done ✕" or "×".
+- **Step labels**: the three Decisions step labels are all grey (`.ui-tile-step`), no rust lead.
+- **Tips follow the code**: write a tip only after reading the handler; never from a label alone.
+
 ## 1. Tokens
 
 | Token | Value | Use |
@@ -64,6 +84,22 @@ applies because the inline `.cell` rule no longer comes after it. No page layout
 - Decisions strip: replace the index with `<span class="ui-tile-step">1 · Input</span>`; the
   title stays. Numbering is fixed: 01 Decisions (steps 1–3), 02 Prosody, 03 Motion, 04 API Matrix,
   05 Left Grille, 06 Right Grille, 07 StickS3, 08 Hand Cursor, 09 Draw.
+- Full-bleed tile (Draw): no header bar. Use `.ui-tile-head--overlay` inside the body: same
+  index/title/actions markup, laid over the top-left with `pointer-events: none` (strokes can
+  start under it), actions keep pointer events and sit on a surface background, same inset as a
+  normal header action. Zero height cost.
+
+  ```html
+  <section class="cell cell--draw ui-tile">
+    <div class="ui-tile-body ui-tile-body--flush">
+      <canvas …></canvas>
+      <header class="ui-tile-head ui-tile-head--overlay">
+        <span class="ui-tile-index">09</span><span class="ui-tile-title">Draw</span>
+        <div class="ui-tile-actions"><button class="ui-btn ui-btn--sm" aria-disabled="true" data-tip="Nothing to clear yet.">Clear</button></div>
+      </header>
+    </div>
+  </section>
+  ```
 - A tile that is one big button (API Matrix, Left Grille portal) wraps head/body/foot in
   `<button class="ui-tile-trigger">`. Nothing interactive may sit inside it.
 - `.ui-tile` makes the tile a size container named `ui-tile`. If your cell CSS sets
@@ -81,9 +117,10 @@ applies because the inline `.cell` rule no longer comes after it. No page layout
 | Class | Markup | Notes |
 | :--- | :--- | :--- |
 | `.ui-btn` | `<button class="ui-btn">Reset</button>` | quiet, hairline, 28 px. `--sm` 24 px visible / 28 hit. `--icon` square. `--quiet` text-only. `aria-pressed="true"` / `aria-expanded="true"` show the on state. |
-| `.ui-btn--primary` | `<button class="ui-btn ui-btn--primary">Confirm</button>` | black pill, one per tile at most. `aria-pressed="true"` turns it rust (running, e.g. mic on). |
+| `.ui-btn--primary` | `<button class="ui-btn ui-btn--primary">Confirm</button>` | black pill, one per tile at most (section 0). `aria-pressed="true"` turns it rust. |
+| `.ui-btn[data-tone="attention"]` | `<button class="ui-btn ui-btn--sm" aria-pressed="true" data-tone="attention">● Recording</button>` | quiet button in its running state (mic on, array armed): rust text, border and tint. Remove the attribute when it stops. |
 | `.ui-seg` | `<div class="ui-seg" role="group" aria-label="…"><button aria-pressed="true">All</button>…</div>` | selected = `aria-pressed`, `aria-selected` or `aria-checked` true. `.ui-seg--mono` for codes (OKLCH, RGB). |
-| `.ui-pill` | `<span class="ui-pill" data-tone="ok"><span class="ui-pill-label">Stick S3</span></span>` | dot + label. `data-tone`: none/`idle` grey, `attention` rust, `ok` green. Button pills allowed. Always give it a `data-tip`. |
+| `.ui-pill` | `<span class="ui-pill" data-tone="ok"><span class="ui-pill-label">Stick S3</span></span>` | dot + label. `data-tone`: none/`idle` grey, `attention` rust, `ok` green (green rule, section 0). Button pills allowed. Always give it a `data-tip` that says what the state means and what a click does. |
 | `.ui-chip` | `<button class="ui-chip">"a little smaller"</button>` | 24 px pill, 28 hit, ellipsis. |
 | `.ui-slider` | `<input type="range" class="ui-slider" aria-label="…">` | 2 px track, ink thumb, focus ring on the thumb. |
 | `.ui-readout` | `<span class="ui-readout">+0.0°</span>` | mono, tabular numerals. `--hero` 24 px, `--quiet` grey, `.ui-readout-unit` for units. |
