@@ -15,6 +15,65 @@
     { id: 'issues', label: 'Issues' }
   ];
 
+  // Tooltip copy (ui/tooltip.js data-tip). One plain sentence per code; status is appended.
+  const CODE_TIPS = {
+    MOD: 'Models: lists every model your key can use.',
+    GEN: 'Generate: one ordinary text request and reply.',
+    SSE: 'Streaming: the reply arrives in chunks as it is written.',
+    INT: 'Interactions API: multi-turn conversations kept on the server.',
+    DEC: 'Decisions API: probabilities for yes/no, category and score questions.',
+    SRH: 'Search grounding: answers backed by live Google Search; may cost per query.',
+    WSS: 'Live API: real-time audio over a WebSocket connection.',
+    TTS: 'Text to speech: Gemini reads text aloud.',
+    AUD: 'Audio input: Gemini hears a short test tone and names the sound.',
+    LYR: 'Lyria: checks access to the music generation models.',
+    EMB: 'Embeddings: turns text into number vectors for search and similarity.',
+    TOK: 'Token count: measures input size before you send it; free.',
+    IMG: 'Image generation: checks access; making an image is opt-in.',
+    VEO: 'Veo: checks video model access without rendering a video.',
+    FIL: 'Files API: read-only check of uploaded file storage.',
+    CAC: 'Context caching: read-only check of saved prompt caches.',
+    BAT: 'Batch API: read-only check of queued bulk jobs.',
+    OAI: 'OpenAI compatibility: your key used through OpenAI-style requests.'
+  };
+
+  const PROTOCOL_TIPS = {
+    REST: 'Ordinary HTTPS request and reply.',
+    SSE: 'The reply streams back in chunks.',
+    WSS: 'A live two-way WebSocket connection.',
+    AUDIO: 'Sends or receives audio inside an HTTPS request.',
+    MEDIA: 'Checks a media model is listed; makes nothing by default.'
+  };
+
+  const COST_TIPS = {
+    free: 'Free: only reads data, changes nothing.',
+    micro: 'One very small request; billed only on paid tiers.',
+    metered: 'Costs money per call on paid tiers.',
+    'opt-in': 'Free check; real generation runs only if you ask, and costs money.'
+  };
+
+  // Status words for tooltips and the tile; never colour alone (see .am-led shapes).
+  function statusTip(status, res) {
+    if (status === 'probing') return 'Testing now.';
+    if (status === 'pass') return res && res.latencyMs ? 'Passed in ' + res.latencyMs + ' ms.' : 'Passed.';
+    if (status === 'warn') return 'Warning' + (res && res.badge ? ' (' + res.badge + ').' : '.');
+    if (status === 'fail') return 'Failed' + (res && res.badge ? ' (' + res.badge + ').' : '.');
+    return 'Not tested yet.';
+  }
+
+  function setAttr(node, name, value) {
+    if (!node) return;
+    if (value === null || value === undefined) {
+      if (node.hasAttribute(name)) node.removeAttribute(name);
+    } else if (node.getAttribute(name) !== String(value)) {
+      node.setAttribute(name, String(value));
+    }
+  }
+
+  function setText(node, text) {
+    if (node && node.textContent !== text) node.textContent = text;
+  }
+
   function el(tag, attrs, children) {
     const node = document.createElement(tag);
     if (attrs) {
@@ -104,12 +163,11 @@
     return fallbackCopyText(text, containerEl);
   }
 
-  function statusSymbol(status) {
-    if (status === 'pass') return '●';
-    if (status === 'warn') return '◐';
-    if (status === 'fail') return '×';
-    if (status === 'probing') return '◌';
-    return '○';
+  // ui-pill tone for a probe status: green only for a real pass (ui/NOTES.md section 0).
+  function pillTone(status) {
+    if (status === 'pass') return 'ok';
+    if (status === 'warn' || status === 'fail' || status === 'probing') return 'attention';
+    return null;
   }
 
   function mountApiMatrixCell(rootEl) {
@@ -122,6 +180,7 @@
       priorDialog._amOwnerUnmount();
     }
     rootEl.dataset.amMounted = 'true';
+    rootEl.classList.add('ui-tile');
 
     let unmounted = false;
     let announceTimer = null;
@@ -159,7 +218,7 @@
     const SHARED_KEY_NAMES = ['dc_gemini_api_key_session', 'dc_gemini_api_key_local'];
 
     const liveRegion = el('div', {
-      className: 'am-sr-only',
+      className: 'ui-sr-only',
       role: 'status',
       'aria-live': 'polite',
       'aria-atomic': 'true'
@@ -272,7 +331,7 @@
       existingDialog.parentNode.removeChild(existingDialog);
     }
     const dialog = el('dialog', {
-      className: 'am-dialog',
+      className: 'ui-dialog am-dialog',
       id: 'am-dialog',
       'aria-labelledby': 'am-heading'
     });
@@ -347,8 +406,7 @@
     function buildDialogShell() {
       clearNode(dialog);
 
-      const scanline = el('div', { className: 'am-scanline', 'aria-hidden': 'true' });
-      const topbar = el('header', { className: 'am-topbar' });
+      const topbar = el('header', { className: 'ui-studio-bar am-topbar' });
       const keybar = el('section', { className: 'am-keybar', 'aria-label': 'Gemini API Key configuration' });
       const filterBar = el('nav', { className: 'am-filter-bar', 'aria-label': 'Filter API endpoints' });
       const gridScroll = el('div', { className: 'am-grid-scroll' });
@@ -385,7 +443,6 @@
       refs.scrim = scrim;
       refs.drawer = drawer;
 
-      dialog.appendChild(scanline);
       dialog.appendChild(mainWrap);
       dialog.appendChild(scrim);
     }
@@ -400,114 +457,57 @@
     // 1. RENDER PRIMARY CELL #4 (4:3 IN-GRID INSTRUMENT)
     // =========================================================================
 
-    function renderPrimaryCell() {
-      const hasKey = Boolean(KeyStore.get());
-      const counts = getCounts();
-      const anyProbed = counts.pass + counts.warn + counts.fail > 0;
+    // Built once, then patched in place: a rebuild detached the hovered probe and closed its
+    // tooltip on every probe update, and patching keeps focus on the trigger for free.
+    const tile = { trigger: null, pill: null, pillLabel: null, probes: Object.create(null), tally: null };
 
-      let pillTone = 'idle';
-      let pillText = hasKey ? 'KEY SET' : 'NO KEY';
-      if (counts.probing > 0) {
-        pillTone = 'probing';
-        pillText = 'PROBING ' + counts.probing;
-      } else if (anyProbed) {
-        if (counts.fail > 0) {
-          pillTone = 'fail';
-          pillText = counts.fail + ' FAIL';
-        } else if (counts.warn > 0) {
-          pillTone = 'warn';
-          pillText = counts.warn + ' WARN';
-        } else {
-          pillTone = 'pass';
-          pillText = counts.pass + '/' + counts.total + ' OK';
-        }
-      }
+    function buildPrimaryCell() {
+      tile.pillLabel = el('span', { className: 'ui-pill-label am-pill-label' });
+      tile.pill = el('span', { className: 'ui-pill am-tile-pill' }, [tile.pillLabel]);
 
-      const ariaSummary =
-        '04 API Matrix: ' +
-        (hasKey ? 'API key configured. ' : 'No API key set. ') +
-        counts.pass +
-        ' passed, ' +
-        counts.warn +
-        ' warnings, ' +
-        counts.fail +
-        ' failed, ' +
-        counts.idle +
-        ' idle. Open secondary API status grid.';
-
-      const microGrid = el('div', { className: 'am-micro-grid', 'aria-hidden': 'true' });
+      const matrix = el('span', { className: 'am-micro-grid' });
+      tile.probes = Object.create(null);
       Probes.ENDPOINTS.forEach(function (ep) {
-        const st = getEndpointStatus(ep.id);
-        microGrid.appendChild(
-          el('div', { className: 'am-micro-tile', dataset: { status: st } }, [
-            el('span', { className: 'am-led', dataset: { status: st } }),
-            el('span', { className: 'am-micro-code', textContent: ep.code })
-          ])
-        );
+        const led = el('span', { className: 'am-led', 'aria-hidden': 'true' });
+        const node = el('span', { className: 'am-micro-tile', dataset: { endpointCode: ep.code } }, [
+          led,
+          el('span', { className: 'am-micro-code', textContent: ep.code })
+        ]);
+        tile.probes[ep.id] = { node: node, led: led };
+        matrix.appendChild(node);
       });
 
-      const baySummaryText = counts.probing > 0
-        ? 'Testing live endpoints (' + app.batchCompleted + '/' + Math.max(app.batchTotal, counts.probing) + ')…'
-        : anyProbed
-          ? counts.pass + ' pass · ' + counts.warn + ' warn · ' + counts.fail + ' fail'
-          : hasKey
-            ? '18 Google APIs ready to probe'
-            : 'Paste AI Studio key to probe 18 APIs';
+      tile.tally = el('span', { className: 'am-tally', 'data-tip': 'Probe results: passed, warned, failed, and not tested.' });
 
-      const trigger = el(
+      tile.trigger = el(
         'button',
         {
           type: 'button',
-          className: 'am-cell-trigger',
+          className: 'ui-tile-trigger am-cell-trigger',
           dataset: { amFocus: 'trigger' },
           'aria-haspopup': 'dialog',
           'aria-controls': 'am-dialog',
-          'aria-label': ariaSummary,
           onClick: function () {
             openSecondaryGrid({ fromDeepLink: false });
           }
         },
         [
-          el('div', { className: 'am-card-header' }, [
-            el('div', { className: 'am-card-brand' }, [
-              el('span', { className: 'am-index', textContent: '04' }),
-              el('span', { className: 'am-card-title', textContent: 'API Matrix' })
-            ]),
-            el('div', { className: 'am-card-right' }, [
-              el('span', {
-                className: 'am-status-pill',
-                dataset: { tone: pillTone },
-                textContent: statusSymbol(pillTone) + ' ' + pillText
-              }),
-              el('span', { className: 'am-open-cue', 'aria-hidden': 'true' }, [
-                el('span', { className: 'am-open-label', textContent: 'Grid' }),
-                '↗'
-              ])
+          el('span', { className: 'ui-tile-head' }, [
+            el('span', { className: 'ui-tile-index', textContent: '04' }),
+            el('span', { className: 'ui-tile-title', textContent: 'API Matrix' }),
+            el('span', { className: 'ui-tile-actions' }, [
+              tile.pill,
+              el('span', { className: 'ui-btn ui-btn--sm am-open-cue ui-hide-tiny', 'aria-hidden': 'true', textContent: 'Grid ↗' })
             ])
           ]),
-          el('div', { className: 'am-card-bay' }, [
-            el('div', { className: 'am-bay-meta' }, [
-              el('span', { className: 'am-bay-sub', textContent: baySummaryText }),
-              el('span', {
-                className: 'am-mono',
-                textContent: app.catalog.models.length ? app.catalog.models.length + ' models' : '6×3'
-              })
-            ]),
-            microGrid
-          ]),
-          el('div', { className: 'am-card-footer' }, [
-            el('div', { className: 'am-footer-group' }, [
-              el('span', { className: 'am-footer-host', textContent: 'generativelanguage.googleapis.com' }),
-              el('span', { className: 'am-footer-extra', textContent: '18 APIs' })
-            ]),
-            el('div', { className: 'am-footer-group' }, [
-              el('span', { textContent: 'Tap →' })
-            ])
+          el('span', { className: 'ui-tile-body am-bay', 'aria-hidden': 'true' }, [matrix]),
+          el('span', { className: 'ui-tile-foot', 'aria-hidden': 'true' }, [
+            el('span', { className: 'ui-truncate am-host', textContent: 'generativelanguage.googleapis.com' }),
+            tile.tally
           ])
         ]
       );
 
-      if (unmounted) return;
       let child = rootEl.firstChild;
       while (child) {
         const next = child.nextSibling;
@@ -517,8 +517,92 @@
       if (liveRegion.parentNode !== rootEl) {
         rootEl.insertBefore(liveRegion, rootEl.firstChild);
       }
-      rootEl.appendChild(el('div', { className: 'am-scanline', 'aria-hidden': 'true' }));
-      rootEl.appendChild(trigger);
+      rootEl.appendChild(tile.trigger);
+    }
+
+    function renderTally(counts, anyProbed) {
+      const parts = anyProbed || counts.probing > 0
+        ? [['pass', counts.pass], ['warn', counts.warn], ['fail', counts.fail], ['idle', counts.idle + counts.probing]]
+        : null;
+      const key = parts ? parts.map(function (p) { return p[0] + p[1]; }).join(' ') : 'total';
+      if (tile.tally.dataset.key === key) return;
+      tile.tally.dataset.key = key;
+      clearNode(tile.tally);
+      if (!parts) {
+        tile.tally.appendChild(document.createTextNode(counts.total + ' APIs'));
+        return;
+      }
+      parts.forEach(function (p) {
+        tile.tally.appendChild(
+          el('span', { className: 'am-tally-item' }, [
+            el('span', { className: 'am-led', dataset: { status: p[0] } }),
+            el('span', { className: 'am-tally-n', textContent: String(p[1]) })
+          ])
+        );
+      });
+    }
+
+    function renderPrimaryCell() {
+      if (unmounted) return;
+      const hasKey = Boolean(KeyStore.get());
+      const counts = getCounts();
+      const anyProbed = counts.pass + counts.warn + counts.fail > 0;
+
+      let tone = null;
+      let label = hasKey ? 'Key set' : 'No key';
+      let tip = hasKey
+        ? 'Key saved; nothing tested yet. Open the grid to run the probes.'
+        : 'No API key yet. Open the grid to add one.';
+      if (counts.probing > 0) {
+        tone = 'attention';
+        label = app.isBatchRunning ? 'Probing ' + app.batchCompleted + '/' + app.batchTotal : 'Probing';
+        tip = 'Probes are running. Open the grid to watch or stop them.';
+      } else if (anyProbed) {
+        if (counts.fail > 0) {
+          tone = 'attention';
+          label = counts.fail + ' failed';
+          tip = 'Some APIs failed. Open the grid for the reason and next step.';
+        } else if (counts.warn > 0) {
+          tone = 'attention';
+          label = counts.warn + ' warning' + (counts.warn === 1 ? '' : 's');
+          tip = 'Some APIs answered with a warning. Open the grid for details.';
+        } else {
+          tone = 'ok';
+          label = counts.pass + '/' + counts.total + ' passed';
+          tip = 'Every tested API answered correctly. Open the grid for timings.';
+        }
+      }
+
+      const ariaSummary =
+        '04 API Matrix: ' +
+        (hasKey ? 'API key configured. ' : 'No API key set. ') +
+        (counts.probing > 0 ? counts.probing + ' testing, ' : '') +
+        counts.pass +
+        ' passed, ' +
+        counts.warn +
+        ' warnings, ' +
+        counts.fail +
+        ' failed, ' +
+        counts.idle +
+        ' not tested. Open the API status grid.';
+
+      if (!tile.trigger || tile.trigger.parentNode !== rootEl) buildPrimaryCell();
+
+      setAttr(tile.trigger, 'aria-label', ariaSummary);
+      setAttr(tile.pill, 'data-tone', tone);
+      setAttr(tile.pill, 'data-tip', tip);
+      setText(tile.pillLabel, label);
+
+      Probes.ENDPOINTS.forEach(function (ep) {
+        const ref = tile.probes[ep.id];
+        if (!ref) return;
+        const st = getEndpointStatus(ep.id);
+        setAttr(ref.node, 'data-status', st);
+        setAttr(ref.led, 'data-status', st);
+        setAttr(ref.node, 'data-tip', (CODE_TIPS[ep.code] || ep.name + '.') + ' ' + statusTip(st, app.results[ep.id]));
+      });
+
+      renderTally(counts, anyProbed);
       syncRunningClass();
     }
 
@@ -526,39 +610,60 @@
     // 2. RENDER SECONDARY GRID SECTIONS
     // =========================================================================
 
+    // Result summary for the studio bar: the same dot shapes as the tile, so it is also the legend.
+    function buildSummary(counts) {
+      const items = [
+        ['pass', counts.pass, 'passed'],
+        ['warn', counts.warn, 'warning'],
+        ['fail', counts.fail, 'failed'],
+        ['idle', counts.idle + counts.probing, 'not tested']
+      ];
+      return el(
+        'div',
+        {
+          className: 'am-summary',
+          role: 'group',
+          'aria-label': 'Probe summary',
+          'data-tip': 'Results of the probes so far; the dot shapes match the cards and the tile.'
+        },
+        items.map(function (it) {
+          return el('span', { className: 'am-summary-item', dataset: { status: it[0] } }, [
+            el('span', { className: 'am-led', dataset: { status: it[0] }, 'aria-hidden': 'true' }),
+            el('span', { className: 'am-summary-n', textContent: String(it[1]) }),
+            el('span', { className: 'am-summary-word', textContent: it[2] })
+          ]);
+        })
+      );
+    }
+
     function renderTopbar() {
       if (!refs.topbar) return;
       clearNode(refs.topbar);
 
       const hasKey = Boolean(KeyStore.get());
       const counts = getCounts();
+      const modelCount = app.catalog.models.length;
 
       const backBtn = el('button', {
         type: 'button',
-        className: 'am-btn',
+        className: 'ui-btn am-close',
         dataset: { amFocus: 'back' },
-        textContent: '← Back to Grid',
+        'data-tip': 'Back to the grid.',
+        'data-tip-key': 'Esc',
+        textContent: 'Close',
         onClick: function () {
           closeSecondaryGrid();
         }
       });
 
-      const telemetry = el('div', { className: 'am-telemetry-strip', 'aria-label': 'Probe summary' }, [
-        el('span', { className: 'am-t-pass', textContent: counts.pass + ' pass' }),
-        '·',
-        el('span', { className: 'am-t-warn', textContent: counts.warn + ' warn' }),
-        '·',
-        el('span', { className: 'am-t-fail', textContent: counts.fail + ' fail' }),
-        '·',
-        el('span', { textContent: counts.idle + ' idle' })
-      ]);
-
       const modelsBtn = el('button', {
         type: 'button',
-        className: 'am-btn',
+        className: 'ui-btn ui-btn--sm',
         dataset: { action: 'models', amFocus: 'models' },
-        textContent: app.catalog.models.length ? app.catalog.models.length + ' Models' : 'Models (0)',
-        title: 'Browse models discovered from GET /v1beta/models',
+        textContent: modelCount ? modelCount + ' models' : 'Models',
+        'data-tip': modelCount
+          ? 'Browse the models your key can use, from the last Models probe.'
+          : 'No models listed yet; run Models or Run all to fill this list.',
         onClick: function () {
           openModelsDrawer();
         }
@@ -566,9 +671,13 @@
 
       const keyToggleBtn = el('button', {
         type: 'button',
-        className: 'am-btn',
+        className: 'ui-btn ui-btn--sm am-key-toggle',
         dataset: { amFocus: 'key-toggle' },
-        textContent: hasKey ? 'Key: ' + KeyStore.mask(KeyStore.get()) : '+ API Key',
+        'aria-expanded': hasKey ? String(app.showKeyEditor) : null, // kept in step by renderKeybar
+        textContent: hasKey ? 'Key ' + KeyStore.mask(KeyStore.get()) : '+ API key',
+        'data-tip': hasKey
+          ? 'Show or hide the key editor; the key stays masked.'
+          : 'Paste a Google AI Studio key; the other Gemini tiles share it.',
         onClick: function () {
           // With no key the editor is the only keybar state, so this control always opens it
           // (a plain toggle made the first click a no-op).
@@ -583,16 +692,19 @@
       const runBtn = app.isBatchRunning
         ? el('button', {
             type: 'button',
-            className: 'am-btn am-btn--stop',
+            className: 'ui-btn ui-btn--sm am-run',
+            'data-tone': 'attention',
             dataset: { amFocus: 'run' },
-            textContent: 'Stop (' + app.batchCompleted + '/' + app.batchTotal + ')',
+            'data-tip': 'Stop the run; results that already came back are kept.',
+            textContent: 'Stop ' + app.batchCompleted + '/' + app.batchTotal,
             onClick: cancelAllRuns
           })
         : el('button', {
             type: 'button',
-            className: 'am-btn am-btn--primary',
+            className: 'ui-btn ui-btn--sm ui-btn--primary am-run',
             dataset: { amFocus: 'run' },
-            textContent: 'Run All Probes',
+            'data-tip': 'Test every API in turn; some send tiny paid requests, image and video stay checks only.',
+            textContent: 'Run all',
             onClick: function () {
               startBatchRun();
             }
@@ -600,10 +712,10 @@
 
       const copyMdBtn = el('button', {
         type: 'button',
-        className: 'am-btn',
+        className: 'ui-btn ui-btn--sm ui-btn--quiet am-copy',
         dataset: { amFocus: 'copy-md' },
         textContent: 'Copy MD',
-        title: 'Copy redacted Markdown status report',
+        'data-tip': 'Copy the results as a Markdown table; the key is redacted.',
         onClick: function () {
           const md = Probes.buildMarkdownSummary(app.results, app.catalog, KeyStore.get());
           copyToClipboard(md, dialog.open ? dialog : document.body)
@@ -620,10 +732,11 @@
 
       const exportJsonBtn = el('button', {
         type: 'button',
-        className: 'am-btn',
+        className: 'ui-btn ui-btn--sm ui-btn--quiet',
         dataset: { amFocus: 'export' },
-        textContent: 'Export JSON',
-        title: 'Download redacted JSON report',
+        textContent: 'JSON ↓',
+        'aria-label': 'Export JSON',
+        'data-tip': 'Download the results as a JSON file; the key is redacted.',
         onClick: function () {
           const json = Probes.buildExportReport(app.results, app.catalog, KeyStore.get());
           const blob = new Blob([json], { type: 'application/json' });
@@ -638,26 +751,19 @@
         }
       });
 
+      refs.topbar.appendChild(el('span', { className: 'ui-tile-index', textContent: '04' }));
+      refs.topbar.appendChild(el('h1', { id: 'am-heading', className: 'ui-studio-title am-heading', textContent: 'Gemini API Matrix' }));
+      refs.topbar.appendChild(buildSummary(counts));
       refs.topbar.appendChild(
-        el('div', { className: 'am-topbar-left' }, [
-          backBtn,
-          el('div', { className: 'am-heading-group' }, [
-            el('span', { className: 'am-index', textContent: '04' }),
-            el('h1', { id: 'am-heading', className: 'am-heading', textContent: 'Google Gemini API Matrix' })
-          ]),
-          telemetry
-        ])
-      );
-
-      refs.topbar.appendChild(
-        el('div', { className: 'am-topbar-right' }, [
-          modelsBtn,
-          keyToggleBtn,
+        el('div', { className: 'ui-studio-actions am-actions' }, [
           copyMdBtn,
           exportJsonBtn,
+          modelsBtn,
+          keyToggleBtn,
           runBtn
         ])
       );
+      refs.topbar.appendChild(backBtn);
     }
 
     function renderKeybar() {
@@ -682,24 +788,31 @@
       if (currentKey && !app.showKeyEditor) {
         const storageLabel =
           storageType === 'local'
-            ? 'Saved on this device (localStorage)'
+            ? 'Saved on this device'
             : storageType === 'session'
-              ? 'Session only (sessionStorage)'
-              : 'Memory only';
+              ? 'Saved for this tab'
+              : 'In memory only';
+        const storageTip =
+          storageType === 'local'
+            ? 'Kept in this browser\'s localStorage after the tab closes.'
+            : storageType === 'session'
+              ? 'Kept in sessionStorage; forgotten when this tab closes.'
+              : 'Browser storage is blocked; forgotten when this page reloads.';
 
         inner.appendChild(
           el('div', { className: 'am-keybar-compact' }, [
-            el('div', { className: 'am-keybar-status' }, [
-              el('span', { className: 'am-status-pill', dataset: { tone: 'pass' }, textContent: '● KEY READY' }),
-              el('span', { className: 'am-mono', textContent: KeyStore.mask(currentKey) }),
-              el('span', { className: 'am-key-note', textContent: storageLabel + ' · Synced with Cell #1 (Decisions API)' })
-            ]),
-            el('div', { style: { display: 'flex', gap: '6px' } }, [
+            el('span', {
+              className: 'ui-pill',
+              'data-tip': 'A key is saved. Probes show whether it works.'
+            }, [el('span', { className: 'ui-pill-label', textContent: 'Key set' })]),
+            el('span', { className: 'ui-readout am-key-mask', textContent: KeyStore.mask(currentKey) }),
+            el('span', { className: 'am-key-note', 'data-tip': storageTip, textContent: storageLabel + ', shared with Decisions and Prosody' }),
+            el('span', { className: 'am-keybar-actions' }, [
               el('button', {
                 type: 'button',
-                className: 'am-btn am-btn--sm',
+                className: 'ui-btn ui-btn--sm',
                 dataset: { amFocus: 'key-change' },
-                textContent: 'Change Key',
+                textContent: 'Change key',
                 onClick: function () {
                   app.showKeyEditor = true;
                   renderKeybar();
@@ -708,7 +821,8 @@
               }),
               el('button', {
                 type: 'button',
-                className: 'am-btn am-btn--sm',
+                className: 'ui-btn ui-btn--sm ui-btn--quiet',
+                'data-tip': 'Forget the key in this browser for every Gemini tile; stops running probes.',
                 textContent: 'Clear',
                 onClick: function () {
                   cancelAllRuns();
@@ -729,7 +843,7 @@
           className: 'am-input',
           dataset: { amFocus: 'key-input', amFocusFallback: 'key-change' },
           value: draft !== null ? draft : currentKey,
-          placeholder: 'Paste Google AI Studio Gemini API key (AIza...)',
+          placeholder: 'Paste a Google AI Studio key (AIza…)',
           autocomplete: 'off',
           spellcheck: 'false',
           'data-1p-ignore': 'true',
@@ -764,13 +878,16 @@
 
         const showToggleBtn = el('button', {
           type: 'button',
-          className: 'am-btn am-btn--sm',
+          className: 'ui-btn ui-btn--sm am-show',
           dataset: { amFocus: 'key-show' },
+          'aria-pressed': String(app.keyVisible),
+          'data-tip': 'Show or hide the key while you type.',
           textContent: app.keyVisible ? 'Hide' : 'Show',
           onClick: function () {
             app.keyVisible = !app.keyVisible;
             keyInput.type = app.keyVisible ? 'text' : 'password';
             showToggleBtn.textContent = app.keyVisible ? 'Hide' : 'Show';
+            showToggleBtn.setAttribute('aria-pressed', String(app.keyVisible));
           }
         });
 
@@ -784,54 +901,62 @@
             }
           },
           [
-            keyInput,
-            showToggleBtn,
-            el('label', { className: 'am-checkbox-row' }, [persistCb, 'Remember on this device']),
-            el('button', {
-              type: 'button',
-              className: 'am-btn',
-              dataset: { amFocus: 'key-save', amFocusFallback: 'key-change' },
-              textContent: 'Save Key',
-              onClick: function () {
-                saveCurrentKey(false);
-              }
-            }),
-            el('button', {
-              type: 'submit',
-              className: 'am-btn am-btn--live',
-              dataset: { amFocus: 'key-saverun', amFocusFallback: 'key-change' },
-              textContent: 'Save & Run All'
-            }),
-            currentKey
-              ? el('button', {
-                  type: 'button',
-                  className: 'am-btn am-btn--ghost am-btn--sm',
-                  dataset: { amFocus: 'key-cancel', amFocusFallback: 'key-change' },
-                  textContent: 'Cancel',
-                  onClick: function () {
-                    app.showKeyEditor = false;
-                    app.keyVisible = false;
-                    app.keyPromptNotice = '';
-                    preserveFocus(renderKeybar);
-                  }
-                })
-              : null
+            el('span', { className: 'am-key-field' }, [keyInput, showToggleBtn]),
+            el('label', {
+              className: 'am-checkbox-row',
+              'data-tip': 'Keep the key after this tab closes, stored in this browser.'
+            }, [persistCb, 'Remember on this device']),
+            el('span', { className: 'am-keybar-actions' }, [
+              currentKey
+                ? el('button', {
+                    type: 'button',
+                    className: 'ui-btn ui-btn--sm ui-btn--quiet',
+                    dataset: { amFocus: 'key-cancel', amFocusFallback: 'key-change' },
+                    textContent: 'Cancel',
+                    onClick: function () {
+                      app.showKeyEditor = false;
+                      app.keyVisible = false;
+                      app.keyPromptNotice = '';
+                      preserveFocus(renderKeybar);
+                    }
+                  })
+                : null,
+              el('button', {
+                type: 'button',
+                className: 'ui-btn ui-btn--sm',
+                dataset: { amFocus: 'key-save', amFocusFallback: 'key-change' },
+                'data-tip': 'Save the key without running any probe.',
+                textContent: 'Save key',
+                onClick: function () {
+                  saveCurrentKey(false);
+                }
+              }),
+              el('button', {
+                type: 'submit',
+                className: 'ui-btn ui-btn--sm',
+                dataset: { amFocus: 'key-saverun', amFocusFallback: 'key-change' },
+                'data-tip': 'Save the key, then test every API in turn.',
+                'data-tip-key': 'Enter',
+                textContent: 'Save & run all'
+              })
+            ])
           ]
         );
 
         const note = el('p', { className: 'am-key-note' }, [
-          'Browser requests go directly to ',
+          'Requests go straight from this browser to ',
           el('code', { className: 'am-mono', textContent: 'generativelanguage.googleapis.com' }),
-          ' via ',
+          ' in the ',
           el('code', { className: 'am-mono', textContent: 'x-goog-api-key' }),
-          ' (synced with Cell #1). Antigravity logins do not expose a raw API key — create one at ',
+          ' header, shared with Decisions and Prosody. Antigravity logins have no raw key; create one at ',
           el('a', {
             href: 'https://aistudio.google.com/apikey',
             target: '_blank',
             rel: 'noopener noreferrer',
+            'data-tip': 'Opens Google AI Studio in a new tab.',
             textContent: 'aistudio.google.com/apikey'
           }),
-          '. Keys are redacted in all cURL/JSON exports.'
+          '. Exports always redact the key.'
         ]);
 
         inner.appendChild(form);
@@ -839,7 +964,7 @@
           inner.appendChild(
             el('div', {
               className: 'am-key-note',
-              textContent: 'Browser storage is restricted on this origin — key will stay in memory for this page session only.'
+              textContent: 'Browser storage is blocked on this origin; the key stays in memory until the page reloads.'
             })
           );
         }
@@ -850,13 +975,26 @@
       }
 
       refs.keybar.appendChild(inner);
+      // Several paths re-render only the key row (Change key, Cancel, key prompt, halted batch);
+      // keep the studio-bar key button's expanded state in step with it here.
+      const keyToggle = refs.topbar && refs.topbar.querySelector('[data-am-focus="key-toggle"]');
+      setAttr(keyToggle, 'aria-expanded', currentKey ? String(app.showKeyEditor) : null);
     }
+
+    const FILTER_TIPS = {
+      core: 'Models, text generation, streaming, interactions, decisions and search.',
+      audio: 'Live WebSocket, text to speech, audio input and music.',
+      media: 'Embeddings, token count, image and video.',
+      platform: 'Files, context caching, batch jobs and OpenAI compatibility.',
+      passed: 'Only the APIs whose last probe passed.',
+      issues: 'Only the APIs whose last probe warned or failed.'
+    };
 
     function renderFilterBar() {
       if (!refs.filterBar) return;
       clearNode(refs.filterBar);
 
-      const filterGroup = el('div', { className: 'am-filters', role: 'group', 'aria-label': 'Filter endpoints' });
+      const filterGroup = el('div', { className: 'ui-seg am-filters', role: 'group', 'aria-label': 'Filter endpoints' });
       FILTER_DEFS.forEach(function (f) {
         const count = Probes.ENDPOINTS.filter(function (ep) {
           return matchesFilter(ep, f.id);
@@ -869,6 +1007,7 @@
               className: 'am-filter-pill',
               dataset: { amFocus: 'filter:' + f.id },
               'aria-pressed': String(app.filter === f.id),
+              'data-tip': FILTER_TIPS[f.id] || null,
               onClick: function () {
                 app.filter = f.id;
                 preserveFocus(function () {
@@ -894,13 +1033,14 @@
       const controls = el('div', { className: 'am-filter-controls' }, [
         el('label', {
           className: 'am-checkbox-row',
-          title: 'Google Search Grounding may incur per-query search fees on paid API tiers.'
-        }, [groundingCb, 'Include Search Grounding in Run All']),
+          'data-tip': 'Search grounding can charge per query on paid tiers; untick to skip it.'
+        }, [groundingCb, 'Include Search in Run all']),
         el('button', {
           type: 'button',
-          className: 'am-btn am-btn--sm',
+          className: 'ui-btn ui-btn--sm ui-btn--quiet',
           dataset: { amFocus: 'reset' },
-          textContent: 'Reset Results',
+          'data-tip': 'Clear every result and stop running probes; the key stays.',
+          textContent: 'Reset results',
           onClick: function () {
             cancelAllRuns();
             stopActiveAudio();
@@ -918,6 +1058,14 @@
       );
     }
 
+    function cardStatusTip(status, hasKey) {
+      if (status === 'probing') return 'Probe running now.';
+      if (status === 'pass') return 'Passed: the API answered correctly.';
+      if (status === 'warn') return 'Answered with a warning; Inspect shows why.';
+      if (status === 'fail') return 'Failed; Inspect shows the reason and next step.';
+      return hasKey ? 'Not tested yet; Test runs this probe alone.' : 'Needs an API key before it can run.';
+    }
+
     function renderSecondaryGridCards() {
       if (!refs.gridContainer) return;
       clearNode(refs.gridContainer);
@@ -926,12 +1074,12 @@
       if (!filtered.length) {
         refs.gridContainer.appendChild(
           el('div', { className: 'am-empty-filter' }, [
-            el('div', { textContent: 'No endpoints match the "' + app.filter + '" filter.' }),
+            el('div', { textContent: 'No APIs match the ' + (FILTER_DEFS.find(function (f) { return f.id === app.filter; }) || { label: app.filter }).label + ' filter yet.' }),
             el('button', {
               type: 'button',
-              className: 'am-btn',
+              className: 'ui-btn ui-btn--sm',
               dataset: { amFocus: 'show-all', amFocusFallback: 'filter:all' },
-              textContent: 'Show All ' + Probes.ENDPOINTS.length,
+              textContent: 'Show all ' + Probes.ENDPOINTS.length,
               onClick: function () {
                 app.filter = 'all';
                 preserveFocus(function () {
@@ -954,8 +1102,8 @@
         const status = getEndpointStatus(ep.id);
         const note = app.statusNotes[ep.id];
 
-        let pillText = hasKey ? 'IDLE' : 'KEY REQ';
-        if (isProbing) pillText = 'PROBING';
+        let pillText = hasKey ? 'Not tested' : 'Key req';
+        if (isProbing) pillText = 'Probing';
         else if (res) pillText = res.badge || status.toUpperCase();
 
         const modelLine = res && res.modelUsed
@@ -977,6 +1125,11 @@
               : ep.costTier === 'free'
                 ? '$0 read-only'
                 : 'untested';
+        const latencyTip = res && res.latencyMs && !isProbing
+          ? 'Round-trip time of the last probe, in milliseconds.'
+          : !isProbing && (ep.costTier === 'opt-in' || ep.costTier === 'free')
+            ? COST_TIPS[ep.costTier]
+            : null;
 
         const barPct = res && res.latencyMs
           ? Math.max(8, Math.min(100, Math.round((res.latencyMs / 2500) * 100)))
@@ -998,28 +1151,28 @@
           [
             el('div', { className: 'am-api-top' }, [
               el('div', { className: 'am-api-tags' }, [
-                el('span', { className: 'am-tag', textContent: ep.protocol }),
-                el('span', { className: 'am-tag', textContent: ep.code }),
+                el('span', { className: 'am-tag am-tag--code', 'data-tip': CODE_TIPS[ep.code] || null, textContent: ep.code }),
+                el('span', { className: 'am-tag', 'data-tip': PROTOCOL_TIPS[ep.protocol] || null, textContent: ep.protocol }),
                 ep.costTier === 'opt-in'
-                  ? el('span', { className: 'am-tag am-tag--cost-optin', textContent: 'OPT-IN GEN' })
+                  ? el('span', { className: 'am-tag am-tag--cost', 'data-tip': 'Real generation runs only if you turn it on; it costs money.', textContent: 'OPT-IN GEN' })
                   : ep.costTier === 'metered'
-                    ? el('span', { className: 'am-tag am-tag--cost-optin', textContent: 'METERED' })
+                    ? el('span', { className: 'am-tag am-tag--cost', 'data-tip': COST_TIPS.metered, textContent: 'METERED' })
                     : null
               ]),
               el('span', {
-                className: 'am-status-pill',
-                dataset: { tone: status },
-                textContent: statusSymbol(status) + ' ' + pillText
-              })
+                className: 'ui-pill am-card-pill',
+                'data-tone': pillTone(status),
+                'data-tip': cardStatusTip(status, hasKey)
+              }, [el('span', { className: 'ui-pill-label', textContent: pillText })])
             ]),
             el('div', { className: 'am-api-mid' }, [
               el('div', { className: 'am-api-name', textContent: ep.name }),
-              el('div', { className: 'am-api-model', textContent: modelLine, title: modelLine })
+              el('div', { className: 'am-api-model', textContent: modelLine, 'data-tip': modelLine })
             ]),
-            el('div', { className: 'am-api-summary', textContent: summaryLine, title: summaryLine }),
+            el('div', { className: 'am-api-summary', textContent: summaryLine, 'data-tip': summaryLine }),
             el('div', { className: 'am-api-foot' }, [
               el('div', { className: 'am-latency-wrap' }, [
-                el('span', { className: 'am-latency-val', textContent: latencyText }),
+                el('span', { className: 'am-latency-val', 'data-tip': latencyTip, textContent: latencyText }),
                 barPct > 0
                   ? el('div', { className: 'am-latency-track', 'aria-hidden': 'true' }, [
                       el('div', { className: 'am-latency-fill', style: { width: barPct + '%' } })
@@ -1029,11 +1182,16 @@
               el('div', { className: 'am-api-actions' }, [
                 el('button', {
                   type: 'button',
-                  className: 'am-btn am-btn--sm',
+                  className: 'ui-btn ui-btn--sm',
                   dataset: { amFocus: 'test:' + ep.id, amFocusFallback: 'inspect:' + ep.id },
                   disabled: isProbing || app.isBatchRunning,
                   textContent: isProbing ? '…' : 'Test',
                   'aria-label': 'Test ' + ep.name,
+                  'data-tip': isProbing
+                    ? 'This probe is running now.'
+                    : app.isBatchRunning
+                      ? 'Run all is in progress; stop it to test one API.'
+                      : 'Run this probe alone.',
                   onClick: function (e) {
                     e.stopPropagation();
                     runSingleEndpoint(ep.id, false);
@@ -1041,10 +1199,11 @@
                 }),
                 el('button', {
                   type: 'button',
-                  className: 'am-btn am-btn--sm am-btn--ghost am-inspect-btn',
+                  className: 'ui-btn ui-btn--sm ui-btn--quiet am-inspect-btn',
                   dataset: { amFocus: 'inspect:' + ep.id },
-                  textContent: 'Inspect →',
+                  textContent: 'Inspect',
                   'aria-label': 'Inspect ' + ep.name,
+                  'data-tip': 'Open the request, response and timing for this API.',
                   onClick: function (e) {
                     e.stopPropagation();
                     openEndpointDrawer(ep.id);
@@ -1120,10 +1279,12 @@
 
       const prevBtn = el('button', {
         type: 'button',
-        className: 'am-btn am-btn--sm',
+        className: 'ui-btn ui-btn--sm ui-btn--icon',
         dataset: { nav: 'prev', amFocus: 'nav-prev', amFocusFallback: 'nav-next' },
         disabled: !prevEp,
         'aria-label': 'Previous endpoint',
+        'data-tip': prevEp ? 'Previous API: ' + prevEp.name + '.' : 'This is the first API in the list.',
+        'data-tip-key': prevEp ? 'ArrowLeft' : null,
         textContent: '←',
         onClick: function () {
           if (prevEp) {
@@ -1137,10 +1298,12 @@
 
       const nextBtn = el('button', {
         type: 'button',
-        className: 'am-btn am-btn--sm',
+        className: 'ui-btn ui-btn--sm ui-btn--icon',
         dataset: { nav: 'next', amFocus: 'nav-next', amFocusFallback: 'nav-prev' },
         disabled: !nextEp,
         'aria-label': 'Next endpoint',
+        'data-tip': nextEp ? 'Next API: ' + nextEp.name + '.' : 'This is the last API in the list.',
+        'data-tip-key': nextEp ? 'ArrowRight' : null,
         textContent: '→',
         onClick: function () {
           if (nextEp) {
@@ -1154,7 +1317,7 @@
 
       const head = el('div', { className: 'am-drawer-head' }, [
         el('div', { className: 'am-drawer-title-group' }, [
-          el('span', { className: 'am-tag', textContent: ep.code }),
+          el('span', { className: 'am-tag am-tag--code', 'data-tip': CODE_TIPS[ep.code] || null, textContent: ep.code }),
           el('h2', { id: 'am-drawer-title', className: 'am-drawer-title', tabindex: '-1', dataset: { amFocus: 'drawer-title' }, textContent: ep.name })
         ]),
         el('div', { className: 'am-drawer-nav' }, [
@@ -1162,9 +1325,14 @@
           nextBtn,
           el('button', {
             type: 'button',
-            className: 'am-btn am-btn--sm am-btn--primary',
+            className: 'ui-btn ui-btn--sm ui-btn--primary am-retest',
             dataset: { amFocus: 'retest' },
             disabled: isProbing || app.isBatchRunning,
+            'data-tip': isProbing
+              ? 'This probe is running now.'
+              : app.isBatchRunning
+                ? 'Run all is in progress; stop it to re-test one API.'
+                : 'Run this probe again.',
             textContent: isProbing ? 'Running…' : 'Re-test',
             onClick: function () {
               runSingleEndpoint(ep.id, false);
@@ -1172,10 +1340,12 @@
           }),
           el('button', {
             type: 'button',
-            className: 'am-btn am-btn--sm am-btn--ghost',
+            className: 'ui-btn ui-btn--sm',
             dataset: { amFocus: 'drawer-close' },
-            'aria-label': 'Close Inspector',
-            textContent: '×',
+            'aria-label': 'Close inspector',
+            'data-tip': 'Back to the API list.',
+            'data-tip-key': 'Esc',
+            textContent: 'Close',
             onClick: closeDrawer
           })
         ])
@@ -1186,15 +1356,22 @@
       // Status & Remediation Callout
       const callout = el('div', { className: 'am-callout', dataset: { tone: status } }, [
         el('div', { className: 'am-callout-head' }, [
-          el('span', { textContent: isProbing ? 'Probing live endpoint…' : res ? statusSymbol(status) + ' ' + res.badge : 'Not tested yet' }),
           el('span', {
-            className: 'am-mono',
+            className: 'ui-pill',
+            'data-tone': pillTone(status),
+            'data-tip': statusTip(status, res)
+          }, [el('span', { className: 'ui-pill-label', textContent: isProbing ? 'Probing' : res ? res.badge : 'Not tested' })]),
+          el('span', {
+            className: 'ui-readout ui-readout--quiet',
+            'data-tip': res && res.httpStatus
+              ? 'Status code the server returned for the last probe.'
+              : PROTOCOL_TIPS[ep.protocol] || null,
             textContent: res && res.httpStatus ? (ep.protocol === 'WSS' ? 'WS ' + res.httpStatus : 'HTTP ' + res.httpStatus) : ep.protocol
           })
         ]),
-        el('div', { textContent: isProbing ? (app.statusNotes[ep.id] || 'Waiting for response…') : res ? res.summary : ep.description }),
+        el('div', { className: 'am-callout-text', textContent: isProbing ? (app.statusNotes[ep.id] || 'Waiting for response…') : res ? res.summary : ep.description }),
         res && res.remediation
-          ? el('div', { style: { fontWeight: '600' }, textContent: 'Next step: ' + res.remediation })
+          ? el('div', { className: 'am-callout-next', textContent: 'Next step: ' + res.remediation })
           : null
       ]);
       body.appendChild(callout);
@@ -1202,23 +1379,27 @@
       // Opt-in live Image Generation control
       if (ep.supportsLiveGen) {
         body.appendChild(
-          el('div', { className: 'am-callout', dataset: { tone: 'warn' } }, [
+          el('div', { className: 'am-callout', dataset: { tone: 'optin' } }, [
             el('div', { className: 'am-callout-head' }, [
-              el('span', { textContent: 'Opt-In Live Image Generation' }),
+              el('span', { className: 'am-callout-title', textContent: 'Opt-in image generation' }),
               el('button', {
                 type: 'button',
-                className: 'am-btn am-btn--sm am-btn--primary',
+                className: 'ui-btn ui-btn--sm',
                 dataset: { amFocus: 'livegen' },
                 disabled: isProbing || app.isBatchRunning,
-                textContent: isProbing ? 'Generating…' : 'Run Live Image Gen',
+                'data-tip': isProbing || app.isBatchRunning
+                  ? 'Wait for the running probe to finish.'
+                  : 'Make one real image with this model; it costs money.',
+                textContent: isProbing ? 'Generating…' : 'Generate image',
                 onClick: function () {
                   runSingleEndpoint(ep.id, true);
                 }
               })
             ]),
             el('div', {
+              className: 'am-callout-text',
               textContent:
-                'Batch Run All checks model metadata for $0. Click "Run Live Image Gen" to execute a real image render on ' +
+                'Run all only checks model metadata, for $0. Generate image makes one real image with ' +
                 (res && res.modelUsed ? res.modelUsed : 'the discovered image model') +
                 '.'
             })
@@ -1241,13 +1422,13 @@
         body.appendChild(
           el('div', { className: 'am-media-stage' }, [
             el('div', { className: 'am-code-bar' }, [
-              el('span', { className: 'am-meta-label', textContent: 'Live Synthesized Audio (' + res.audioMedia.sourceMimeType + ' → WAV)' }),
+              el('span', { className: 'ui-label', textContent: 'Synthesized speech (' + res.audioMedia.sourceMimeType + ' → WAV)' }),
               el('a', {
-                className: 'am-btn am-btn--sm',
+                className: 'ui-btn ui-btn--sm am-link-btn',
                 dataset: { amFocus: 'download' },
                 href: audioUrl,
                 download: 'gemini-tts-probe.wav',
-                style: { textDecoration: 'none' },
+                'data-tip': 'Save the synthesized speech as a WAV file.',
                 textContent: 'Download WAV'
               })
             ]),
@@ -1260,7 +1441,7 @@
       if (res && res.imageMedia && app.objectUrls[ep.id]) {
         body.appendChild(
           el('div', { className: 'am-media-stage' }, [
-            el('span', { className: 'am-meta-label', textContent: 'Opt-in live probe output (' + res.imageMedia.mimeType + ')' }),
+            el('span', { className: 'ui-label', textContent: 'Generated image (' + res.imageMedia.mimeType + ')' }),
             el('img', {
               className: 'am-media-img',
               src: app.objectUrls[ep.id],
@@ -1278,16 +1459,20 @@
             el('span', { className: 'am-meta-val', textContent: ep.endpointTemplate })
           ]),
           el('div', { className: 'am-meta-cell' }, [
-            el('span', { className: 'am-meta-label', textContent: 'Model Tested' }),
+            el('span', { className: 'am-meta-label', textContent: 'Model tested' }),
             el('span', { className: 'am-meta-val', textContent: (res && res.modelUsed) || 'Auto-discovered / N/A' })
           ]),
           el('div', { className: 'am-meta-cell' }, [
             el('span', { className: 'am-meta-label', textContent: 'Latency' }),
-            el('span', { className: 'am-meta-val', textContent: res && res.latencyMs ? res.latencyMs + ' ms' : '—' })
+            el('span', {
+              className: 'am-meta-val',
+              'data-tip': res && res.latencyMs ? 'Round-trip time of the last probe, in milliseconds.' : null,
+              textContent: res && res.latencyMs ? res.latencyMs + ' ms' : '—'
+            })
           ]),
           el('div', { className: 'am-meta-cell' }, [
-            el('span', { className: 'am-meta-label', textContent: 'Cost Tier / Category' }),
-            el('span', { className: 'am-meta-val', textContent: ep.costTier + ' · ' + ep.category })
+            el('span', { className: 'am-meta-label', textContent: 'Cost · group' }),
+            el('span', { className: 'am-meta-val', 'data-tip': COST_TIPS[ep.costTier] || null, textContent: ep.costTier + ' · ' + ep.category })
           ])
         ])
       );
@@ -1295,8 +1480,8 @@
       // Matching Discovered Models
       if (res && Array.isArray(res.discoveredModels) && res.discoveredModels.length > 0) {
         body.appendChild(
-          el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } }, [
-            el('span', { className: 'am-meta-label', textContent: 'Matching Models on This Key' }),
+          el('div', { className: 'am-section' }, [
+            el('span', { className: 'ui-label', textContent: 'Matching models on this key' }),
             el(
               'div',
               { className: 'am-chip-list' },
@@ -1313,9 +1498,9 @@
         ['curl', 'Redacted cURL'],
         ['raw', 'Raw Response']
       ];
-      const codeWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '10px' } });
+      const codeWrap = el('div', { className: 'am-section' });
       const tabs = el('div', {
-        className: 'am-tabs',
+        className: 'ui-seg am-tabs',
         role: 'tablist',
         'aria-label': 'Inspector payload format',
         onKeydown: function (e) {
@@ -1337,7 +1522,7 @@
       const codeSection = el('div', {
         id: 'am-tabpanel-code',
         role: 'tabpanel',
-        style: { display: 'flex', flexDirection: 'column', gap: '10px' }
+        className: 'am-section'
       });
       codeWrap.appendChild(tabs);
       codeWrap.appendChild(codeSection);
@@ -1359,6 +1544,9 @@
               'aria-selected': String(isActive),
               'aria-controls': 'am-tabpanel-code',
               tabindex: isActive ? '0' : '-1',
+              'data-tip': entry[0] === 'curl'
+                ? 'The exact request as a cURL command, with the key redacted.'
+                : 'The JSON the server sent back, with long media shortened.',
               textContent: entry[1],
               onClick: function () {
                 app.drawerTab = entry[0];
@@ -1375,8 +1563,11 @@
 
         const copyBtn = el('button', {
           type: 'button',
-          className: 'am-btn am-btn--sm',
+          className: 'ui-btn ui-btn--sm am-copy',
           dataset: { amFocus: 'copy-code' },
+          'data-tip': app.drawerTab === 'curl'
+            ? 'Copy the cURL command; the key shows as $GEMINI_API_KEY.'
+            : 'Copy the raw JSON response; the key is redacted.',
           textContent: app.drawerTab === 'curl' ? 'Copy cURL' : 'Copy JSON',
           onClick: function () {
             copyToClipboard(codeText, dialog.open ? dialog : document.body)
@@ -1399,7 +1590,7 @@
           el('div', { className: 'am-code-bar' }, [
             el('span', {
               className: 'am-key-note',
-              textContent: app.drawerTab === 'curl' ? 'API key always redacted as $GEMINI_API_KEY.' : 'Base64 media payloads truncated for responsiveness.'
+              textContent: app.drawerTab === 'curl' ? 'The key is always shown as $GEMINI_API_KEY.' : 'Base64 media is shortened to keep this readable.'
             }),
             copyBtn
           ])
@@ -1440,7 +1631,7 @@
       const models = app.catalog.models || [];
       const head = el('div', { className: 'am-drawer-head' }, [
         el('div', { className: 'am-drawer-title-group' }, [
-          el('span', { className: 'am-tag', textContent: 'CATALOG' }),
+          el('span', { className: 'am-tag', 'data-tip': 'Every model GET /v1beta/models lists for this key.', textContent: 'CATALOG' }),
           el('h2', {
             id: 'am-drawer-title',
             className: 'am-drawer-title',
@@ -1452,9 +1643,12 @@
         el('div', { className: 'am-drawer-nav' }, [
           el('button', {
             type: 'button',
-            className: 'am-btn am-btn--sm am-btn--primary',
+            className: 'ui-btn ui-btn--sm ui-btn--primary',
             dataset: { amFocus: 'models-refresh' },
             disabled: Boolean(app.probing.models) || app.isBatchRunning,
+            'data-tip': app.probing.models || app.isBatchRunning
+              ? 'Wait for the running probes to finish.'
+              : 'Run the Models probe again to refresh this list.',
             textContent: app.probing.models ? 'Loading…' : 'Refresh',
             onClick: function () {
               runSingleEndpoint('models', false);
@@ -1462,10 +1656,12 @@
           }),
           el('button', {
             type: 'button',
-            className: 'am-btn am-btn--sm am-btn--ghost',
+            className: 'ui-btn ui-btn--sm',
             dataset: { amFocus: 'drawer-close' },
-            'aria-label': 'Close Models Browser',
-            textContent: '×',
+            'aria-label': 'Close models browser',
+            'data-tip': 'Back to the API list.',
+            'data-tip-key': 'Esc',
+            textContent: 'Close',
             onClick: closeDrawer
           })
         ])
@@ -1476,13 +1672,12 @@
         type: 'search',
         className: 'am-input',
         dataset: { amFocus: 'models-search' },
-        style: { maxWidth: 'none' },
         value: app.modelSearch,
-        placeholder: 'Filter models by ID or method (e.g. tts, live, veo, embedContent)…',
+        placeholder: 'Filter by model or method: tts, live, veo, embedContent…',
         'aria-label': 'Filter discovered models'
       });
 
-      const listWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '8px' } });
+      const listWrap = el('div', { className: 'am-model-list' });
 
       function renderModelList() {
         clearNode(listWrap);
@@ -1499,7 +1694,7 @@
         if (!models.length) {
           listWrap.appendChild(
             el('div', { className: 'am-empty-filter' }, [
-              el('div', { textContent: 'Run "Models Catalog" or "Run All Probes" to populate models enabled on this key.' })
+              el('div', { textContent: 'No models yet. Refresh, or Run all, to list the models enabled on this key.' })
             ])
           );
           return;
@@ -1516,7 +1711,11 @@
               el('div', { className: 'am-model-row-top' }, [
                 el('span', { className: 'am-model-row-id', textContent: m.bare }),
                 m.inputTokenLimit
-                  ? el('span', { className: 'am-mono', style: { fontSize: '10px', color: 'var(--am-ink-3)' }, textContent: 'in ' + m.inputTokenLimit.toLocaleString() })
+                  ? el('span', {
+                      className: 'ui-readout ui-readout--quiet am-model-limit',
+                      'data-tip': 'Input token limit: the most tokens one request can hold.',
+                      textContent: 'in ' + m.inputTokenLimit.toLocaleString()
+                    })
                   : null
               ]),
               el(
@@ -2028,6 +2227,7 @@
       }
       clearNode(rootEl);
       rootEl.classList.remove('is-running');
+      rootEl.classList.remove('ui-tile');
       delete rootEl.dataset.amMounted;
       delete rootEl._amUnmount;
       delete dialog._amOwnerUnmount;
