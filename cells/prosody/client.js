@@ -557,9 +557,6 @@
           }
           if (!msg || typeof msg !== 'object') return;
           if (cb.onServerEvent) cb.onServerEvent(msg);
-          if (typeof console !== 'undefined' && console.debug) {
-            console.debug('[ProsodyLive]', Object.keys(msg), msg);
-          }
 
           if (msg.error && (setupDone || modelIdx + 1 >= LIVE_MODELS.length)) {
             if (cb.onError) {
@@ -655,15 +652,15 @@
 
     return {
       sendPCM: function (float32Samples, sampleRate) {
-        if (closed || !setupDone || !ws || ws.readyState !== openState) return;
+        if (closed || !setupDone || !ws || ws.readyState !== openState) return false;
         if (typeof ws.bufferedAmount === 'number' && ws.bufferedAmount > MAX_BUFFERED_BYTES) {
-          return;
+          return false;
         }
         const pcm16k = downsampleTo16k(float32Samples, sampleRate);
-        if (!pcm16k || !pcm16k.length) return;
+        if (!pcm16k || !pcm16k.length) return false;
         const base64 = floatTo16BitPCMBase64(pcm16k);
-        if (!base64) return;
-        safeSend(
+        if (!base64) return false;
+        return safeSend(
           ws,
           JSON.stringify({
             realtimeInput: {

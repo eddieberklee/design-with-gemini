@@ -9,6 +9,15 @@
   const MIN_SCALE = 0.45;
   const MAX_SCALE = 1.85;
   const MAX_MARQUEE_WORDS = 28;
+  const SPEECH_RESTART_BACKOFF_MS = 250;
+  const MAX_SPEECH_RAPID_RESTARTS = 3;
+  const FATAL_SPEECH_ERRORS = {
+    'not-allowed': true,
+    'service-not-allowed': true,
+    'audio-capture': true,
+    'language-not-supported': true,
+    'network': true
+  };
   const SESSION_KEY = 'dc_gemini_api_key_session';
   const LOCAL_KEY = 'dc_gemini_api_key_local';
 
@@ -46,6 +55,8 @@
       analyser: null,
       processor: null,
       silentGain: null,
+      speechRec: null,
+      speechRestartTimer: null,
       rafId: null
     };
 
@@ -131,7 +142,6 @@
 
     // Live Word Marquee Ribbon at bottom of stage
     const marqueeWrap = el('div', 'ps-marquee');
-    marqueeWrap.setAttribute('aria-live', 'polite');
     const marqueeTrack = el('div', 'ps-marquee-track');
     marqueeTrack.appendChild(el('span', 'ps-marquee-placeholder', 'Detected words stream here…'));
     marqueeWrap.appendChild(marqueeTrack);
@@ -164,7 +174,10 @@
     const readoutText = el('div', 'ps-readout-text', 'Stream live audio or tap a prosody demo chip.');
     readoutText.setAttribute('role', 'status');
     readoutText.setAttribute('aria-live', 'polite');
+    const txRxBadge = el('span', 'ps-tx-rx', '');
+    txRxBadge.setAttribute('aria-hidden', 'true');
     readout.appendChild(readoutText);
+    readout.appendChild(txRxBadge);
 
     const demosRow = el('div', 'ps-demos');
     NS.Client.DEMO_PRESETS.forEach(function (preset) {
@@ -279,9 +292,32 @@
     }
 
     function renderReadout(note, isError) {
-      readoutText.textContent = note || '';
+      const nextText = note || '';
+      if (readoutText.textContent !== nextText) {
+        readoutText.textContent = nextText;
+      }
       readoutText.classList.toggle('is-error', Boolean(isError));
-      readoutText.title = readoutText.textContent;
+      readoutText.title = nextText;
+    }
+
+    function renderTelemetry(tx, rx) {
+      const next = 'TX ' + tx + ' · RX ' + rx;
+      if (txRxBadge.textContent !== next) {
+        txRxBadge.textContent = next;
+      }
+    }
+
+    function clearTelemetry() {
+      if (txRxBadge.textContent !== '') {
+        txRxBadge.textContent = '';
+      }
+    }
+
+    function formatActiveModel(modelName) {
+      const raw = String(modelName || '').replace(/^models\//, '');
+      return raw.length > 22
+        ? raw.replace(/^gemini-(?:live-)?/, '').replace(/-preview.*$/, '')
+        : raw;
     }
 
     function syncWaveCanvasSize() {
@@ -371,6 +407,29 @@
       renderReadout(res.prosody_note || 'Applied ' + deltaPill.textContent, false);
     }
 
+    function stopLocalSpeechMirror() {
+      if (state.speechRestartTimer !== null) {
+        clearTimeout(state.speechRestartTimer);
+        state.speechRestartTimer = null;
+      }
+      if (state.speechRec) {
+        const rec = state.speechRec;
+        state.speechRec = null;
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        try {
+          if (rec.abort) {
+            rec.abort();
+          } else if (rec.stop) {
+            rec.stop();
+          }
+        } catch (_e) {
+          // ignore
+        }
+      }
+    }
+
     function stopLiveStream(silent) {
       sessionEpoch += 1;
       const wasActive = state.streaming || state.connecting;
@@ -383,18 +442,7 @@
         }
         state.rafId = null;
       }
-      if (state.speechRec) {
-        const rec = state.speechRec;
-        state.speechRec = null;
-        rec.onresult = null;
-        rec.onerror = null;
-        rec.onend = null;
-        try {
-          rec.stop();
-        } catch (_e) {
-          // ignore
-        }
-      }
+      stopLocalSpeechMirror();
       if (state.liveSession) {
         const sess = state.liveSession;
         state.liveSession = null;
@@ -460,6 +508,7 @@
       micBtn.setAttribute('aria-pressed', 'false');
       micLabel.textContent = 'Start Live Mic';
       if (!unmounted) {
+        clearTelemetry();
         drawIdleWave();
       }
       if (wasActive && !silent && !unmounted) {
@@ -490,6 +539,7 @@
 
       const myEpoch = ++sessionEpoch;
       state.connecting = true;
+      clearTelemetry();
       micBtn.classList.add('is-processing');
       micBtn.setAttribute('aria-pressed', 'true');
       micLabel.textContent = 'Connecting…';
@@ -555,8 +605,10 @@
           let lastActivityAt = 0;
 
           function startLocalSpeechMirror() {
+            stopLocalSpeechMirror();
             const SpeechRec = global.SpeechRecognition || global.webkitSpeechRecognition;
             if (typeof SpeechRec !== 'function') return;
+            let restartsWithoutResult = 0;
             try {
               const rec = new SpeechRec();
               rec.continuous = true;
@@ -564,6 +616,7 @@
               rec.lang = 'en-US';
               rec.onresult = function (ev) {
                 if (unmounted || myEpoch !== sessionEpoch || !state.streaming || hasGeminiTx) return;
+                restartsWithoutResult = 0;
                 let interim = '';
                 for (let i = ev.resultIndex; i < ev.results.length; i++) {
                   const res = ev.results[i];
@@ -576,28 +629,49 @@
                     interim += (interim ? ' ' : '') + text;
                   }
                 }
-                if (interim) {
+                if (interim && !readoutText.classList.contains('is-error')) {
                   lastActivityAt = Date.now();
                   renderReadout('Hearing: "' + interim + '"', false);
                 }
               };
-              rec.onerror = function () {
-                // Non-fatal: Gemini Live stream remains primary
+              rec.onerror = function (ev) {
+                const code = typeof ev === 'string' ? ev : String((ev && ev.error) || '');
+                if (FATAL_SPEECH_ERRORS[code]) {
+                  stopLocalSpeechMirror();
+                }
               };
               rec.onend = function () {
                 if (unmounted || myEpoch !== sessionEpoch || !state.streaming || hasGeminiTx || state.speechRec !== rec) {
                   return;
                 }
-                try {
-                  rec.start();
-                } catch (_e) {
-                  // ignore restart race
+                if (restartsWithoutResult >= MAX_SPEECH_RAPID_RESTARTS) {
+                  stopLocalSpeechMirror();
+                  return;
                 }
+                restartsWithoutResult += 1;
+                if (state.speechRestartTimer !== null) {
+                  clearTimeout(state.speechRestartTimer);
+                }
+                state.speechRestartTimer = setTimeout(function () {
+                  state.speechRestartTimer = null;
+                  if (unmounted || myEpoch !== sessionEpoch || !state.streaming || hasGeminiTx || state.speechRec !== rec) {
+                    return;
+                  }
+                  try {
+                    rec.start();
+                  } catch (_e) {
+                    stopLocalSpeechMirror();
+                  }
+                }, SPEECH_RESTART_BACKOFF_MS);
               };
               state.speechRec = rec;
-              rec.start();
+              try {
+                rec.start();
+              } catch (_e) {
+                stopLocalSpeechMirror();
+              }
             } catch (_e) {
-              // ignore if unavailable
+              stopLocalSpeechMirror();
             }
           }
 
@@ -606,12 +680,14 @@
               if (unmounted || myEpoch !== sessionEpoch) return;
               state.connecting = false;
               state.streaming = true;
-              activeModel = modelName.replace('models/', '');
+              activeModel = formatActiveModel(modelName);
+              lastActivityAt = Date.now();
               micBtn.classList.remove('is-processing');
               micBtn.classList.add('is-recording');
               micBtn.setAttribute('aria-pressed', 'true');
               micLabel.textContent = 'Live · Click to Stop';
               NS.Client.SoundFX.playStreamToggle(true);
+              renderTelemetry(txCount, rxCount);
               renderReadout('Live (' + activeModel + ') — speak naturally.', false);
               startWaveLoop();
               startLocalSpeechMirror();
@@ -619,10 +695,16 @@
             onServerEvent: function () {
               if (unmounted || myEpoch !== sessionEpoch) return;
               rxCount += 1;
+              if (state.streaming) {
+                renderTelemetry(txCount, rxCount);
+              }
             },
             onTranscript: function (chunk, isInterim) {
               if (unmounted || myEpoch !== sessionEpoch) return;
-              hasGeminiTx = true;
+              if (!hasGeminiTx) {
+                hasGeminiTx = true;
+              }
+              stopLocalSpeechMirror();
               lastActivityAt = Date.now();
               if (isInterim) {
                 renderReadout('Hearing: "' + chunk.trim() + '"', false);
@@ -640,6 +722,7 @@
             },
             onError: function (msg) {
               if (unmounted || myEpoch !== sessionEpoch) return;
+              lastActivityAt = Date.now();
               renderReadout('Live stream error: ' + msg, true);
             },
             onClose: function (reason) {
@@ -657,10 +740,17 @@
               return;
             }
             const input = ev.inputBuffer.getChannelData(0);
-            state.liveSession.sendPCM(input, state.audioCtx.sampleRate);
-            txCount += 1;
-            if (txCount % 15 === 0 && Date.now() - lastActivityAt > 3500) {
-              renderReadout('Live (' + activeModel + ') · TX ' + txCount + ' · RX ' + rxCount + ' — listening…', false);
+            if (state.liveSession.sendPCM(input, state.audioCtx.sampleRate)) {
+              txCount += 1;
+              if (txCount === 1 || txCount % 15 === 0) {
+                renderTelemetry(txCount, rxCount);
+                if (
+                  Date.now() - lastActivityAt > 3500 &&
+                  !readoutText.classList.contains('is-error')
+                ) {
+                  renderReadout('Live (' + activeModel + ') — listening…', false);
+                }
+              }
             }
           };
         })
